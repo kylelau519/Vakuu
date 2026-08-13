@@ -216,3 +216,46 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---- Vakuu additions ----
+
+# C# / .NET (mod/)
+bin/
+Bin/
+obj/
+Obj/
+*.user
+*.suo
+*.userprefs
+.vs/
+.idea/
+*.sln.DotSettings.user
+
+# Godot
+.godot/
+.import/
+export.cfg
+*.translation
+
+# Slay the Spire 2 assemblies — never redistribute game binaries
+mod/**/*.dll
+mod/**/*.pdb
+!mod/**/lib/**/*.dll
+
+# Decompiled game source — derived from a copyrighted game, never commit.
+# Kept outside this repo; these patterns are a backstop against an accidental copy.
+sts2-decompiled/
+**/MegaCrit.Sts2.*/
+decompiled/
+
+# Generated trial data (see data/README.md — version the manifest, not the data).
+# Must be data/* not data/ — an ignored *directory* stops git descending into it,
+# which would make the negations below unreachable.
+data/*
+!data/.gitignore
+!data/README.md
+*.trial
+*.replay
+
+# macOS
+.DS_Store

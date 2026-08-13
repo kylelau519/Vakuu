@@ -1,0 +1,13 @@
+{
+  "schema_version": "0.1.0",
+  "source": {
+    "repo": "https://github.com/wuhao21/sts2-cli",
+    "commit": "f4d7538",
+    "commit_date": "2026-08-13",
+    "read_from": [
+      "src/Sts2Headless/RunSimulator.cs",
+      "src/Sts2Headless/Program.cs"
+    ]
+  },
+  "note": "Update models.py/actions.py in the same sitting as any RunSimulator.cs change that touches decision JSON, and bump schema_version. parse_decision() raising ValidationError on real captured output is the fallback signal if that slips -- see schema/README.md."
+}
