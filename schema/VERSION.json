@@ -1,13 +1,14 @@
 {
-  "schema_version": "0.1.0",
+  "schema_version": "0.3.0",
   "source": {
     "repo": "https://github.com/wuhao21/sts2-cli",
-    "commit": "f4d7538",
-    "commit_date": "2026-08-13",
+    "commit": "0f344ab",
+    "commit_date": "2026-08-16",
     "read_from": [
       "src/Sts2Headless/RunSimulator.cs",
+      "src/Sts2Headless/RunSimulator.States.cs",
       "src/Sts2Headless/Program.cs"
     ]
   },
-  "note": "Update models.py/actions.py in the same sitting as any RunSimulator.cs change that touches decision JSON, and bump schema_version. parse_decision() raising ValidationError on real captured output is the fallback signal if that slips -- see schema/README.md."
+  "note": "0.3.0 adds combat_play.history (per-creature CombatHistory event counts), HandCard.upgraded, and Power.id, added in sts2-cli commit 0f344ab -- not yet reflected in tests/fixtures/ironclad_run_01.jsonl, which predates that commit. Update models.py/actions.py in the same sitting as any RunSimulator.cs change that touches decision JSON, and bump schema_version. parse_decision() raising ValidationError on real captured output is the fallback signal if that slips -- see schema/README.md."
 }

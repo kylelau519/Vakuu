@@ -86,11 +86,14 @@ mod-based driver is ever revisited:
 It solved the in combat restore problem the native sts2 has. Running with same seed and same actions are checked to be faithful and identical to the in game.
 
 
-## Multiplayer serialization — reusable machinery
+## Multiplayer 
 
 - Only single player are in the focus here, ignore everything about multiplayer.
 
 ## Modding
+
+- Potentially we will mod through existing sts2 base-mod packages for simplicity.
+
 
 `MegaCrit.Sts2.Core.Modding/` — `ModManager.cs` (honours `--nomods`), `Mod.cs`, `ModManifest.cs`,
 `ModSettings.cs`, `ModInitializerAttribute.cs`, `ModLoadState.cs`, `ModSource.cs`,

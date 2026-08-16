@@ -15,7 +15,11 @@ shape mismatch -- that error is the drift signal: if sts2-cli's JSON changes, th
 shows up, right at the point of capture rather than silently inside training data. Re-read the
 relevant RunSimulator.cs method and update the model when it does.
 
-Source: sts2-cli commit f4d7538 (2026-08-13), src/Sts2Headless/RunSimulator.cs. See VERSION.json.
+Source: sts2-cli commit 0f344ab (2026-08-16), src/Sts2Headless/RunSimulator.cs and
+RunSimulator.States.cs. Adds history counts, hand-card `upgraded`, and power `id` (see
+CombatHistorySummary/HistoryCounts docstrings below) -- not yet reflected in
+tests/fixtures/ironclad_run_01.jsonl, which predates this commit; re-capture when convenient.
+See VERSION.json.
 
 sts2-cli serializes with JsonIgnoreCondition.WhenWritingNull -- an absent key and a null value are
 indistinguishable on the wire, and nearly every field *is* conditionally absent. So almost
@@ -56,9 +60,19 @@ class Card(Loose):
     name: str
     cost: int  # energy cost
     type: str  # CardType enum as string (Attack/Skill/Power/Status/Curse, not exhaustively known)
-    rarity: str | None = None  # absent on PlayerSummary.deck cards -- confirmed via live capture
+    rarity: str | None = None
+    """Absent on PlayerSummary.deck cards through schema 0.1.0 -- a confirmed quirk (RunSimulator.cs's
+    deck export inlined its own dict literal and simply never included it). Fixed as of schema 0.2.0,
+    when the deck export moved onto the shared CardToJson helper used by every other card list --
+    deck cards now always carry rarity too."""
     description: str
-    upgraded: bool | None = None  # present on deck cards; required+re-declared on SelectableCard
+    upgraded: bool | None = None
+    """Present on deck/pile cards; required+re-declared on SelectableCard/PileCard. Through
+    schema 0.2.0, HandCard never carried this (CombatPlayState's hand builder is a separate
+    hand-rolled dict from the shared CardToJson helper, and simply never set it) -- an omission,
+    not a design choice, fixed in an unreleased sts2-cli patch. Stays Optional here since old
+    fixtures were captured before the fix; once a fresh capture confirms it's always present on
+    hand cards, HandCard can re-require it the way PileCard does."""
     stats: dict[str, int] | None = None
     """combat_play hand cards: live preview (Strength/Weak/Frail/Block applied). Everywhere else:
     base values. The same card can report different numbers depending on which decision it's in."""
@@ -74,6 +88,12 @@ class Relic(Loose):
     name: str
     description: str
     vars: dict[str, int] | None = None
+    counter: int | None = None
+    """RelicModel.ShowCounter/DisplayAmount -- the same generic hook the game's own UI reads to draw
+    a relic's progress badge (e.g. Pen Nib: N/10 attacks played toward double damage). Present only
+    for relics with a visible counter (confirmed: Pen Nib, Nunchaku, Kunai, Pocketwatch); None for
+    everything else (Anchor, Orichalcum, ...) -- not a per-relic-type field, a single base-class
+    property read uniformly across player.Relics."""
 
 
 class Potion(Loose):
@@ -87,6 +107,11 @@ class Potion(Loose):
 
 
 class Power(Loose):
+    id: str | None = None
+    """PowerModel.Id.Entry, e.g. "MINION_POWER", "VULNERABLE_POWER" -- added alongside the
+    localized `name` so a client can match a specific power without string-matching a locale-
+    dependent display string (e.g. detecting is_minion via id == "MINION_POWER"). Optional since
+    fixtures captured before this field existed won't have it."""
     name: str
     description: str | None = None
     amount: int
@@ -184,6 +209,103 @@ class Osty(Loose):
     block: int | None = None
 
 
+class PileCard(Card):
+    """draw_pile/discard_pile/exhaust_pile entries (RunSimulator.cs: PileCardsToJson,
+    CombatPlayState). Static/base-value fields only -- no can_play/target_type/damage_by_target,
+    unlike HandCard; these cards aren't currently playable. Index 0 = next to draw (draw_pile) or
+    most recently discarded/exhausted (discard_pile/exhaust_pile) -- pile order is real and
+    meaningful (CardPile is backed by an ordered list; shuffles are discrete RNG events, not lazy
+    per-draw reordering), not an unordered set."""
+
+    index: int
+    upgraded: bool
+    rarity: str  # unlike PlayerSummary.deck historically, pile cards always carry rarity
+
+
+class EntryCount(Loose):
+    """One CombatHistory entry type's count for one creature. `this_combat` is the running total
+    since combat started; `this_turn` resets each time HappenedThisTurn's round+side+per-player-
+    turn-number triple changes -- i.e. it's scoped like Spite's damage-taken check, not like a
+    naive "since I last looked" delta."""
+
+    this_turn: int
+    this_combat: int
+
+
+class HistoryCounts(Loose):
+    """Per-creature counts of MegaCrit.Sts2.Core.Combat.History.Entries.* types (RunSimulator.cs:
+    HistoryCounts). STS2 has no dedicated counter fields for "how many times has X happened this
+    combat" -- cards that scale off event counts (Supermassive/cards-created, Spite/damage-taken-
+    this-turn, Murder/cards-drawn) compute it live by filtering CombatManager.Instance.History.
+    Entries at DynamicVar preview time. Exposing the same counts here lets a client see the
+    scaling input even when the scaling card isn't currently in hand -- combat_play's `stats`
+    field already bakes the correct number into a card that *is* in hand, so these are for
+    everything else: anticipating a draw, or valuing the trend as board state in its own right.
+
+    Field name -> the CombatHistoryEntry subclass it counts, and what "counted" means for that
+    creature (its Actor unless noted):
+      block_gained            BlockGainedEntry (Actor = the creature that gained block)
+      card_afflicted          CardAfflictedEntry (owner of the afflicted card)
+      card_discarded          CardDiscardedEntry (owner of the discarded card)
+      card_drawn              CardDrawnEntry (owner of the drawn card)
+      card_exhausted          CardExhaustedEntry (owner of the exhausted card)
+      card_generated          CardGeneratedEntry (owner of the generated card -- NOT who created
+                               it; see card_created_by_player on PlayerHistory for that)
+      card_played             CardPlayFinishedEntry (the creature that played the card)
+      creature_attacked       CreatureAttackedEntry (the attacker)
+      damage_received         DamageReceivedEntry, filtered on Receiver == this creature
+      damage_dealt            DamageReceivedEntry, filtered on Dealer == this creature (the same
+                               entries as damage_received on the other creature; not a distinct
+                               entry type)
+      energy_spent            EnergySpentEntry (player only in practice -- enemies don't spend energy)
+      monster_move_performed  MonsterPerformedMoveEntry (the monster)
+      orb_channeled           OrbChanneledEntry (the orb's owner)
+      potion_used             PotionUsedEntry (the drinker)
+      power_received          PowerReceivedEntry, filtered on Actor == this creature (who got the power)
+      power_applied           PowerReceivedEntry, filtered on Applier == this creature (who caused it --
+                               None for e.g. innate/start-of-combat powers, so this can undercount)
+      stars_modified          StarsModifiedEntry (Regent only)
+      summoned                SummonedEntry (whoever did the summoning)
+    """
+
+    block_gained: EntryCount
+    card_afflicted: EntryCount
+    card_discarded: EntryCount
+    card_drawn: EntryCount
+    card_exhausted: EntryCount
+    card_generated: EntryCount
+    card_played: EntryCount
+    creature_attacked: EntryCount
+    damage_received: EntryCount
+    damage_dealt: EntryCount
+    energy_spent: EntryCount
+    monster_move_performed: EntryCount
+    orb_channeled: EntryCount
+    potion_used: EntryCount
+    power_received: EntryCount
+    power_applied: EntryCount
+    stars_modified: EntryCount
+    summoned: EntryCount
+
+
+class PlayerHistory(HistoryCounts):
+    card_created_by_player: EntryCount
+    """CardGeneratedEntry filtered on Creator == player (a Player, not a Creature -- this is why
+    it's not folded into the generic card_generated count, which filters on Actor/owner instead).
+    This is Supermassive's exact scaling input: `.Count(c => c.Creator == card.Owner)`."""
+
+
+class EnemyHistory(HistoryCounts):
+    index: int
+    """Matches Enemy.index for the same combat_play decision -- NOT stable across turns once
+    something dies, same caveat as Enemy.index."""
+
+
+class CombatHistorySummary(Loose):
+    player: PlayerHistory
+    enemies: list[EnemyHistory]
+
+
 class CombatPlay(Loose):
     type: Literal["decision"] = "decision"
     decision: Literal["combat_play"] = "combat_play"
@@ -193,6 +315,9 @@ class CombatPlay(Loose):
     max_energy: int
     draw_pile_count: int | None = None
     discard_pile_count: int | None = None
+    draw_pile: list[PileCard] | None = None
+    discard_pile: list[PileCard] | None = None
+    exhaust_pile: list[PileCard] | None = None  # no exhaust_pile_count -- exhaust had no prior count field
     hand: list[HandCard]
     enemies: list[Enemy]
     player: PlayerSummary
@@ -203,6 +328,10 @@ class CombatPlay(Loose):
     """Regent only. Gated on character.Id.Entry == "REGENT", not a star-cost heuristic --
     present even at 0 stars, absent for every other character."""
     osty: Osty | None = None  # Necrobinder only
+    history: CombatHistorySummary | None = None
+    """Wrapped in its own try/catch on the C# side (RunSimulator.States.cs) -- absent (not a
+    validation failure) if the aggregation itself throws, same defensive pattern as the
+    character-specific block above it."""
 
 
 # --- map_select (MapSelectState, RunSimulator.cs:2002-2097) ---
@@ -254,7 +383,21 @@ class SelectableCard(Card):
 
 class CardSelect(Loose):
     """Uses key "cards", not "options". Answer with actions.action("select_cards", indices=...).
-    Fires for upgrade/remove/transform picks and mid-shop/rest-site sub-selections."""
+    Fires for upgrade/remove/transform picks and mid-shop/rest-site sub-selections, including
+    effects that restrict the pool to a card type or pile (e.g. "choose a Skill card from your
+    hand/discard/draw").
+
+    There is no separate "pickable"/"valid" mask, and none is needed: `cards` is always the
+    complete, already-eligible set. The engine applies any type/pile/eligibility filter *before*
+    handing the list to the card selector -- verified in the decompiled source's
+    `CardSelectCmd` (`FromHand`, `FromCombatPile`, `FromDeckGeneric`, etc.), which all build a
+    pre-filtered `List<CardModel>` and only then call `ICardSelector.GetSelectedCards(list, ...)`.
+    sts2-cli's `HeadlessCardSelector` (the thing `card_select`'s `cards` field is read from) is
+    exactly that `ICardSelector` implementation -- it only ever sees the filtered list, never the
+    full hand/pile with some cards marked invalid. So "am I allowed to pick this?" is always
+    "is it in `cards`?" -- no client-side filtering logic (by type or otherwise) is needed or
+    possible; the constraint that produced this selection isn't exposed at all (min/max_select
+    tell you how many to pick, not why these specific cards are the ones offered)."""
 
     type: Literal["decision"] = "decision"
     decision: Literal["card_select"] = "card_select"
