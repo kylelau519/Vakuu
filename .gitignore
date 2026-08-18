@@ -254,6 +254,7 @@ decompiled/
 data/*
 !data/.gitignore
 !data/README.md
+agents/whispering_earring/self_play/data/*/*
 *.trial
 *.replay
 
