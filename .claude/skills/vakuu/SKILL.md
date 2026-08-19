@@ -1,20 +1,21 @@
 ---
 name: vakuu
-description: Orients work on Vakuu, the Slay the Spire 2 autoplay project (Choices Paradox meta-option picker, Golden Compass path planner, Whispering Earring in-combat agent). Use when working on STS2 state extraction, the C# mod, headless/AutoSlay trial generation, in-combat state capture or restore, RNG determinism, the shared state schema, or the training data pipeline for any of the three subsystems. Also use when reading the decompiled STS2 source to answer "how does the game actually do X".
+description: Orients work on Vakuu, the Slay the Spire 2 autoplay project (Choices Paradox meta-option picker, Golden Compass path planner, Claws in-combat ML model, Whispering Earring self-play facility). Use when working on STS2 state extraction, the C# mod, headless/AutoSlay trial generation, in-combat state capture or restore, RNG determinism, the shared state schema, or the training data pipeline for any of the four subsystems. Also use when reading the decompiled STS2 source to answer "how does the game actually do X".
 ---
 
 # Vakuu — Slay the Spire 2 autoplay
 
 ## The project
 
-**Vakuu** is an AI that plays STS2. Three subsystems, deliberately not yet merged — whether they stay
+**Vakuu** is an AI that plays STS2. Four subsystems, deliberately not yet merged — whether they stay
 separate is an open question, not a settled architecture:
 
 | Subsystem | Decides | Engine action surface |
 |---|---|---|
 | **Choices Paradox** | Meta options: take/skip a card reward, shop priorities, relic vs. removal vs. card | `PickRelicAction`, card-reward selection, merchant screens |
 | **Golden Compass** | Which path to take, given current state, foreseeable elite pool, and boss | `MoveToMapCoordAction`, `VoteForMapCoordAction`, `Core.Map` |
-| **Whispering Earring** | Actually playing combat. Hardest of the three. | `PlayCardAction`, `EndPlayerTurnAction`, `UsePotionAction` |
+| **Claws** | Actually playing combat — the trained ML suggestion model. Hardest of the four. | `PlayCardAction`, `EndPlayerTurnAction`, `UsePotionAction` |
+| **Whispering Earring** | Nothing itself — self-play facility that plays full runs (random/heuristic policy, delegating to Choices Paradox/Golden Compass for meta decisions) to generate Claws's training data | same surface as Claws, driven by whichever policy is wired in |
 
 Conda environment: `conda activate sts2`
 
@@ -23,7 +24,7 @@ Conda environment: `conda activate sts2`
 ```
 mod/       C# Godot mod — state extraction + headless trial driver
 schema/    state/action schema; the contract mod/ and agents/ both validate against
-agents/    Python: choices_paradox/, golden_compass/, whispering_earring/
+agents/    Python: choices_paradox/, golden_compass/, claws/, whispering_earring/
 data/      generated trials — gitignored, reproduced from manifests, never committed
 docs/
 ```

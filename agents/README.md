@@ -6,9 +6,10 @@ The Python half: models, training, and inference for the three subsystems.
 |---|---|
 | `choices_paradox/` | Meta options — card reward take/skip, shop priorities, relic vs. removal vs. card |
 | `golden_compass/` | Path selection, given current state, foreseeable elite pool, and boss |
-| `whispering_earring/` | In-combat play |
+| `claws/` | In-combat play — the ML suggestion model itself |
+| `whispering_earring/` | Self-play facility — plays full runs to generate `claws`'s training data. After everything is trained this will be the module to pass live data to all the agents and return suggestions through modding. |
 
-Whether these stay three separate models or converge on a shared policy-value network is an open
+Whether these stay separate models or converge on a shared policy-value network is an open
 question. The split is how the problem is currently carved up, not a committed architecture — a
 shared state representation may well force the decision.
 

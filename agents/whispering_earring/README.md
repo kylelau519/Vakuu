@@ -1,100 +1,35 @@
 # whispering_earring
 
-In-combat card-play agent. All state comes from sts2-cli's `combat_play` decision, typed as
-`CombatPlay` in `../../schema/models.py` -- that file is the source of truth; this one just groups
-its fields by what they're for. Update this table in the same sitting as any `models.py` change
-that touches `CombatPlay`.
+Self-play facility: plays full runs end-to-end and records every decision, to generate training
+data for [`claws`](../claws/), the in-combat ML suggestion model. This package doesn't decide
+combat well itself -- it drives the game forward so that trajectories exist to train on.
 
-## Global
+See `facility.py`'s module docstring for the branching scheme (one main-line worker per run, N
+sub-workers that fork off a checkpoint at each combat to explore an alternate line, discarded
+after that one combat resolves) and `policy.py` for the current action-selection policy: combat is
+uniform-random exploration (no trained network exists yet -- that's `claws`'s job once there's
+data to train it on); non-combat decisions delegate to the Choices Paradox and Golden Compass
+placeholder policies, since a random meta/path policy would produce decks and runs too weak to
+make combat outcomes meaningful.
 
-| Feature | Field | Notes |
-|---|---|---|
-| Gold | `player.gold` | |
-| Round number | `round` | |
-| Act / floor / room / boss | `context.*` | `RunContext` |
-| Draw/discard/exhaust counts | `draw_pile_count`, `discard_pile_count`, `len(exhaust_pile)` | no `exhaust_pile_count` field -- exhaust never had one |
-| Scaling counters ("misc counts") | `history.player.*`, `history.enemies[i].*` | see below |
+## Layout
 
-**Not available from `combat_play`, and not a gap to fix here** -- these are map/run-level, not
-combat-level:
-- Remaining combats / potential future enemies -- lives in the `map_select` decision (Golden
-  Compass territory). If the in-combat agent needs it as context, it has to be threaded through
-  from that earlier decision; `combat_play` won't hand it over on its own.
-- Potion drop chance -- not exported anywhere in the current JSON protocol.
-
-## Enemy (`enemies[i]`)
-
-| Feature | Field | Notes |
-|---|---|---|
-| Name | `name` | |
-| HP / max HP / block | `hp`, `max_hp`, `block` | |
-| Intent (current turn) | `intends_attack`, `intents[].type/damage/hits/total_damage` | only the *queued* move; STS2's `MonsterAi` pattern isn't simulated here, so there's no "next turn after this one" prediction. `history.enemies[i].monster_move_performed` gives a raw count of past moves, not a move sequence -- not enough to predict the pattern from, just how often it's moved. |
-| Status effects + amount | `powers[].name/amount` | |
-| Status effect, stable key | `powers[].id` | e.g. `"VULNERABLE_POWER"` -- match on this, not the localized `name`, for anything that needs to key off a specific power across locales/game updates |
-| `is_minion` | *derived*: `any(p.id == "MINION_POWER" for p in powers)` | not a field on the enemy -- STS2 represents "is a minion" as a power (`MinionPower`, decompiled source), not a monster attribute. No `powers[].id` before schema 0.3.0, so this only works on hand cards captured after the id fix. |
-| Scaling counters for this enemy | `history.enemies[i].*` (`index` matches `enemies[i].index`) | see below |
-
-Enemy `index` is re-assigned to alive enemies 0..k every decision -- not stable across turns once
-something dies.
-
-## Player
-
-| Feature | Field | Notes |
-|---|---|---|
-| HP / max HP | `player.hp`, `player.max_hp` | |
-| Gold | `player.gold` | |
-| Relics + counts | `player.relics[].name/vars/counter` | `counter` is the same generic hook the game's own UI reads for a relic's progress badge (Pen Nib N/10, etc.); `None` for relics with no visible counter |
-| Energy / max energy | `energy`, `max_energy` | top-level on the decision, *not* under `player` |
-| Status effects + amount | `player_powers[].name/amount` | |
-| Status effect, stable key | `player_powers[].id` | same locale-independent matching as enemy powers |
-| Scaling counters | `history.player.*` | see below |
-
-## Hand card (`hand[i]`)
-
-| Feature | Field | Notes |
-|---|---|---|
-| Name / id | `name`, `id` | |
-| `is_upgraded` | `upgraded` | added in an uncommitted sts2-cli patch (schema 0.3.0) -- previously silently absent on hand cards even though deck/pile cards always had it |
-| Special flags (Exhaust, Ethereal, etc.) | `keywords` | `CardKeyword` enum values as strings |
-| Energy cost | `cost` | resolved (post-reduction) cost |
-| Effective attack/block numbers | `stats` | **already resolved** -- replays the game's own DynamicVar preview so it reflects current Strength/Weak/Frail/Block, not the card's base numbers. This is also true for cards that scale off history counts (Supermassive/cards-created, Murder/cards-drawn): the live preview re-runs their scaling lambda, so `stats`/`damage_by_target` already bakes in the correct number for whichever card is in hand right now. |
-| Per-target effective damage | `damage_by_target[]` | attack cards targeting `AnyEnemy`/`AllEnemies` only; one row per currently-alive enemy |
-| Can this be played | `can_play` | forced `False` if `star_cost` exceeds available Regent stars, independent of the underlying game flag |
-
-## Potion (`player.potions[i]`)
-
-| Feature | Field |
+| File | Role |
 |---|---|
-| Name | `name` |
-| Original slot (use this, not list position, once any potion's been used/discarded) | `index` |
+| `facility.py` | Orchestrates main + branch workers; `Facility`/`FacilityConfig`; CLI entry point |
+| `policy.py` | `choose_action(decision, session)` -- combat is random, meta decisions delegate out |
+| `recorder.py` | `TrialRecorder` -- per-trial JSONL capture (states, actions, errors) |
+| `checkpoint.py` | `BranchJob` -- the replay-prefix format branch workers pick up off the queue |
+| `sts2_path.py` | Adds sts2-cli's `python/` to `sys.path`; import before anything from sts2-cli |
+| `data/raw/` | Recorded trial JSONL/JSON per trial (gitignored) |
+| `data/queue/` | Pending `BranchJob` files, consumed by branch workers (gitignored) |
 
-## Piles (`draw_pile` / `discard_pile` / `exhaust_pile`)
+## Running
 
-Each is a full ordered list of cards (not just a count) as of an sts2-cli commit around
-2026-08-14 -- earlier notes describing these as counts-only are stale. Card-type breakdowns
-("attacks in draw pile") are derived client-side by filtering `type == "Attack"` etc.; there's no
-dedicated count-by-type field. Pile order is real: index 0 is next to draw (`draw_pile`) or most
-recently discarded/exhausted -- shuffles are discrete RNG events, not lazy per-draw reordering.
+```
+conda activate sts2
+python facility.py --trials 10 --branch-workers 4 --branches-per-combat 3
+```
 
-## Scaling counters (`history.player`, `history.enemies[i]`)
-
-STS2 has no dedicated "how many times has X happened this combat" fields anywhere. Cards that
-scale off event counts (Supermassive: cards created, Spite: damage taken this turn, Murder: cards
-drawn) compute it live by filtering the engine's own combat event log
-(`CombatManager.Instance.History.Entries`) at preview time. `history.*` exposes the same counts
-generically, per creature, both `this_turn` and `this_combat`, so the agent can see the scaling
-input even when the card that uses it isn't currently in hand. Field-by-field mapping to the
-underlying `CombatHistoryEntry` subclasses is documented on `HistoryCounts` in `schema/models.py`
--- don't duplicate that list here, it'll drift.
-
-## `card_select`: there is no "pickable" mask
-
-`CardSelect.cards` (and `SelectableCard`) is always the complete, already-eligible set -- verified
-against the decompiled `CardSelectCmd` (`FromHand`, `FromCombatPile`, `FromDeckGeneric`, etc.),
-which all build a pre-filtered `List<CardModel>` *before* calling
-`ICardSelector.GetSelectedCards(list, ...)`. sts2-cli's `HeadlessCardSelector` -- what `card_select`
-is read from -- only ever sees that pre-filtered list, never the full hand/pile with some entries
-marked invalid. So for effects that restrict the pool (e.g. "choose a Skill card from hand"), the
-type filter has already been applied by the time it reaches the client: "am I allowed to pick
-this?" is always "is it in `cards`?", with no client-side filtering logic needed. `min_select`/
-`max_select` say how many to pick, not why these specific cards were offered.
+Requires `sts2-cli` checked out next to this repo (or `STS2_CLI_ROOT` set) and set up per its own
+`./setup.sh`.

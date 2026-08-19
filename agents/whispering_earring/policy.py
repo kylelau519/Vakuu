@@ -25,13 +25,13 @@ from models import CombatPlay, Decision
 # Loaded by explicit file path, not sys.path + import, because this file is *also* named
 # policy.py -- an sys.path-based `import policy` would risk resolving to itself instead of
 # agents/choices_paradox/policy.py or agents/golden_compass/policy.py depending on path order.
-_choices_paradox_path = Path(__file__).resolve().parents[2] / "choices_paradox" / "policy.py"
+_choices_paradox_path = Path(__file__).resolve().parents[1] / "choices_paradox" / "policy.py"
 _spec = importlib.util.spec_from_file_location("choices_paradox_policy", _choices_paradox_path)
 assert _spec is not None and _spec.loader is not None
 choices_paradox = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(choices_paradox)
 
-_golden_compass_path = Path(__file__).resolve().parents[2] / "golden_compass" / "policy.py"
+_golden_compass_path = Path(__file__).resolve().parents[1] / "golden_compass" / "policy.py"
 _spec = importlib.util.spec_from_file_location("golden_compass_policy", _golden_compass_path)
 assert _spec is not None and _spec.loader is not None
 golden_compass = importlib.util.module_from_spec(_spec)

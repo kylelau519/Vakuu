@@ -9,7 +9,7 @@ import os
 import sys
 
 _DEFAULT_ROOT = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "sts2-cli")
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "sts2-cli")
 )
 STS2_CLI_ROOT = os.environ.get("STS2_CLI_ROOT", _DEFAULT_ROOT)
 _STS2_CLI_PYTHON = os.path.join(STS2_CLI_ROOT, "python")
