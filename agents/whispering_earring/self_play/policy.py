@@ -3,11 +3,14 @@ for the first self-play pass before any trained network exists. Non-combat (meta
 delegate to the Choices Paradox placeholder policy (agents/choices_paradox/policy.py), which
 scores cards off Baalorlord's STS2 tier lists instead of picking blindly -- a random meta
 policy produces decks too weak to make combat outcomes meaningful, which defeats the point of
-training on them.
+training on them. map_select likewise delegates to Golden Compass (agents/golden_compass/
+policy.py), which value-to-go DPs the full map instead of picking a reachable node blindly.
 
 Returns (action_name, kwargs) rather than a built command, so callers pass it straight
-into Sts2Session.step(*choose_action(decision)) -- the session builds/validates the
-actual command via actions.action(), no need to duplicate that here.
+into Sts2Session.step(*choose_action(decision, session)) -- the session builds/validates the
+actual command via actions.action(), no need to duplicate that here. `session` is threaded
+through (rather than defaulted away) because map_select needs session.get_map() for full-map
+lookahead -- decision.choices alone is only the one-hop list.
 """
 from __future__ import annotations
 
@@ -16,16 +19,23 @@ import random
 from pathlib import Path
 
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the import below)
+from env import Sts2Session
 from models import CombatPlay, Decision
 
 # Loaded by explicit file path, not sys.path + import, because this file is *also* named
 # policy.py -- an sys.path-based `import policy` would risk resolving to itself instead of
-# agents/choices_paradox/policy.py depending on path order.
+# agents/choices_paradox/policy.py or agents/golden_compass/policy.py depending on path order.
 _choices_paradox_path = Path(__file__).resolve().parents[2] / "choices_paradox" / "policy.py"
 _spec = importlib.util.spec_from_file_location("choices_paradox_policy", _choices_paradox_path)
 assert _spec is not None and _spec.loader is not None
 choices_paradox = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(choices_paradox)
+
+_golden_compass_path = Path(__file__).resolve().parents[2] / "golden_compass" / "policy.py"
+_spec = importlib.util.spec_from_file_location("golden_compass_policy", _golden_compass_path)
+assert _spec is not None and _spec.loader is not None
+golden_compass = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(golden_compass)
 
 _REST_HEAL_HP_THRESHOLD = 35
 
@@ -37,11 +47,11 @@ _REST_HEAL_HP_THRESHOLD = 35
 # reliable way to tell a remove-card select apart from an upgrade select.
 _pending_card_select_purpose: str | None = None
 
-
-def choose_action(decision: Decision) -> tuple[str, dict]:
+# session is passed around incase we need extra info from the session and we can get through env.py
+def choose_action(decision: Decision, session: Sts2Session) -> tuple[str, dict]:
     if isinstance(decision, CombatPlay):
         return _choose_combat_action(decision)
-    return _choose_generic_action(decision)
+    return _choose_generic_action(decision, session)
 
 
 def _choose_combat_action(decision: CombatPlay) -> tuple[str, dict]:
@@ -64,15 +74,14 @@ def _choose_combat_action(decision: CombatPlay) -> tuple[str, dict]:
     return random.choice(options)
 
 
-def _choose_generic_action(decision: Decision) -> tuple[str, dict]:
+def _choose_generic_action(decision: Decision, session: Sts2Session) -> tuple[str, dict]:
     """Non-combat decisions: pick a uniformly random legal option, or the simplest safe
     default (leave/skip) where "random" isn't a meaningful choice yet. Good enough to
     keep a run moving forward -- combat_play is what's actually being trained right now."""
     dec = decision.decision
 
     if dec == "map_select":
-        pick = random.choice(decision.choices)
-        return "select_map_node", {"col": pick.col, "row": pick.row}
+        return _choose_map_action(decision, session)
 
     if dec == "card_reward":
         index = choices_paradox.choose_card_reward(
@@ -101,6 +110,23 @@ def _choose_generic_action(decision: Decision) -> tuple[str, dict]:
         return "choose_option", {"option_index": random.choice(unlocked).index}
 
     raise ValueError(f"no policy for decision type {dec!r}")
+
+
+def _choose_map_action(decision: Decision, session: Sts2Session) -> tuple[str, dict]:
+    """Delegates to Golden Compass's value-to-go DP over the full act map -- decision.choices
+    alone is only the one-hop list, not enough for the DP, hence session.get_map() (cached on
+    the session; see env.py) rather than reading straight off `decision`. Falls back to a
+    random legal choice if there's no full-map decision to make yet (pre-act, single forced
+    choice) or the DP's pick isn't among what's actually offered (map desynced from the cache)."""
+    hp_frac = decision.player.hp / decision.player.max_hp if decision.player.max_hp else 1.0
+    target = golden_compass.choose_next_node(session.get_map(), hp_frac=hp_frac)
+    if target is not None:
+        for choice in decision.choices:
+            if (choice.col, choice.row) == target:
+                return "select_map_node", {"col": choice.col, "row": choice.row}
+
+    pick = random.choice(decision.choices)
+    return "select_map_node", {"col": pick.col, "row": pick.row}
 
 
 def _choose_card_select_action(decision: Decision) -> tuple[str, dict]:

@@ -50,7 +50,7 @@ def _play_combat_only(session: Sts2Session, decision) -> str:
     care about a single combat and stop the moment it resolves. session.step() logs to
     session.logger itself, so this loop doesn't touch the recorder directly."""
     while decision.decision == "combat_play":
-        name, kwargs = choose_action(decision)
+        name, kwargs = choose_action(decision, session)
         decision = session.step(name, **kwargs)
     return "died" if decision.decision == "game_over" else "won"
 
@@ -91,7 +91,7 @@ def main_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, stop_event) -> No
                         _spawn_branches(job_queue, cfg, main_id, decision.context.floor, combat_index,
                                          character, seed, session.action_log)
 
-                    name, kwargs = choose_action(decision)
+                    name, kwargs = choose_action(decision, session)
                     prev_type = decision.decision
                     decision = session.step(name, **kwargs)
             except Exception as e:
