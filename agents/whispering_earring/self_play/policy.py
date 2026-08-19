@@ -13,6 +13,9 @@ import random
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the import below)
 from models import CombatPlay, Decision
 
+_REST_HEAL_HP_THRESHOLD = 35
+_CARD_RARITY_PRIORITY = ("Rare", "Uncommon", "Common")
+
 
 def choose_action(decision: Decision) -> tuple[str, dict]:
     if isinstance(decision, CombatPlay):
@@ -69,13 +72,10 @@ def _choose_generic_action(decision: Decision) -> tuple[str, dict]:
         return "select_cards", {"indices": [c.index for c in picks]}
 
     if dec == "shop":
-        return "leave_room", {}
+        return _choose_shop_action(decision)
 
     if dec == "rest_site":
-        enabled = [o for o in decision.options if o.is_enabled]
-        if not enabled:
-            return "leave_room", {}
-        return "choose_option", {"option_index": random.choice(enabled).index}
+        return _choose_rest_site_action(decision)
 
     if dec == "event_choice":
         unlocked = [o for o in decision.options if not o.is_locked]
@@ -84,3 +84,39 @@ def _choose_generic_action(decision: Decision) -> tuple[str, dict]:
         return "choose_option", {"option_index": random.choice(unlocked).index}
 
     raise ValueError(f"no policy for decision type {dec!r}")
+
+
+def _choose_shop_action(decision: Decision) -> tuple[str, dict]:
+    """Priority: remove a card if the removal service is affordable, then top up potions,
+    then buy the highest-rarity card still within budget. Leaves once nothing is affordable."""
+    gold = decision.player.gold
+
+    if decision.card_removal_cost is not None and decision.card_removal_cost <= gold:
+        return "remove_card", {}
+
+    if len(decision.player.potions) < decision.player.max_potions:
+        affordable_potions = [p for p in decision.potions if p.is_stocked and p.cost <= gold]
+        if affordable_potions:
+            return "buy_potion", {"potion_index": random.choice(affordable_potions).index}
+
+    for rarity in _CARD_RARITY_PRIORITY:
+        affordable_cards = [
+            c for c in decision.cards
+            if c.is_stocked and c.cost <= gold and c.rarity == rarity
+        ]
+        if affordable_cards:
+            return "buy_card", {"card_index": random.choice(affordable_cards).index}
+
+    return "leave_room", {}
+
+
+def _choose_rest_site_action(decision: Decision) -> tuple[str, dict]:
+    """Heal below the HP threshold, otherwise upgrade a card (which opens a follow-up
+    card_select decision already restricted to upgrade-eligible cards)."""
+    enabled = {o.option_id: o for o in decision.options if o.is_enabled}
+    if not enabled:
+        return "leave_room", {}
+
+    preferred = "HEAL" if decision.player.hp < _REST_HEAL_HP_THRESHOLD else "SMITH"
+    option = enabled[preferred] if preferred in enabled else random.choice(list(enabled.values()))
+    return "choose_option", {"option_index": option.index}
