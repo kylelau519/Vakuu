@@ -1,6 +1,9 @@
-"""Uniform-random exploration policy -- the simplest possible action selection, used for
-the first self-play pass before any trained network exists. No scoring, no candidate
-evaluation: every legal action at a decision point is equally likely to be picked.
+"""Combat is still uniform-random exploration -- the simplest possible action selection, used
+for the first self-play pass before any trained network exists. Non-combat (meta) decisions
+delegate to the Choices Paradox placeholder policy (agents/choices_paradox/policy.py), which
+scores cards off Baalorlord's STS2 tier lists instead of picking blindly -- a random meta
+policy produces decks too weak to make combat outcomes meaningful, which defeats the point of
+training on them.
 
 Returns (action_name, kwargs) rather than a built command, so callers pass it straight
 into Sts2Session.step(*choose_action(decision)) -- the session builds/validates the
@@ -8,13 +11,31 @@ actual command via actions.action(), no need to duplicate that here.
 """
 from __future__ import annotations
 
+import importlib.util
 import random
+from pathlib import Path
 
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the import below)
 from models import CombatPlay, Decision
 
+# Loaded by explicit file path, not sys.path + import, because this file is *also* named
+# policy.py -- an sys.path-based `import policy` would risk resolving to itself instead of
+# agents/choices_paradox/policy.py depending on path order.
+_choices_paradox_path = Path(__file__).resolve().parents[2] / "choices_paradox" / "policy.py"
+_spec = importlib.util.spec_from_file_location("choices_paradox_policy", _choices_paradox_path)
+assert _spec is not None and _spec.loader is not None
+choices_paradox = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(choices_paradox)
+
 _REST_HEAL_HP_THRESHOLD = 35
-_CARD_RARITY_PRIORITY = ("Rare", "Uncommon", "Common")
+
+# Set by _choose_shop_action/_choose_rest_site_action right before returning an action that
+# triggers a follow-up card_select, and consumed by the card_select branch below. The protocol
+# is strictly request/response -- the game emits that follow-up as its immediate next decision,
+# with no way to distinguish it from any other card_select by shape alone (see CardSelect's
+# docstring in sts2-cli's models.py) -- so tracking "what did we just do" here is the simplest
+# reliable way to tell a remove-card select apart from an upgrade select.
+_pending_card_select_purpose: str | None = None
 
 
 def choose_action(decision: Decision) -> tuple[str, dict]:
@@ -54,22 +75,18 @@ def _choose_generic_action(decision: Decision) -> tuple[str, dict]:
         return "select_map_node", {"col": pick.col, "row": pick.row}
 
     if dec == "card_reward":
-        if not decision.cards:
+        index = choices_paradox.choose_card_reward(
+            decision.cards, decision.can_skip, decision.player.deck_size or 0
+        )
+        if index is None:
             return "skip_card_reward", {}
-        if decision.can_skip and random.random() < 0.3:
-            return "skip_card_reward", {}
-        return "select_card_reward", {"card_index": random.choice(decision.cards).index}
+        return "select_card_reward", {"card_index": index}
 
     if dec == "bundle_select":
         return "select_bundle", {"bundle_index": random.choice(decision.bundles).index}
 
     if dec == "card_select":
-        lo, hi = decision.min_select, min(decision.max_select, len(decision.cards))
-        n_pick = random.randint(lo, hi) if hi >= lo else 0
-        if n_pick == 0:
-            return "skip_select", {}
-        picks = random.sample(decision.cards, n_pick)
-        return "select_cards", {"indices": [c.index for c in picks]}
+        return _choose_card_select_action(decision)
 
     if dec == "shop":
         return _choose_shop_action(decision)
@@ -86,12 +103,40 @@ def _choose_generic_action(decision: Decision) -> tuple[str, dict]:
     raise ValueError(f"no policy for decision type {dec!r}")
 
 
+def _choose_card_select_action(decision: Decision) -> tuple[str, dict]:
+    """Dispatches on _pending_card_select_purpose, set by whichever shop/rest_site action
+    just triggered this follow-up. Anything else (True Grit's exhaust-select, Wish's
+    deck-tutor-select, ...) falls back to a uniformly random legal pick -- CardSelect's shape
+    alone can't tell those apart from a remove/upgrade select, and no purpose was staged for
+    them."""
+    global _pending_card_select_purpose
+    purpose, _pending_card_select_purpose = _pending_card_select_purpose, None
+
+    if purpose == "remove" and decision.cards:
+        index = choices_paradox.choose_removal_target(decision.cards)
+        return "select_cards", {"indices": [index]}
+
+    if purpose == "upgrade" and decision.cards:
+        index = choices_paradox.choose_upgrade_target(decision.cards)
+        return "select_cards", {"indices": [index]}
+
+    lo, hi = decision.min_select, min(decision.max_select, len(decision.cards))
+    n_pick = random.randint(lo, hi) if hi >= lo else 0
+    if n_pick == 0:
+        return "skip_select", {}
+    picks = random.sample(decision.cards, n_pick)
+    return "select_cards", {"indices": [c.index for c in picks]}
+
+
 def _choose_shop_action(decision: Decision) -> tuple[str, dict]:
-    """Priority: remove a card if the removal service is affordable, then top up potions,
-    then buy the highest-rarity card still within budget. Leaves once nothing is affordable."""
+    """Priority: remove a card if the removal service is affordable (targeting the deck's
+    worst-tier card via the card_select that follows), then top up potions, then buy the
+    highest-tier card still within budget. Leaves once nothing is affordable."""
+    global _pending_card_select_purpose
     gold = decision.player.gold
 
     if decision.card_removal_cost is not None and decision.card_removal_cost <= gold:
+        _pending_card_select_purpose = "remove"
         return "remove_card", {}
 
     if len(decision.player.potions) < decision.player.max_potions:
@@ -99,24 +144,25 @@ def _choose_shop_action(decision: Decision) -> tuple[str, dict]:
         if affordable_potions:
             return "buy_potion", {"potion_index": random.choice(affordable_potions).index}
 
-    for rarity in _CARD_RARITY_PRIORITY:
-        affordable_cards = [
-            c for c in decision.cards
-            if c.is_stocked and c.cost <= gold and c.rarity == rarity
-        ]
-        if affordable_cards:
-            return "buy_card", {"card_index": random.choice(affordable_cards).index}
+    affordable_cards = [c for c in decision.cards if c.is_stocked and c.cost <= gold]
+    if affordable_cards:
+        index = choices_paradox.choose_shop_card(affordable_cards, decision.player.deck_size or 0)
+        if index is not None:
+            return "buy_card", {"card_index": index}
 
     return "leave_room", {}
 
 
 def _choose_rest_site_action(decision: Decision) -> tuple[str, dict]:
-    """Heal below the HP threshold, otherwise upgrade a card (which opens a follow-up
-    card_select decision already restricted to upgrade-eligible cards)."""
+    """Heal below the HP threshold, otherwise upgrade a card -- targeting whichever offered
+    card the tier list flags good_upgrade via the card_select that follows."""
+    global _pending_card_select_purpose
     enabled = {o.option_id: o for o in decision.options if o.is_enabled}
     if not enabled:
         return "leave_room", {}
 
     preferred = "HEAL" if decision.player.hp < _REST_HEAL_HP_THRESHOLD else "SMITH"
     option = enabled[preferred] if preferred in enabled else random.choice(list(enabled.values()))
+    if option.option_id == "SMITH":
+        _pending_card_select_purpose = "upgrade"
     return "choose_option", {"option_index": option.index}

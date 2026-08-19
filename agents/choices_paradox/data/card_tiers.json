@@ -1,0 +1,3718 @@
+{
+  "cards": {
+    "ABRASIVE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "ACCELERANT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "ACCURACY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "ACROBATICS": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "ADAPTIVE_STRIKE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "ADRENALINE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "AFTERIMAGE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "AFTERLIFE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "AGGRESSION": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "ALCHEMIZE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "colorless",
+      "tier": "S"
+    },
+    "ALIGNMENT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "ALL_FOR_ONE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "ANGER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "ANOINTED": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "colorless",
+      "tier": "C"
+    },
+    "ANTICIPATE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "ARMAMENTS": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "ARSENAL": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "ASHEN_STRIKE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "ASSASSINATE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "ASTRAL_PULSE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "AUTOMATION": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 35,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "BACKFLIP": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "BACKSTAB": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "BALL_LIGHTNING": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "BANSHEES_CRY": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "BARRAGE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 28,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "BARRICADE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "BASH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "ironclad",
+      "tier": "C"
+    },
+    "BATTLE_TRANCE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "BEACON_OF_HOPE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "colorless",
+      "tier": "B"
+    },
+    "BEAM_CELL": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "BEAT_DOWN": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "colorless",
+      "tier": "D"
+    },
+    "BEAT_INTO_SHAPE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "regent",
+      "tier": "C"
+    },
+    "BEGONE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "BELIEVE_IN_YOU": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 16,
+      "source_character": "colorless",
+      "tier": "A"
+    },
+    "BIASED_COGNITION": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "BIG_BANG": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "BLACK_HOLE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "BLADE_DANCE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "BLADE_OF_INK": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "BLADE_SYMPHONY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 31,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "BLAZE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 33,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "BLIGHT_STRIKE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "necrobinder",
+      "tier": "C"
+    },
+    "BLOODLETTING": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "BLOOD_WALL": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "BLUDGEON": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 22,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "BLUR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "BODYGUARD": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 27,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "BODY_SLAM": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 26,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "BOLAS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "colorless",
+      "tier": "C"
+    },
+    "BOMBARDMENT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "BONE_SHARDS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "BOOST_AWAY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 24,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "BOOT_SEQUENCE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 25,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "BORROWED_TIME": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "BOUNCING_FLASK": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 18,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "BRAND": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "BREAK": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "BREAKTHROUGH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "BUBBLE_BUBBLE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 21,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "BUFFER": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "BULK_UP": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 18,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "BULLET_TIME": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 27,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "BULLY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "BULWARK": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "BUNDLE_OF_JOY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "BURNING_PACT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 23,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "BURST": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "BURY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "necrobinder",
+      "tier": "D"
+    },
+    "CALAMITY": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "CALCIFY": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "CALCULATED_GAMBLE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "CALL_OF_THE_VOID": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "CALTROPS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 34,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "CAPACITOR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "CAPTURE_SPIRIT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 21,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "CASCADE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 16,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "CATASTROPHE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "colorless",
+      "tier": "C"
+    },
+    "CELESTIAL_MIGHT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 19,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "CHAOS": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "defect",
+      "tier": "D"
+    },
+    "CHARGE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "CHARGE_BATTERY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 27,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "CHILD_OF_THE_STARS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "CHILL": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "CINDER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "ironclad",
+      "tier": "C"
+    },
+    "CLASH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "ironclad",
+      "tier": "C"
+    },
+    "CLAW": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "CLEANSE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "CLOAK_AND_DAGGER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "CLOAK_OF_STARS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "COLD_SNAP": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "COLLISION_COURSE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "COLOSSUS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "COMET": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "COMPACT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "COMPILE_DRIVER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "CONCOCT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 35,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "CONFLAGRATION": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "CONQUEROR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 22,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "CONSTELLATION": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "regent",
+      "tier": "C"
+    },
+    "CONSUMING_SHADOW": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "defect",
+      "tier": "C"
+    },
+    "CONVERGENCE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 19,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "COOLANT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 22,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "COOLHEADED": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "COORDINATE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "colorless",
+      "tier": "D"
+    },
+    "CORROSIVE_WAVE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "CORRUPTION": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "COSMIC_INDIFFERENCE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "regent",
+      "tier": "C"
+    },
+    "COUNTDOWN": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 24,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "CRASH_LANDING": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "CREATIVE_AI": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "CRESCENT_SPEAR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "regent",
+      "tier": "C"
+    },
+    "CRIMSON_MANTLE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "CRUELTY": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "CRUSH_UNDER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 21,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "DAGGER_SPRAY": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "DAGGER_THROW": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 19,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "DANSE_MACABRE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "DARKNESS": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 20,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "DARK_EMBRACE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "DARK_SHACKLES": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "colorless",
+      "tier": "S"
+    },
+    "DASH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "DEADLY_POISON": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "DEATHBRINGER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "DEATHS_DOOR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "DEATH_MARCH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "DEBILITATE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "DECISIONS_DECISIONS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "DEFEND_DEFECT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "defect",
+      "tier": "C"
+    },
+    "DEFEND_IRONCLAD": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "ironclad",
+      "tier": "C"
+    },
+    "DEFEND_NECROBINDER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "necrobinder",
+      "tier": "C"
+    },
+    "DEFEND_REGENT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "regent",
+      "tier": "C"
+    },
+    "DEFEND_SILENT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 29,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "DEFILE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 17,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "DEFLECT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 17,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "DEFRAGMENT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "DEFY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "DELAY": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "DEMESNE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "DEMONIC_SHIELD": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 29,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "DEMON_FORM": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "ironclad",
+      "tier": "C"
+    },
+    "DEVASTATE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "regent",
+      "tier": "D"
+    },
+    "DEVOUR_LIFE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "necrobinder",
+      "tier": "C"
+    },
+    "DIRGE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 20,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "DISCOVERY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "DISMANTLE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "DISTRACTION": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "DODGE_AND_ROLL": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 27,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "DOMINATE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "DOUBLE_ENERGY": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 20,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "DRAIN_POWER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 21,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "DRAMATIC_ENTRANCE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "colorless",
+      "tier": "B"
+    },
+    "DREDGE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "DRUM_OF_BATTLE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "ironclad",
+      "tier": "C"
+    },
+    "DUALCAST": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 23,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "DUAL_WIELD": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 25,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "DYING_STAR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "ECHOING_SLASH": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 17,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "ECHO_FORM": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "EIDOLON": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "END_OF_DAYS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "ENERGY_SURGE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 34,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "ENFEEBLING_TOUCH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "ENTRENCH": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 26,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "ENTROPY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 16,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "ENVENOM": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "EQUILIBRIUM": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 36,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "ERADICATE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "ESCAPE_PLAN": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 24,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "ETERNAL_ARMOR": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "colorless",
+      "tier": "C"
+    },
+    "EVIL_EYE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "EXPECT_A_FIGHT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "ironclad",
+      "tier": "C"
+    },
+    "EXPERTISE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 16,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "EXPOSE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "FADE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 36,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "FALLING_STAR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 29,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "FAN_OF_KNIVES": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "FASTEN": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "FEAR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "necrobinder",
+      "tier": "C"
+    },
+    "FEED": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "FEEL_NO_PAIN": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 20,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "FERAL": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "FETCH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 18,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "FIEND_FIRE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "FIGHT_ME": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 21,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "FIGHT_THROUGH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "FINESSE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 32,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "FINISHER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 25,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "FISTICUFFS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 19,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "FLAK_CANNON": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 21,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "FLAME_BARRIER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 17,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "FLANKING": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "FLASH_OF_STEEL": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 17,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "FLATTEN": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "FLECHETTES": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 16,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "FLICK_FLACK": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 24,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "FOCUSED_STRIKE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 30,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "FOLLOW_THROUGH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "FOOTWORK": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "FORBIDDEN_GRIMOIRE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "FOREGONE_CONCLUSION": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 23,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "FORGOTTEN_RITUAL": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 24,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "FRIENDSHIP": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "FTL": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "FURNACE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 23,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "FUSION": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 18,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "GAMMA_BLAST": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "GANG_UP": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 18,
+      "source_character": "colorless",
+      "tier": "A"
+    },
+    "GATHER_LIGHT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "GENESIS": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "regent",
+      "tier": "C"
+    },
+    "GENETIC_ALGORITHM": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 21,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "GLACIER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "GLASSWORK": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "GLIMMER": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "regent",
+      "tier": "C"
+    },
+    "GLIMPSE_BEYOND": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 28,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "GLITTERSTREAM": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 16,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "GLOW": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 20,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "GOLD_AXE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "colorless",
+      "tier": "B"
+    },
+    "GO_FOR_THE_EYES": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "GRAND_FINALE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "GRAVEBLAST": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "necrobinder",
+      "tier": "D"
+    },
+    "GRAVE_WARDEN": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "GUARDS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "GUIDING_STAR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "GUNK_UP": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 29,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "HAILSTORM": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "defect",
+      "tier": "C"
+    },
+    "HAMMER_TIME": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "HAND_OF_GREED": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 32,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "HAND_TRICK": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "HANG": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 22,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "HAUNT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "necrobinder",
+      "tier": "C"
+    },
+    "HAVOC": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "ironclad",
+      "tier": "D"
+    },
+    "HAZE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 20,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "HEADBUTT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 25,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "HEAVENLY_DRILL": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 24,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "HEGEMONY": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 18,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "HEIRLOOM_HAMMER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 25,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "HELIX_DRILL": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "HELLO_WORLD": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "defect",
+      "tier": "C"
+    },
+    "HELLRAISER": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "ironclad",
+      "tier": "C"
+    },
+    "HEMOKINESIS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 27,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "HIBERNATE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 37,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "HIDDEN_CACHE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "HIDDEN_DAGGERS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 22,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "HIDDEN_GEM": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "colorless",
+      "tier": "S"
+    },
+    "HIGH_FIVE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "HOLOGRAM": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "HOTFIX": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 31,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "HOWL_FROM_BEYOND": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 22,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "HUDDLE_UP": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "colorless",
+      "tier": "S"
+    },
+    "HYPERBEAM": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "ICE_LANCE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "IGNITION": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 24,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "IMITATION_LEARNING": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 28,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "IMPATIENCE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 33,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "IMPERVIOUS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "INFERNAL_BLADE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "INFERNO": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "ironclad",
+      "tier": "C"
+    },
+    "INFINITE_BLADES": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "INFLAME": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "ironclad",
+      "tier": "C"
+    },
+    "INTERCEPT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "colorless",
+      "tier": "C"
+    },
+    "INVOKE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 19,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "IRON_WAVE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 17,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "ITERATION": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "I_AM_INVINCIBLE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "JACKPOT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "JACK_OF_ALL_TRADES": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 26,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "JUGGERNAUT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "JUGGLING": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 16,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "KINGLY_KICK": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "KINGLY_PUNCH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "KNIFE_TRAP": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "KNOCKDOWN": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "colorless",
+      "tier": "A"
+    },
+    "KNOCKOUT_BLOW": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "regent",
+      "tier": "C"
+    },
+    "KNOW_THY_PLACE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 21,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "LARGESSE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 25,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "LEADING_STRIKE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 18,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "LEAP": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "defect",
+      "tier": "C"
+    },
+    "LEGION_OF_BONE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 25,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "LEG_SWEEP": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "LETHALITY": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "LIFT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "colorless",
+      "tier": "A"
+    },
+    "LIGHTNING_ROD": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 26,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "LOOP": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "defect",
+      "tier": "D"
+    },
+    "LUNAR_BLAST": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "regent",
+      "tier": "D"
+    },
+    "MACHINE_LEARNING": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 16,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "MAKE_IT_SO": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "MALAISE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "MANGLE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 21,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "MANIFEST_AUTHORITY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 18,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "MASTER_OF_STRATEGY": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 16,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "MASTER_PLANNER": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "MAYHEM": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "colorless",
+      "tier": "B"
+    },
+    "MELANCHOLY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 16,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "MEMENTO_MORI": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "METEOR_SHOWER": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "METEOR_STRIKE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "MIDNIGHT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 24,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "MIMIC": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "colorless",
+      "tier": "C"
+    },
+    "MIND_BLAST": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "colorless",
+      "tier": "B"
+    },
+    "MIRAGE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "MISERY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 22,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "MODDED": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "MOLTEN_FIST": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 19,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "MOMENTUM_STRIKE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 27,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "MONARCHS_GAZE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 26,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "MONOLOGUE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "regent",
+      "tier": "C"
+    },
+    "MULTI_CAST": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "MURDER": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "NECRO_MASTERY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 23,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "NEGATIVE_PULSE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "NEUROSURGE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "NEUTRALIZE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 29,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "NEUTRON_AEGIS": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "regent",
+      "tier": "D"
+    },
+    "NIGHTMARE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 25,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "NOSTALGIA": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "colorless",
+      "tier": "A"
+    },
+    "NOT_YET": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "NOXIOUS_FUMES": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 19,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "NO_ESCAPE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "NULL": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "OBLIVION": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "OFFERING": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "OMNISLICE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "colorless",
+      "tier": "B"
+    },
+    "ONE_FOR_ALL": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 38,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "ONE_TWO_PUNCH": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "ORBIT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "OUTBREAK": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "OUTMANEUVER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 30,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "OUTRAGE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 27,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "OVERCLOCK": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "PACTS_END": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "PAGESTORM": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 24,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "PALE_BLUE_DOT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "PANACHE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 31,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "PANIC_BUTTON": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 21,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "PARRY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 24,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "PARSE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "necrobinder",
+      "tier": "C"
+    },
+    "PARTICLE_WALL": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "PATTER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "PERFECTED_STRIKE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 20,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "PHANTOM_BLADES": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "PHOTON_CUT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "PIERCING_WAIL": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "PILLAGE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "PILLAR_OF_CREATION": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "PINPOINT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "PLOT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 28,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "POISONED_STAB": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "POKE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "POMMEL_STRIKE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "POUNCE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "PRECISE_CUT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "PREDATOR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 21,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "PREPARED": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "PREP_TIME": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 27,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "PRIMAL_FORCE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "PRODUCTION": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 16,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "PROLONG": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 20,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "PROPHESIZE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 27,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "PROTECTOR": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "PROWESS": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "colorless",
+      "tier": "A"
+    },
+    "PULL_AGGRO": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 23,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "PULL_FROM_BELOW": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "necrobinder",
+      "tier": "C"
+    },
+    "PURITY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "colorless",
+      "tier": "C"
+    },
+    "PUTREFY": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "PYRE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "QUADCAST": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "QUASAR": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 17,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "RADIATE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 16,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "RAGE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 16,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "RAINBOW": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "RALLY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "colorless",
+      "tier": "S"
+    },
+    "RAMPAGE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "ironclad",
+      "tier": "C"
+    },
+    "RATTLE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "REANIMATE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "REAP": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "REAPER_FORM": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "REAVE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 18,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "REBOOT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "defect",
+      "tier": "D"
+    },
+    "REBOUND": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 25,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "REFINE_BLADE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 20,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "REFLECT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "REFLEX": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "REFRACT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "REND": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "colorless",
+      "tier": "B"
+    },
+    "RESONANCE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "regent",
+      "tier": "F"
+    },
+    "RESTLESSNESS": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "colorless",
+      "tier": "C"
+    },
+    "RICOCHET": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "RIGHT_HAND_HAND": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "necrobinder",
+      "tier": "C"
+    },
+    "RIP_AND_TEAR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "defect",
+      "tier": "C"
+    },
+    "ROCKET_PUNCH": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 33,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "ROLLING_BOULDER": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "colorless",
+      "tier": "B"
+    },
+    "ROYALTIES": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "ROYAL_GAMBLE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "RUPTURE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "SACRIFICE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "necrobinder",
+      "tier": "C"
+    },
+    "SALVO": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "colorless",
+      "tier": "A"
+    },
+    "SCARE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 26,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "SCAVENGE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 19,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "SCOURGE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "necrobinder",
+      "tier": "C"
+    },
+    "SCRAPE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 16,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "SCRAWL": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "colorless",
+      "tier": "S"
+    },
+    "SCULPTING_STRIKE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "necrobinder",
+      "tier": "C"
+    },
+    "SEANCE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 19,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "SECOND_WIND": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "SECRET_TECHNIQUE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "SECRET_WEAPON": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "colorless",
+      "tier": "C"
+    },
+    "SEEKER_STRIKE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "colorless",
+      "tier": "B"
+    },
+    "SEEKING_EDGE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "regent",
+      "tier": "C"
+    },
+    "SENTRY_MODE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "SERPENT_FORM": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "SETUP_STRIKE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 23,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "SEVEN_STARS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "regent",
+      "tier": "D"
+    },
+    "SEVERANCE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 16,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "SHADOWMELD": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "SHADOW_SHIELD": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "SHADOW_STEP": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 26,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "SHARED_FATE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "SHATTER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "SHINING_STRIKE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "SHOCKWAVE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 22,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "SHROUD": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 25,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "SHRUG_IT_OFF": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 19,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "SIC_EM": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "SIDESTEP": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 30,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "SIGNAL_BOOST": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "SKEWER": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 22,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "SKIM": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "SLEIGHT_OF_FLESH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "SLICE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "SMOKESTACK": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "SNAKEBITE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 20,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "SNAP": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 17,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "SNEAKY": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 28,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "SOLAR_STRIKE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "regent",
+      "tier": "C"
+    },
+    "SOUL_STORM": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "necrobinder",
+      "tier": "C"
+    },
+    "SOW": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 20,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "SPECTRUM_SHIFT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "SPEEDSTER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 23,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "SPINNER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "SPIRIT_OF_ASH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "SPITE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "SPLASH": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "SPOILS_OF_BATTLE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "regent",
+      "tier": "C"
+    },
+    "SPUR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "SQUEEZE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "necrobinder",
+      "tier": "S"
+    },
+    "STACK": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 26,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "STAMPEDE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 15,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "STARDUST": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 17,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "STOKE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "STOMP": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "STONE_ARMOR": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "STORM": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 17,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "STORM_OF_STEEL": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 14,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "STRANGLE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 23,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "STRATAGEM": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "colorless",
+      "tier": "B"
+    },
+    "STRIKE_DEFECT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "defect",
+      "tier": "F"
+    },
+    "STRIKE_IRONCLAD": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "ironclad",
+      "tier": "C"
+    },
+    "STRIKE_NECROBINDER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "necrobinder",
+      "tier": "F"
+    },
+    "STRIKE_REGENT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "regent",
+      "tier": "F"
+    },
+    "STRIKE_SILENT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "silent",
+      "tier": "D"
+    },
+    "SUBROUTINE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "SUCKER_PUNCH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "SUMMON_FORTH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "SUNDER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 19,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "SUPERCRITICAL": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "SUPERMASSIVE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 22,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "SUPPRESS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "SURVIVOR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 28,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "SWEEPING_BEAM": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 5,
+      "source_character": "defect",
+      "tier": "C"
+    },
+    "SWORD_BOOMERANG": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "ironclad",
+      "tier": "C"
+    },
+    "SWORD_SAGE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "SYNCHRONIZE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 17,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "SYNTHESIS": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "defect",
+      "tier": "C"
+    },
+    "TACTICIAN": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 9,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "TAG_TEAM": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 19,
+      "source_character": "colorless",
+      "tier": "A"
+    },
+    "TANK": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "ironclad",
+      "tier": "D"
+    },
+    "TAUNT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 18,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "TEAR_ASUNDER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "TEMPEST": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "defect",
+      "tier": "C"
+    },
+    "TERRAFORMING": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 28,
+      "source_character": "regent",
+      "tier": "B"
+    },
+    "TESLA_COIL": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 23,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "THE_BALL": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 20,
+      "source_character": "colorless",
+      "tier": "A"
+    },
+    "THE_BOMB": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "colorless",
+      "tier": "C"
+    },
+    "THE_GAMBIT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 24,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "THE_HUNT": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "silent",
+      "tier": "B"
+    },
+    "THE_SCYTHE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "THE_SEALED_THRONE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "THE_SMITH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "THINKING_AHEAD": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "colorless",
+      "tier": "D"
+    },
+    "THRASH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "THRUMMING_HATCHET": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 30,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "THUNDER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 3,
+      "source_character": "defect",
+      "tier": "B"
+    },
+    "THUNDERCLAP": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "ironclad",
+      "tier": "C"
+    },
+    "TIMES_UP": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "necrobinder",
+      "tier": "B"
+    },
+    "TOOLS_OF_THE_TRADE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "TRACKING": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 0,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "TRANSFIGURE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "TRASH_TO_TREASURE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 32,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "TREMBLE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 18,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "TRUE_GRIT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "ironclad",
+      "tier": "B"
+    },
+    "TURBO": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "TUTOR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 29,
+      "source_character": "regent",
+      "tier": "A"
+    },
+    "TWIN_STRIKE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "ironclad",
+      "tier": "C"
+    },
+    "TYRANNY": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 6,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "ULTIMATE_DEFEND": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "colorless",
+      "tier": "A"
+    },
+    "ULTIMATE_STRIKE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "colorless",
+      "tier": "A"
+    },
+    "UNDEATH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 10,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "UNLEASH": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 26,
+      "source_character": "necrobinder",
+      "tier": "A"
+    },
+    "UNMOVABLE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "UNRELENTING": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 13,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "UNTOUCHABLE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "UPPERCUT": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 12,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "UPROAR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "defect",
+      "tier": "D"
+    },
+    "UP_MY_SLEEVE": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "silent",
+      "tier": "C"
+    },
+    "VEILPIERCER": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "necrobinder",
+      "tier": "C"
+    },
+    "VENERATE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "regent",
+      "tier": "C"
+    },
+    "VICIOUS": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 7,
+      "source_character": "ironclad",
+      "tier": "S"
+    },
+    "VOID_FORM": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "regent",
+      "tier": "S"
+    },
+    "VOLLEY": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 8,
+      "source_character": "colorless",
+      "tier": "C"
+    },
+    "VOLTAIC": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 1,
+      "source_character": "defect",
+      "tier": "A"
+    },
+    "WELL_LAID_PLANS": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "silent",
+      "tier": "S"
+    },
+    "WHIRLWIND": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 28,
+      "source_character": "ironclad",
+      "tier": "A"
+    },
+    "WHITE_NOISE": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "defect",
+      "tier": "S"
+    },
+    "WISP": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 11,
+      "source_character": "necrobinder",
+      "tier": "C"
+    },
+    "WRAITH_FORM": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 2,
+      "source_character": "silent",
+      "tier": "A"
+    },
+    "WROUGHT_IN_WAR": {
+      "good_upgrade": false,
+      "max_copies": null,
+      "order": 4,
+      "source_character": "regent",
+      "tier": "C"
+    },
+    "ZAP": {
+      "good_upgrade": true,
+      "max_copies": null,
+      "order": 22,
+      "source_character": "defect",
+      "tier": "B"
+    }
+  },
+  "characters": {
+    "colorless": "v0.111.0",
+    "defect": "v0.111.0",
+    "ironclad": "v0.111.0",
+    "necrobinder": "v0.111.0",
+    "regent": "v0.111.0",
+    "silent": "v0.111.0"
+  },
+  "source": "untapped.gg (Baalorlord tier lists)",
+  "updated": {
+    "colorless": "$D2026-08-19T18:07:20.705Z",
+    "defect": "$D2026-08-19T18:24:40.190Z",
+    "ironclad": "$D2026-08-19T18:02:28.078Z",
+    "necrobinder": "$D2026-08-19T18:12:54.937Z",
+    "regent": "$D2026-08-19T18:27:29.459Z",
+    "silent": "$D2026-08-19T18:28:39.576Z"
+  },
+  "version": "v0.111.0"
+}
