@@ -22,9 +22,20 @@ from __future__ import annotations
 
 import itertools
 import math
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# The `sts2` conda env has two OpenMP runtimes loaded in the same process -- conda's
+# llvm-openmp (a numpy/scipy dependency) and the copy PyPI's torch wheel bundles itself -- which
+# aborts on import with "Error #15: Initializing libomp.dylib, but found libomp.dylib already
+# initialized" unless this is set. setdefault, not direct assignment, so an explicit override
+# (e.g. to debug the real conflict) still wins. Real fix would be installing torch via
+# conda-forge instead of pip so it shares conda's libomp instead of bundling its own; this is
+# the standard workaround in the meantime, done once here since every other module in this
+# package imports torch via `model`.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import torch
 from torch import nn

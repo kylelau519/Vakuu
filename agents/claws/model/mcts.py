@@ -40,9 +40,15 @@ trusting this for real self-play:
 from __future__ import annotations
 
 import math
+import os
 import random
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
+
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")  # see model.py's top -- two OpenMP
+# runtimes (conda's llvm-openmp + torch's bundled copy) otherwise abort on import. Set here too,
+# even though this module only imports torch lazily (net_evaluate), so it's set before torch
+# loads no matter what order a caller imports mcts.py vs. model.py in.
 
 C_PUCT = 1.5
 N_SIMULATIONS = 200  # per combat, not per decision -- README.md's "## MCTS strategy"

@@ -17,9 +17,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import sys
 from pathlib import Path
+
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")  # see model.py's top -- two OpenMP
+# runtimes (conda's llvm-openmp + torch's bundled copy) otherwise abort on import
 
 import torch
 import torch.nn.functional as F
