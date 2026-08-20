@@ -23,7 +23,7 @@ over that same network (see `policy.py`'s module docstring; this is the expensiv
 |---|---|
 | `facility.py` | Orchestrates main + branch workers; `Facility`/`FacilityConfig`; CLI entry point |
 | `policy.py` | `choose_action(decision, session)` -- combat is random (ClawsNet-sampled if `CLAWS_CHECKPOINT` is set, or MCTS-searched if `CLAWS_MCTS` is set), meta decisions delegate out |
-| `recorder.py` | `CompactRecorder` -- per-trial JSON capture (action log, policy, backfilled value) |
+| `recorder.py` | `CompactRecorder` -- per-trial JSON capture (action log, policy, per-combat HP-loss value) |
 | `checkpoint.py` | `BranchJob` -- the replay-prefix format passed to branch workers via an in-memory queue |
 | `sts2_path.py` | Adds sts2-cli's `python/` to `sys.path`; import before anything from sts2-cli |
 | `data/raw/` | Recorded trial JSON per trial (gitignored) |

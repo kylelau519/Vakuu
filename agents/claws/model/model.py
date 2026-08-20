@@ -51,20 +51,12 @@ from models import CombatPlay  # noqa: E402  (sts2-cli's python/models.py -- see
 TOKEN_TYPES = ["PLAYER", "CARD", "ENEMY", "RELIC", "POTION", "PLAYER_POWER"]
 _TYPE_TO_IDX = {t: i for i, t in enumerate(TOKEN_TYPES)}
 
-# Every token gets the same fixed-width feature vector, zero-padded where a type doesn't use a
-# given slot -- simplest way to let one nn.Linear-per-type (feat_proj) share input shape without
-# a ragged per-type schema. Slots, by index: [hp_frac, log1p_hp, log1p_block, cost_or_amount,
-# can_play_or_intends_attack, upgraded_or_energy_frac].
 FEATURE_DIM = 6
 
 
 def _log1p(x: float | int | None) -> float:
-    """Signed log1p, not plain log1p -- some of what feeds this can go negative (Strength and
-    other player_powers can drop below 0 from debuffs/curses), and log1p(x) is undefined for
-    x <= -1. A live self-play run hit exactly this: a negative power amount produced a NaN here,
-    which poisoned the whole forward pass and crashed torch.multinomial downstream ("probability
-    tensor contains nan") in whispering_earring/policy.py's ClawsNet-driven path. sign(x) *
-    log1p(|x|) keeps the same magnitude-compression behavior while staying defined everywhere."""
+    """Signed log1p,  -- some of what feeds this can go negative (Strength and
+    other player_powers can drop below 0 from debuffs/curses) """
     x = float(x or 0)
     return math.copysign(math.log1p(abs(x)), x)
 

@@ -18,7 +18,10 @@ CHANCE_MAX_CHILDREN = 80
 CHANCE_C = 2.0
 CHANCE_ALPHA = 0.5
 
-# Matches recorder.py's _OUTCOME_VALUE -- kept as a separate small constant here rather than
+# Search-time terminal backup only -- deliberately the coarse won/lost signal, not
+# facility.py's finer per-combat HP-loss value (_combat_value): a simulation's leaf is a single
+# combat's own terminal state, so there's no HP-loss-vs-chip-damage nuance to weigh here, just
+# "did this simulated path win or lose." Kept as a separate small constant here rather than
 # imported, since whispering_earring isn't (and shouldn't need to be) an mcts.py dependency.
 OUTCOME_VALUE = {"won": 1.0, "lost": -1.0}
 
@@ -77,7 +80,7 @@ def select_edge(node: Node, c_puct: float = C_PUCT) -> int:
     Unvisited edges (N=0) use Q=0 (no first-play-urgency heuristic -- keep it simple until
     there's a reason not to)."""
     total_n = sum(node.N)
-    sqrt_total = math.sqrt(total_n)
+    sqrt_total = math.sqrt(1+total_n)
     best_idx, best_score = 0, -math.inf
     for i in range(len(node.options)):
         q = node.W[i] / node.N[i] if node.N[i] > 0 else 0.0

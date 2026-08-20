@@ -17,9 +17,33 @@ from recorder import CompactRecorder
 
 _SEED_WORDS = ["falcon", "ember", "wolf", "raven", "thorn", "comet", "storm", "harbor"]
 
+# README.md's Value head: "HP loss is used as the metric. Every combat allows 5-7 hp loss as
+# chip damage to avoid strongly discouraging values." No exact number is given -- 6 is that
+# range's midpoint, a judgment call, not derived from anywhere else. Death is still a hard
+# floor regardless of the allowance: the "avoid strongly discouraging values" instruction reads
+# as being about ordinary chip damage taken while still winning, not about dying.
+_CHIP_DAMAGE_ALLOWANCE = 6
+_DEATH_VALUE = -1.0
+
 
 def _random_seed() -> str:
     return f"{random.choice(_SEED_WORDS)}-{random.randint(0, 999_999)}"
+
+
+def _combat_value(hp_before: int, hp_after: int, max_hp: int, died: bool) -> float:
+    """Per-combat value target for recorder.py's end_combat() -- see README.md's Value head
+    and _CHIP_DAMAGE_ALLOWANCE above. A clean win (hp loss within the chip-damage allowance)
+    scores 1.0, same ceiling as the old flat win value; a win that costs more HP than that
+    scores progressively lower (down toward, but not below, 0 as hp_after approaches 0) rather
+    than being flattened to the same 1.0 as a flawless win. Death overrides all of that with a
+    hard -1.0, independent of how much HP was left at the time -- dying is always worse than
+    any win, no matter how costly."""
+    if died:
+        return _DEATH_VALUE
+    if not max_hp:
+        return 1.0
+    excess_loss = max(0, (hp_before - hp_after) - _CHIP_DAMAGE_ALLOWANCE)
+    return 1.0 - excess_loss / max_hp
 
 
 @dataclass
@@ -34,12 +58,21 @@ class FacilityConfig:
 
 
 def _play_combat_only(session: Sts2Session, decision) -> str:
+    """Drives one combat to resolution, then scores it via recorder.py's begin_combat()/
+    end_combat() -- hp_before/max_hp come from the CombatPlay decision this combat started on;
+    hp_after comes from whatever decision follows (GameOver.player.hp is forced to 0 on death
+    by sts2-cli, see models.py's PlayerSummary.hp -- otherwise it's the post-combat reward
+    screen's actual current hp)."""
+    hp_before, max_hp = decision.player.hp, decision.player.max_hp
+    session.logger.begin_combat()
     while decision.decision == "combat_play":
         name, kwargs, policy = choose_action(decision, session)
         if policy is not None:
             session.logger.attach_policy(policy)
         decision = session.step(name, **kwargs)
-    return "lost" if decision.decision == "game_over" else "won"
+    died = decision.decision == "game_over"
+    session.logger.end_combat(_combat_value(hp_before, decision.player.hp, max_hp, died))
+    return "lost" if died else "won"
 
 
 def _spawn_branches(job_queue, main_worker_index: int, cfg: FacilityConfig, main_id: str, floor: int,
@@ -95,14 +128,19 @@ def _clean_actions(actions: list[dict]) -> list[dict]:
 
 
 def _absorb_combat(recorder: CompactRecorder, full_actions: list[dict], prefix_len: int) -> None:
-    """Feeds an adopted branch's combat actions (with their recorded `policy`) through
-    `recorder` as though the main line had played them directly -- the same attach_policy/
-    log_action calls main_worker_loop's own loop would have made, just sourced from the branch's
-    saved trial instead of a live session.step(). full_actions[:prefix_len] is the checkpoint
-    prefix the branch was handed -- already accounted for by the main recorder, skipped here."""
+    """Feeds an adopted branch's combat actions (with their recorded `policy` and per-combat
+    `value`) through `recorder` as though the main line had played them directly -- the same
+    attach_policy/attach_value/log_action calls main_worker_loop's own loop would have made,
+    just sourced from the branch's saved trial instead of a live session.step(). The branch
+    already scored these actions via its own begin_combat()/end_combat() in _play_combat_only,
+    so attach_value() carries that value over as-is rather than recomputing it here.
+    full_actions[:prefix_len] is the checkpoint prefix the branch was handed -- already
+    accounted for by the main recorder, skipped here."""
     for entry in full_actions[prefix_len:]:
         if "policy" in entry:
             recorder.attach_policy(entry["policy"])
+        if "value" in entry:
+            recorder.attach_value(entry["value"])
         recorder.log_action(entry)
 
 

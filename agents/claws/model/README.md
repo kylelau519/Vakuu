@@ -103,11 +103,16 @@ paths have at most one entry per `card_index`. The list shape is what lets a rea
 more than one — trial files recorded with `CLAWS_MCTS` set do exactly that, no format change
 needed.
 
-`value` is omitted from an action's entry until the trial's outcome is known, then backfilled onto
-every entry in that trial in one pass at save time (flat Monte-Carlo return over the whole
-trajectory, no discount — a stand-in for a learned value target until one exists, per
-`CompactRecorder`'s `_OUTCOME_VALUE`). An `"error"` trial gets no value on any entry: an aborted
-trial says nothing about whether the actions in it were good.
+`value` is scoped per combat, not per trial, per this section's own Value head spec ("HP loss is
+used as the metric"): `whispering_earring/facility.py`'s `_combat_value` scores each combat from
+its own hp-before/hp-after (via `recorder.py`'s `begin_combat()`/`end_combat()`, backfilled onto
+just that combat's actions once it resolves), not the trial's eventual overall outcome — so a
+clean early win and a narrow late win in the same run get different training signal instead of
+being flattened to the same `1.0`. A clean win (HP loss within `_CHIP_DAMAGE_ALLOWANCE`, a small
+allowance so ordinary chip damage doesn't count against it) scores `1.0`; a costlier win scores
+progressively lower; death is a hard `-1.0` regardless of HP left, since dying always outranks any
+win. A combat a trial never reaches (e.g. it errors out mid-run) gets no value on any of its
+actions: an aborted combat says nothing about whether the actions in it were good.
 
 Non-`combat_play` actions in the same file (`map_select`, `card_reward`, ...) never carry a `policy`
 or `value` — only combat is currently policy-driven; meta decisions delegate to Choices Paradox /
