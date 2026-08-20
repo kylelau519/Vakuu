@@ -17,13 +17,22 @@ per-option distribution an MCTS search would produce, standing in as a one-hot w
 whichever option uniform-random happened to pick, so recorder.py's `policy` field has a
 consistent shape from the start.
 
-If the CLAWS_CHECKPOINT env var is set, combat instead samples from ClawsNet's own softmax
-policy (temperature 1, no search) -- see _choose_combat_action_claws. That's a cheap first
-integration step, not the real target: mcts.py's PUCT search is what's supposed to drive combat
-eventually, but wiring that in here means spawning ~200 more sts2-cli subprocesses per combat
-decision from inside an already-running self-play worker, a much bigger change than swapping in
-a raw (even untrained) network. Unset CLAWS_CHECKPOINT (the default) to keep the uniform-random
-path -- nothing else about the record shape changes either way.
+If the CLAWS_CHECKPOINT env var is set (and CLAWS_MCTS isn't), combat instead samples from
+ClawsNet's own softmax policy (temperature 1, no search) -- see _choose_combat_action_claws.
+That was a cheap first integration step, not the real target.
+
+If the CLAWS_MCTS env var is set, combat is instead driven by mcts.py's PUCT search
+(_choose_combat_action_mcts), using ClawsNet as the (p, v) evaluator per README.md's "MCTS
+strategy" section -- CLAWS_CHECKPOINT supplies the weights if also set, otherwise a freshly
+initialized (untrained, same as claws.pt) net stands in, since the search still needs *some*
+evaluator to expand a leaf. This is the expensive path: mcts.py spawns a fresh sts2-cli
+subprocess for every genuinely new tree node, i.e. up to N_SIMULATIONS (mcts.py's default: 200)
+per combat_play decision, from inside an already-running self-play worker -- only turn it on
+deliberately, not as a default for bulk trial generation.
+
+Unset both (the default) to keep the uniform-random path -- nothing else about the record shape
+changes either way; `policy` is always a list of {action, args, prob} records over the legal
+options, whether `prob` came from a one-hot placeholder, a raw softmax, or real MCTS visit counts.
 """
 from __future__ import annotations
 
@@ -38,11 +47,11 @@ from env import Sts2Session
 from models import CombatPlay, Decision
 
 _CLAWS_CHECKPOINT = os.environ.get("CLAWS_CHECKPOINT")
+_CLAWS_MCTS = os.environ.get("CLAWS_MCTS")
 _claws_net = None  # lazy-loaded once per worker process, on first combat decision -- see below
+_mcts_module = None  # lazy-loaded once per worker process, on first combat decision -- see below
+_mcts_net = None
 
-# Loaded by explicit file path, not sys.path + import, because this file is *also* named
-# policy.py -- an sys.path-based `import policy` would risk resolving to itself instead of
-# agents/choices_paradox/policy.py or agents/golden_compass/policy.py depending on path order.
 _choices_paradox_path = Path(__file__).resolve().parents[1] / "choices_paradox" / "policy.py"
 _spec = importlib.util.spec_from_file_location("choices_paradox_policy", _choices_paradox_path)
 assert _spec is not None and _spec.loader is not None
@@ -68,7 +77,7 @@ _pending_card_select_purpose: str | None = None
 # session is passed around incase we need extra info from the session and we can get through env.py
 def choose_action(decision: Decision, session: Sts2Session) -> tuple[str, dict, dict | None]:
     if isinstance(decision, CombatPlay):
-        return _choose_combat_action(decision)
+        return _choose_combat_action(decision, session)
     name, kwargs = _choose_generic_action(decision, session)
     return name, kwargs, None
 
@@ -109,7 +118,64 @@ def _choose_combat_action_claws(decision: CombatPlay, net) -> tuple[str, dict, d
     return name, args, policy
 
 
-def _choose_combat_action(decision: CombatPlay) -> tuple[str, dict, dict]:
+def _load_mcts():
+    """Lazily imports mcts.py (same directory-insert trick as _load_claws_net -- claws/model
+    isn't a package on sys.path by default) and builds its (p, v) evaluator net. Only called
+    when CLAWS_MCTS is set, so the import cost (and the eventual per-decision subprocess-spawn
+    cost) is opt-in.
+
+    Reuses CLAWS_CHECKPOINT's weights if that's also set; otherwise falls back to a freshly
+    initialized (untrained) ClawsNet, same as `train.py --epochs 0`'s claws.pt -- the search
+    still needs an evaluator to expand a leaf, an untrained one is just an uninformative prior
+    to search around rather than a real one."""
+    global _mcts_module, _mcts_net
+    if _mcts_module is not None:
+        return _mcts_module, _mcts_net
+
+    claws_model_dir = Path(__file__).resolve().parents[1] / "claws" / "model"
+    if str(claws_model_dir) not in sys.path:
+        sys.path.insert(0, str(claws_model_dir))
+    agents_dir = Path(__file__).resolve().parents[1]  # for `common` -- same as materialize.py/train.py
+    if str(agents_dir) not in sys.path:
+        sys.path.insert(0, str(agents_dir))
+    import mcts as mcts_module_
+    from model import ClawsNet, GlobalVocab  # noqa: E402  (path just inserted above)
+    from common.tokenizer import EntityVocab  # noqa: E402  (path just inserted above)
+
+    if _CLAWS_CHECKPOINT:
+        net = ClawsNet.from_checkpoint(_CLAWS_CHECKPOINT)
+    else:
+        net = ClawsNet(GlobalVocab(EntityVocab.load()))
+        net.eval()
+
+    _mcts_module, _mcts_net = mcts_module_, net
+    return _mcts_module, _mcts_net
+
+
+def _choose_combat_action_mcts(decision: CombatPlay, session: Sts2Session) -> tuple[str, dict, dict]:
+    """Real search: mcts.py's PUCT tree over the same (action, args) option list as the
+    softmax/uniform-random paths, wrapping ClawsNet as the (p, v) evaluator per README.md's
+    "MCTS strategy" section. 
+    """
+    mcts_module, net = _load_mcts()
+    env = mcts_module.Sts2Env(session.character, session.seed, session.ascension)
+    evaluate_fn = lambda d: mcts_module.net_evaluate(net, d)  # noqa: E731
+    root = mcts_module.run(decision, list(session.action_log), evaluate_fn, env)
+
+    total_n = sum(root.N)
+    policy = [
+        {"action": name, "args": args, "prob": n / total_n}
+        for (name, args), n in zip(root.options, root.N)
+    ]
+    idx = random.choices(range(len(root.options)), weights=root.N, k=1)[0]
+    name, args = root.options[idx]
+    return name, args, policy
+
+
+def _choose_combat_action(decision: CombatPlay, session: Sts2Session) -> tuple[str, dict, dict]:
+    if _CLAWS_MCTS:
+        return _choose_combat_action_mcts(decision, session)
+
     net = _load_claws_net()
     if net is not None:
         return _choose_combat_action_claws(decision, net)
@@ -182,11 +248,7 @@ def _choose_generic_action(decision: Decision, session: Sts2Session) -> tuple[st
 
 
 def _choose_map_action(decision: Decision, session: Sts2Session) -> tuple[str, dict]:
-    """Delegates to Golden Compass's value-to-go DP over the full act map -- decision.choices
-    alone is only the one-hop list, not enough for the DP, hence session.get_map() (cached on
-    the session; see env.py) rather than reading straight off `decision`. Falls back to a
-    random legal choice if there's no full-map decision to make yet (pre-act, single forced
-    choice) or the DP's pick isn't among what's actually offered (map desynced from the cache)."""
+    """Delegates to Golden Compass's value-to-go DP over the full act map """
     hp_frac = decision.player.hp / decision.player.max_hp if decision.player.max_hp else 1.0
     target = golden_compass.choose_next_node(session.get_map(), hp_frac=hp_frac)
     if target is not None:

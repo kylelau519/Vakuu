@@ -28,11 +28,6 @@ _OUTCOME_VALUE = {"won": 1.0, "lost": -1.0}
 
 class CompactRecorder:
     def __init__(self, meta: dict, start_step: int = 0):
-        """start_step: position in the eventual action log (see save()) that this
-        recorder's first log_action call corresponds to. 0 for a trial starting fresh;
-        len(checkpoint_actions) for a branch resuming from a checkpoint, since
-        open_from_checkpoint() replays the prefix directly without going through
-        log_action, so this recorder never sees those positions."""
         self.meta = meta
         self.error: str | None = None
         self._policies: dict[int, dict] = {}
@@ -58,13 +53,6 @@ class CompactRecorder:
         pass
 
     def save(self, path: str, action_log: list[dict], outcome: str | None = None) -> dict:
-        """action_log: the session's full action_log (checkpoint prefix + steps taken
-        here) -- passed in rather than tracked internally since this recorder only
-        observes the steps taken through *this* session, not a replayed prefix.
-
-        Returns the same dict written to disk, so a branch worker can hand a combat's
-        outcome straight to facility.py's results queue without reading its own file
-        back -- the file write is for persisted training data, not for that handoff."""
         value = _OUTCOME_VALUE.get(outcome)
         actions = []
         for i, cmd in enumerate(action_log):

@@ -1,34 +1,7 @@
-"""The facility: one main worker running the main branch of a run, N sub-workers each
-idle until a branch job appears in the queue.
-
-Combat is delegated entirely to branches, per model/README.md's MCTS strategy section: "among
-the K attempts, if any won, use that attempt's resulting state... as the main branch. If all K
-attempts lose, accept the loss and end that lineage there." At every combat_play decision, the
-main worker puts `branches_per_combat` BranchJobs (clone of its action log so far, see
-checkpoint.py) directly onto the shared job queue and waits on the shared results queue -- it
-does not play that combat itself. It adopts the *first* branch that reports a win, without
-waiting for the rest (see _wait_for_combat_result): those stragglers just keep running and still
-get saved as ordinary (losing) trials, they just aren't blocking anyone. Only if every branch
-reports in with none winning does it fall back to adopting one loss, so the fatal combat still
-gets recorded (a loss is valid signal, see recorder.py), and the lineage ends there.
-
-Both queues are plain multiprocessing.Queue -- job dispatch and result reporting are in-memory
-handoffs between processes on one machine, not a disk-backed queue. A branch worker's trial JSON
-still gets written to raw_dir regardless of whether the main line was still waiting on it; the
-results queue is a coordination signal for adoption, not the data's source of truth, so a result
-that arrives after its combat was already resolved by an earlier winner is just discarded (it
-belongs to no one's `pending` set anymore, see _wait_for_combat_result).
-
-If the main branch dies (game_over) outside of combat (rare, but the loop doesn't assume
-otherwise), it's saved like everything else, and the same worker process immediately starts a new
-run with a fresh seed. FacilityConfig.n_main_trials caps how many main-line trials to run before
-stopping (None runs indefinitely, Ctrl-C to stop); either way, once the main worker is done,
-branch workers drain whatever's still queued before exiting -- no branch job gets abandoned just
-because the main line stopped.
-"""
 from __future__ import annotations
 
 import multiprocessing as mp
+import os
 import random
 import time
 from dataclasses import dataclass, field
@@ -46,7 +19,7 @@ _SEED_WORDS = ["falcon", "ember", "wolf", "raven", "thorn", "comet", "storm", "h
 
 
 def _random_seed() -> str:
-    return f"{random.choice(_SEED_WORDS)}-{random.randint(0, 999)}"
+    return f"{random.choice(_SEED_WORDS)}-{random.randint(0, 999_999)}"
 
 
 @dataclass
@@ -55,28 +28,23 @@ class FacilityConfig:
     ascension: int = 0
     branches_per_combat: int = 3  # side-copies spawned per combat, on top of the main line
     n_branch_workers: int = 4
-    n_main_trials: int | None = None  # stop after this many main-line trials; None = forever
+    n_main_workers: int = 1  # concurrent main lines, sharing one branch-worker pool
+    n_main_trials: int | None = None  # stop after this many main-line trials *total*; None = forever
     raw_dir: str = "data/raw"
 
 
 def _play_combat_only(session: Sts2Session, decision) -> str:
-    """Drives one combat to resolution (win -> next decision, or death -> game_over),
-    from wherever `decision` currently sits. Used by branch workers, which only ever
-    care about a single combat and stop the moment it resolves. session.step() logs
-    actions/state to session.logger itself, so this loop only reaches into the recorder
-    directly for attach_policy -- there's no other hook to pass a per-step policy through."""
     while decision.decision == "combat_play":
         name, kwargs, policy = choose_action(decision, session)
         if policy is not None:
             session.logger.attach_policy(policy)
         decision = session.step(name, **kwargs)
-    # Must match _OUTCOME_VALUE's keys (recorder.py) and main_worker_loop's convention below, or
-    # CompactRecorder.save() silently backfills no value at all.
     return "lost" if decision.decision == "game_over" else "won"
 
 
-def _spawn_branches(job_queue, cfg: FacilityConfig, main_id: str, floor: int, combat_index: int,
-                     character: str, seed: str, actions_so_far: list[dict]) -> list[str]:
+def _spawn_branches(job_queue, main_worker_index: int, cfg: FacilityConfig, main_id: str, floor: int,
+                     combat_index: int, character: str, seed: str,
+                     actions_so_far: list[dict]) -> list[str]:
     branch_ids = []
     for b in range(cfg.branches_per_combat):
         job = BranchJob(
@@ -84,7 +52,7 @@ def _spawn_branches(job_queue, cfg: FacilityConfig, main_id: str, floor: int, co
             character=character, seed=seed, ascension=cfg.ascension,
             actions=list(actions_so_far),
         )
-        job_queue.put(job)
+        job_queue.put((job, main_worker_index))
         branch_ids.append(job.branch_id)
     return branch_ids
 
@@ -92,19 +60,9 @@ def _spawn_branches(job_queue, cfg: FacilityConfig, main_id: str, floor: int, co
 def _wait_for_combat_result(
     results_queue, branch_ids: list[str], prefix_len: int, stop_event, timeout: float = 600
 ) -> dict | None:
-    """Blocks on results_queue (branch_id, result) pairs -- pushed by branch_worker_loop the
+    """Blocks on results_queue (branch_id, result) pairs pushed by branch_worker_loop the
     moment its trial is saved, see its own docstring -- and returns as soon as one of
-    `branch_ids` reports a win, without waiting on the rest (see module docstring: a winning
-    branch is immediately adoptable, slower siblings aren't blocking anyone). Falls back to any
-    one usable (losing) result once every expected branch_id has reported in, so a fatal combat
-    still gets recorded, or None if nothing usable showed up. `stop_event`/`timeout` bound the
-    wait the same way either way: a branch that never reports (a hung/crashed worker) just leaves
-    that id in `pending` at the end.
-
-    results_queue is shared across the whole facility's lifetime, so an item here might belong to
-    an already-abandoned earlier combat rather than this one -- anything whose branch_id isn't in
-    `pending` is silently dropped; that branch's trial was already written to raw_dir by the
-    worker regardless, this queue is a coordination signal, not the data's source of truth."""
+    `branch_ids` reports a win, without waiting on the rest """
     usable: dict[str, dict] = {}
     pending = set(branch_ids)
     deadline = time.time() + timeout
@@ -149,8 +107,8 @@ def _absorb_combat(recorder: CompactRecorder, full_actions: list[dict], prefix_l
 
 
 def _resolve_combat(
-    job_queue, results_queue, cfg: FacilityConfig, recorder: CompactRecorder, session: Sts2Session,
-    character: str, seed: str, main_id: str, floor: int, combat_index: int, stop_event,
+    job_queue, results_queue, main_worker_index: int, cfg: FacilityConfig, recorder: CompactRecorder,
+    session: Sts2Session, character: str, seed: str, main_id: str, floor: int, combat_index: int, stop_event,
 ):
     """Delegates one combat to cfg.branches_per_combat parallel attempts and adopts a result --
     see the module docstring. Returns (session, decision, outcome): outcome is None if a combat
@@ -158,7 +116,9 @@ def _resolve_combat(
     decision; otherwise outcome is "lost" and the caller should stop -- the returned
     session/decision are then just the unchanged inputs, since there was nothing to adopt."""
     prefix = list(session.action_log)
-    branch_ids = _spawn_branches(job_queue, cfg, main_id, floor, combat_index, character, seed, prefix)
+    branch_ids = _spawn_branches(
+        job_queue, main_worker_index, cfg, main_id, floor, combat_index, character, seed, prefix
+    )
     adopted = _wait_for_combat_result(results_queue, branch_ids, len(prefix), stop_event)
 
     if adopted is None:
@@ -176,9 +136,25 @@ def _resolve_combat(
     return new_session, new_decision, (None if adopted.get("outcome") == "won" else "lost")
 
 
-def main_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, results_queue: mp.Queue, stop_event) -> None:
-    completed = 0
-    while not stop_event.is_set() and (cfg.n_main_trials is None or completed < cfg.n_main_trials):
+def main_worker_loop(
+    cfg: FacilityConfig, job_queue: mp.Queue, results_queue: mp.Queue, main_worker_index: int,
+    stop_event, trial_counter=None,
+) -> None:
+    """job_queue is shared with every other main worker, but results_queue is this worker's own private queue, created and owned by
+    Facility, one per main worker. It must not be shared."""
+    # Each main worker is its own process; reseed explicitly so concurrent workers started via
+    # fork (which would otherwise inherit identical RNG state) don't all draw the same
+    # character/seed. spawn (macOS default) doesn't need this, but it's cheap insurance.
+    random.seed(os.urandom(16))
+
+    while not stop_event.is_set():
+        if cfg.n_main_trials is not None:
+            assert trial_counter is not None
+            with trial_counter.get_lock():
+                if trial_counter.value >= cfg.n_main_trials:
+                    break
+                trial_counter.value += 1
+
         character = random.choice(cfg.characters)
         seed = _random_seed()
         main_id = f"{character}_{seed}"
@@ -198,8 +174,8 @@ def main_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, results_queue: mp
                     if decision.decision == "combat_play":
                         combat_index += 1
                         session, decision, combat_outcome = _resolve_combat(
-                            job_queue, results_queue, cfg, recorder, session, character, seed, main_id,
-                            decision.context.floor, combat_index, stop_event,
+                            job_queue, results_queue, main_worker_index, cfg, recorder, session,
+                            character, seed, main_id, decision.context.floor, combat_index, stop_event,
                         )
                         if combat_outcome is not None:
                             outcome = combat_outcome
@@ -214,11 +190,6 @@ def main_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, results_queue: mp
                 if outcome is None:  # loop ended via game_over, not a combat lineage-ending loss
                     outcome = "won" if decision.victory else "lost"
             except Exception as e:
-                # a crashed trial (Sts2ActionError from an invalid action, or anything
-                # else) is still a dead main branch -- log it, save what we have, and
-                # let the outer while restart with a fresh seed, same as a normal
-                # game_over. Catching broadly on purpose: no failure here should be able
-                # to take the whole worker process down with it.
                 recorder.log_error(f"{type(e).__name__}: {e}")
                 outcome = "error"
             try:
@@ -227,23 +198,25 @@ def main_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, results_queue: mp
                 recorder.log_error(f"save failed: {type(e).__name__}: {e}")
         finally:
             session.close()
-        completed += 1
         # main branch is dead -- loop restarts with a fresh seed unless the target
         # trial count is reached or stop_event is set, checked at the top of the while
 
-    stop_event.set()  # no more branch jobs coming; branch workers drain the queue and exit
 
-
-def branch_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, results_queue: mp.Queue, stop_event) -> None:
+def branch_worker_loop(
+    cfg: FacilityConfig, job_queue: mp.Queue, result_queues: list[mp.Queue], stop_event,
+) -> None:
+    """result_queues: every main worker's private results_queue, indexed by main_worker_index."""
     while True:
         try:
-            job = job_queue.get(timeout=1.0)
+            item = job_queue.get(timeout=1.0)
         except Empty:
             if stop_event.is_set():
                 return
             continue
-        if job is None:  # shutdown sentinel
+        if item is None:  # shutdown sentinel
             return
+        job, main_worker_index = item
+        results_queue = result_queues[main_worker_index]
 
         recorder = CompactRecorder({
             "character": job.character, "seed": job.seed, "ascension": job.ascension,
@@ -274,25 +247,31 @@ def branch_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, results_queue: 
 class Facility:
     def __init__(self, cfg: FacilityConfig):
         self.cfg = cfg
-        self.job_queue: mp.Queue = mp.Queue()
-        self.results_queue: mp.Queue = mp.Queue()
+        self.job_queue: mp.Queue = mp.Queue()  # shared dispatch pool -- every main worker feeds it
         self.stop_event = mp.Event()
-        self.main_proc: mp.Process | None = None
+        self.trial_counter = mp.Value("i", 0) if cfg.n_main_trials is not None else None
+        self.main_procs: list[mp.Process] = []
+        self.main_result_queues: list[mp.Queue] = []
         self.branch_procs: list[mp.Process] = []
 
     def start(self) -> None:
         ensure_setup()  # once, here -- not per-session, which would repeat the same checks
 
-        self.main_proc = mp.Process(
-            target=main_worker_loop,
-            args=(self.cfg, self.job_queue, self.results_queue, self.stop_event), daemon=True,
-        )
-        self.main_proc.start()
+        self.main_result_queues.extend(mp.Queue() for _ in range(self.cfg.n_main_workers))
+
+        for i, results_queue in enumerate(self.main_result_queues):
+            p = mp.Process(
+                target=main_worker_loop,
+                args=(self.cfg, self.job_queue, results_queue, i, self.stop_event, self.trial_counter),
+                daemon=True,
+            )
+            p.start()
+            self.main_procs.append(p)
 
         for _ in range(self.cfg.n_branch_workers):
             p = mp.Process(
                 target=branch_worker_loop,
-                args=(self.cfg, self.job_queue, self.results_queue, self.stop_event), daemon=True,
+                args=(self.cfg, self.job_queue, self.main_result_queues, self.stop_event), daemon=True,
             )
             p.start()
             self.branch_procs.append(p)
@@ -301,22 +280,21 @@ class Facility:
         self.stop_event.set()
         for _ in self.branch_procs:
             self.job_queue.put(None)
-        if self.main_proc:
-            self.main_proc.join(timeout)
+        for p in self.main_procs:
+            p.join(timeout)
         for p in self.branch_procs:
             p.join(timeout)
 
     def run(self) -> None:
-        """Blocks until done: forever (Ctrl-C to stop) if cfg.n_main_trials is None,
-        otherwise until the main worker hits that count and the branch queue drains."""
         self.start()
         try:
             if self.cfg.n_main_trials is None:
                 while True:
                     time.sleep(60)
             else:
-                self.main_proc.join()
-                print(f"Main worker finished {self.cfg.n_main_trials} trial(s) -- "
+                for p in self.main_procs:
+                    p.join()
+                print(f"Main workers finished {self.cfg.n_main_trials} trial(s) total -- "
                       f"draining remaining branch queue...")
         except KeyboardInterrupt:
             print("\nStopping facility (waiting for in-flight trials to finish)...")
@@ -329,16 +307,22 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Run the Whispering Earring self-play facility")
     parser.add_argument("--trials", type=int, default=None,
-                         help="stop after this many main-line trials complete (default: run forever, Ctrl-C to stop)")
+                         help="stop after this many main-line trials complete in total (default: run forever, Ctrl-C to stop)")
     parser.add_argument("--characters", nargs="+", default=["Ironclad"])
-    parser.add_argument("--branch-workers", type=int, default=4)
+    parser.add_argument("--branch-workers", type=int, default=4,
+                         help="shared pool size -- serves branch jobs from every main worker, not "
+                              "one dedicated set per main line (default: 4)")
     parser.add_argument("--branches-per-combat", type=int, default=3)
+    parser.add_argument("--main-workers", type=int, default=1,
+                         help="concurrent main lines sharing the branch-worker pool above -- raise "
+                              "this to keep branch workers fed between combats (default: 1)")
     args = parser.parse_args()
 
     facility = Facility(FacilityConfig(
         characters=args.characters,
         n_branch_workers=args.branch_workers,
         branches_per_combat=args.branches_per_combat,
+        n_main_workers=args.main_workers,
         n_main_trials=args.trials,
     ))
     facility.run()

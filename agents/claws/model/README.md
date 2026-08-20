@@ -23,17 +23,19 @@ docstring for specifics and open questions.
   otherwise always resolve to the same drawn card every time; see `draws_cards`'s docstring. Two
   things from the doc are still genuinely underspecified (the dynamical formula's constants, what
   "argmax[Q(s,a)]" means for final action selection) -- `mcts.py`'s module docstring documents the
-  judgment call made for each rather than silently guessing. Not wired into
-  `whispering_earring/policy.py` -- that would mean spawning ~200 more sts2-cli subprocesses per
-  combat decision from inside an already-running self-play worker, a much bigger change than the
-  raw-network wiring below.
+  judgment call made for each rather than silently guessing. Wired into
+  `whispering_earring/policy.py` behind `CLAWS_MCTS` -- opt-in, not the default, since it means
+  spawning ~200 more sts2-cli subprocesses per combat decision from inside an already-running
+  self-play worker, a much bigger cost than the raw-network wiring below.
 
 `whispering_earring/policy.py` samples combat actions from a `ClawsNet` checkpoint's raw softmax
-policy (no search) when `CLAWS_CHECKPOINT` is set -- see its module docstring. `claws.pt` (an
-untrained init checkpoint, `train.py --epochs 0`) exists to prove this path end to end before
-there's anything trained; using it doesn't produce better play than uniform-random, only
-differently-random play with a real (if meaningless) probability distribution recorded as
-`policy` instead of a one-hot placeholder.
+policy (no search) when `CLAWS_CHECKPOINT` is set (and `CLAWS_MCTS` isn't) -- see its module
+docstring. `claws.pt` (an untrained init checkpoint, `train.py --epochs 0`) exists to prove this
+path end to end before there's anything trained; using it doesn't produce better play than
+uniform-random, only differently-random play with a real (if meaningless) probability distribution
+recorded as `policy` instead of a one-hot placeholder. `CLAWS_MCTS` uses the same checkpoint (or
+the same untrained fallback) as the search's evaluator instead, recording the search's actual
+visit-count distribution as `policy` rather than a raw one-shot softmax.
 
 ## Prediction
 Predict an action capture the meaning of play_card("bash", "cultist_1"), re-analyze and give potion("block_potion, self) (because self is the only legal target), at some point "end_turn"
@@ -95,9 +97,11 @@ the policy that produced it:
 a dict keyed by action/index — a dict can't tell apart two options that share an action name but
 differ in `args`, which happens whenever an `AnyEnemy` card can be aimed at more than one alive
 enemy (`play_card` with `card_index: 1` against two different `target_index` values, as above). The
-current placeholder policy (`whispering_earring/policy.py`) only ever samples one candidate target
-per card, so real trial files today have at most one entry per `card_index`; the list shape is what
-lets a real search populate more than one once MCTS is wired in — no format change needed then.
+default placeholder/softmax policies (`whispering_earring/policy.py`, `CLAWS_CHECKPOINT` unset or
+set without `CLAWS_MCTS`) only ever sample one candidate target per card, so trial files from those
+paths have at most one entry per `card_index`. The list shape is what lets a real search populate
+more than one — trial files recorded with `CLAWS_MCTS` set do exactly that, no format change
+needed.
 
 `value` is omitted from an action's entry until the trial's outcome is known, then backfilled onto
 every entry in that trial in one pass at save time (flat Monte-Carlo return over the whole

@@ -1,42 +1,3 @@
-"""PUCT tree search over combat_play decisions, per ../README.md's MCTS strategy section --
-wraps a (policy, value) evaluator (normally ClawsNet.forward) the way README.md describes:
-"expand it and call the network once -- (p, v) = f_theta(state) -- then immediately back up
-that v, without continuing the simulation further."
-
-A node's state is a replay prefix (an action_log), not a snapshot -- same approach as every
-other part of this project (whispering_earring/checkpoint.py): there's no in-process fork/rewind
-of a combat_play session, so reaching a new node means a fresh Sts2Session replaying the same
-prefix (see Sts2Env.step). This is why the tree only ever calls the environment when it creates a
-genuinely new child -- revisiting an already-expanded edge costs nothing but walking Python
-object references, no replay.
-
-The search mechanics (Node, select, expand, backup) are decoupled from both sts2-cli and
-ClawsNet, via a plain `evaluate_fn(decision) -> (options, priors, value)` and an `Env` protocol
-(`step`) -- see the __main__ self-test, which verifies PUCT/backup actually converge toward the
-better-valued branch using a synthetic environment in milliseconds, before ever touching a live
-game session (Sts2Env.step costs ~1-2s per call -- a real run's ~200 simulations/combat, per
-README.md, is a multi-minute affair, not something to iterate against while debugging the
-algorithm itself).
-
-Chance-node trigger (confirmed, not a guess): a chance node is created whenever the chosen action
-draws cards *during the resolving turn* -- i.e. a `play_card` whose card has a "cards" DynamicVar
-(Pommel Strike, etc. -- see `draws_cards`), not `end_turn`. The once-per-turn draw at the start of
-the *next* turn doesn't need one: different simulations reach many different next-turn hands
-anyway just by taking different paths through the tree (each path consumes the seeded RNG stream
-differently before it gets there). A same-turn draw effect doesn't get that for free -- revisited
-from the exact same node, `play_card` on the exact same card always resolves against the exact
-same RNG state (same action_log prefix), so without an explicit chance node every visit to a
-popular draw-card edge would silently back up the same one lucky-or-unlucky draw over and over.
-
-Unresolved from README.md -- flagged rather than silently decided, worth confirming before
-trusting this for real self-play:
-- k(N) = ceil(C * N**alpha)'s C/alpha aren't given numeric values; CHANCE_C/CHANCE_ALPHA below are
-  placeholders (2.0/0.5), not tuned or verified against anything.
-- Final action selection: README.md says "Live game play will use argmax[v]". Read literally as
-  argmax over Q(s,a) = W/N (the closest thing to "v" in the node's own stats) below, not the more
-  common argmax(N) visit-count convention other AlphaZero write-ups use. Flagged, not silently
-  substituted -- if "v" actually meant something else, `best_action`'s the only place to change.
-"""
 from __future__ import annotations
 
 import math
@@ -64,14 +25,7 @@ OUTCOME_VALUE = {"won": 1.0, "lost": -1.0}
 
 def draws_cards(decision, action: tuple[str, dict]) -> bool:
     """True iff resolving `action` against `decision` draws cards as a direct effect of that one
-    decision (e.g. Pommel Strike's "draw 1"), which is what needs a chance node -- see the module
-    docstring. `card.stats` is sts2-cli's already-resolved DynamicVar preview (claws/README.md's
-    Hand card table); "cards" is that var's exported name (RunSimulator.cs:
-    `stats[dv.Name.ToLowerInvariant()]`, and CardsVar's default Name is "Cards" -- see e.g.
-    PommelStrike.cs's `new CardsVar(1)`).
-
-    Only checks play_card -- use_potion has no `stats` field in the schema to check (Potion only
-    exposes `vars`), so a draw-on-potion-use effect (if one exists) isn't covered here yet."""
+    decision (e.g. Pommel Strike's "draw 1"), which is what needs a chance node """
     name, args = action
     if name != "play_card":
         return False
@@ -253,13 +207,6 @@ class Sts2Env:
 
 if __name__ == "__main__":
     import itertools
-
-    # No sts2-cli/torch involved -- verifies expand/select/backup, and specifically the
-    # chance-node fan-out, without the cost of a live game. Root has two options: "end_turn"
-    # (non-chance -- always resolves to a guaranteed loss, one cached child) and "play_card" on a
-    # card whose stats carry a "cards" DynamicVar (a chance action per draws_cards -- half its
-    # sampled draw seeds win, half lose). A working search should (a) fan "play_card" out into
-    # more than one child, and (b) still prefer it over end_turn, since ~50% win beats a sure loss.
     class _MockCard:
         def __init__(self, index: int, stats: dict):
             self.index, self.stats = index, stats
