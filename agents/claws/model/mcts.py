@@ -18,13 +18,18 @@ game session (Sts2Env.step costs ~1-2s per call -- a real run's ~200 simulations
 README.md, is a multi-minute affair, not something to iterate against while debugging the
 algorithm itself).
 
+Chance-node trigger (confirmed, not a guess): a chance node is created whenever the chosen action
+draws cards *during the resolving turn* -- i.e. a `play_card` whose card has a "cards" DynamicVar
+(Pommel Strike, etc. -- see `draws_cards`), not `end_turn`. The once-per-turn draw at the start of
+the *next* turn doesn't need one: different simulations reach many different next-turn hands
+anyway just by taking different paths through the tree (each path consumes the seeded RNG stream
+differently before it gets there). A same-turn draw effect doesn't get that for free -- revisited
+from the exact same node, `play_card` on the exact same card always resolves against the exact
+same RNG state (same action_log prefix), so without an explicit chance node every visit to a
+popular draw-card edge would silently back up the same one lucky-or-unlucky draw over and over.
+
 Unresolved from README.md -- flagged rather than silently decided, worth confirming before
 trusting this for real self-play:
-- Chance-node trigger: README.md never says which decisions get one ("not every decision must
-  have child nodes, but when we decide to create an explicit chance node..."). This module treats
-  `end_turn` as the only chance action, on the reasoning that it's the one point where the next
-  draw actually depends on draw-pile order (see IS_CHANCE_ACTION) -- a judgment call, not read off
-  the doc.
 - k(N) = ceil(C * N**alpha)'s C/alpha aren't given numeric values; CHANCE_C/CHANCE_ALPHA below are
   placeholders (2.0/0.5), not tuned or verified against anything.
 - Final action selection: README.md says "Live game play will use argmax[v]". Read literally as
@@ -51,8 +56,21 @@ CHANCE_ALPHA = 0.5
 OUTCOME_VALUE = {"won": 1.0, "lost": -1.0}
 
 
-def is_chance_action(action_name: str) -> bool:
-    return action_name == "end_turn"
+def draws_cards(decision, action: tuple[str, dict]) -> bool:
+    """True iff resolving `action` against `decision` draws cards as a direct effect of that one
+    decision (e.g. Pommel Strike's "draw 1"), which is what needs a chance node -- see the module
+    docstring. `card.stats` is sts2-cli's already-resolved DynamicVar preview (claws/README.md's
+    Hand card table); "cards" is that var's exported name (RunSimulator.cs:
+    `stats[dv.Name.ToLowerInvariant()]`, and CardsVar's default Name is "Cards" -- see e.g.
+    PommelStrike.cs's `new CardsVar(1)`).
+
+    Only checks play_card -- use_potion has no `stats` field in the schema to check (Potion only
+    exposes `vars`), so a draw-on-potion-use effect (if one exists) isn't covered here yet."""
+    name, args = action
+    if name != "play_card":
+        return False
+    card = next((c for c in decision.hand if c.index == args["card_index"]), None)
+    return bool(card and card.stats and card.stats.get("cards"))
 
 
 # --- tree ----------------------------------------------------------------------------------------
@@ -114,7 +132,7 @@ def select_child(node: Node, edge_idx: int, env: Env) -> Node:
     action = node.options[edge_idx]
     children = node.children[edge_idx]
 
-    if not is_chance_action(action[0]):
+    if not draws_cards(node.decision, action):
         if not children:
             children.append(env.step(node.action_log, action))
         return children[0]
@@ -230,40 +248,46 @@ class Sts2Env:
 if __name__ == "__main__":
     import itertools
 
-    # A synthetic 2-level decision tree, no sts2-cli/torch involved: "left" always resolves to a
-    # loss, "right" to a win, so a working PUCT+backup should drive Q(right) toward +1 and
-    # Q(left) toward -1 as simulations accumulate, and best_action() should end up picking
-    # "right" -- exercises expand/select/backup/chance-branching without the cost of a live game.
-    _synthetic_decisions: dict[str, str] = {"root": "root", "mid": "mid"}
+    # No sts2-cli/torch involved -- verifies expand/select/backup, and specifically the
+    # chance-node fan-out, without the cost of a live game. Root has two options: "end_turn"
+    # (non-chance -- always resolves to a guaranteed loss, one cached child) and "play_card" on a
+    # card whose stats carry a "cards" DynamicVar (a chance action per draws_cards -- half its
+    # sampled draw seeds win, half lose). A working search should (a) fan "play_card" out into
+    # more than one child, and (b) still prefer it over end_turn, since ~50% win beats a sure loss.
+    class _MockCard:
+        def __init__(self, index: int, stats: dict):
+            self.index, self.stats = index, stats
 
-    def _mock_evaluate(decision: str):
-        if decision == "root":
-            options = [("end_turn", {}), ("play_card", {"card_index": 0})]
-            return options, [0.5, 0.5], 0.0
-        if decision == "mid":
-            options = [("play_card", {"card_index": 1})]
-            return options, [1.0], 0.0
-        raise ValueError(decision)
+    class _MockDecision:
+        def __init__(self, hand: list[_MockCard]):
+            self.hand = hand
+
+    _root_decision = _MockDecision(hand=[_MockCard(index=0, stats={"cards": 1})])
+
+    def _mock_evaluate(decision):
+        assert decision is _root_decision
+        options = [("end_turn", {}), ("play_card", {"card_index": 0})]
+        return options, [0.5, 0.5], 0.0
 
     class _MockEnv:
-        """end_turn (a chance action) always leads to "mid", exercising the draw-order fan-out;
-        "mid"'s only move wins. play_card straight from root always loses."""
-
         def step(self, action_log, action, draw_seed=None) -> Node:
             name, _ = action
             new_log = action_log + [{"cmd": "action", "action": name}]
             if name == "end_turn":
-                return Node(action_log=new_log, decision="mid")
-            if name == "play_card" and action_log and action_log[-1]["action"] == "end_turn":
-                return Node(action_log=new_log, outcome="won")
-            return Node(action_log=new_log, outcome="lost")
+                return Node(action_log=new_log, outcome="lost")
+            outcome = "won" if (draw_seed or 0) % 2 == 0 else "lost"
+            return Node(action_log=new_log, outcome=outcome)
 
-    root = run("root", [], _mock_evaluate, _MockEnv(), n_simulations=200)
+    root = run(_root_decision, [], _mock_evaluate, _MockEnv(), n_simulations=200)
     print("root options:", root.options)
     print("N:", root.N, "W:", root.W)
     print("Q:", [w / n if n else None for w, n in zip(root.W, root.N)])
+    print("children fanned out per edge:", [len(c) for c in root.children])
     print("best_action:", best_action(root))
-    assert best_action(root) == ("end_turn", {}), "PUCT should have converged onto the winning branch"
+    assert len(root.children[0]) == 1, "end_turn is not a chance action -- should have one cached child"
+    assert len(root.children[1]) > 1, "play_card draws a card -- should have fanned out into multiple children"
+    assert best_action(root) == ("play_card", {"card_index": 0}), \
+        "PUCT should prefer the ~50%-win chance branch over end_turn's guaranteed loss"
     print("mock self-test passed")
 
     # Small live smoke test -- proves Sts2Env/net_evaluate actually wire up against a real

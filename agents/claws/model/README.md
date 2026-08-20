@@ -12,9 +12,13 @@ combat play yet, see each module's docstring for specifics and open questions:
   reconstruct the state at each policy-bearing decision, and packs it with that decision's recorded
   `policy`/`value` into a training example. No training loop consumes its output yet.
 - `mcts.py` -- the PUCT search from the MCTS strategy section below, wrapping `ClawsNet` as the
-  `(p, v)` evaluator. Several details in that section are underspecified (chance-node trigger, the
-  dynamical formula's constants, what "argmax[v]" means for final action selection) -- `mcts.py`'s
-  docstring documents the judgment call made for each rather than silently guessing. Not wired into
+  `(p, v)` evaluator. A chance node is created for `play_card` on a card that draws mid-turn (e.g.
+  Pommel Strike), not `end_turn` -- the once-per-turn draw is already covered by simulation
+  diversity across the tree, but a same-turn draw effect revisited from the same node would
+  otherwise always resolve to the same drawn card every time; see `draws_cards`'s docstring. Two
+  things from the doc are still genuinely underspecified (the dynamical formula's constants, what
+  "argmax[Q(s,a)]" means for final action selection) -- `mcts.py`'s module docstring documents the
+  judgment call made for each rather than silently guessing. Not wired into
   `whispering_earring/policy.py` yet -- doing that before there's a trained network would just
   replace cheap random choices with expensive untrained-network-random ones.
 
