@@ -23,7 +23,7 @@ import os
 # action in the trial (plain Monte-Carlo return, no discount) -- a stand-in for a learned
 # value function until one exists. "error" trials get no value: an aborted trial says
 # nothing about whether the actions in it were good.
-_OUTCOME_VALUE = {"won": 1.0, "died": -1.0}
+_OUTCOME_VALUE = {"won": 1.0, "lost": -1.0}
 
 
 class CompactRecorder:

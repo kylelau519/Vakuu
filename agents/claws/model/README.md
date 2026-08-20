@@ -2,12 +2,21 @@
 
 AlphaZero(AZ) Monte Carlo Tree Search (MCTS) approach will be used as the backbone of the combat play. However, it is known that AZ is trained on minimax style, an opponent makes a move will diminish your value. Sts2 is expectimax style, we make decision base on the expectation of the uncertainty.
 
-`model.py` is an untrained v0 skeleton of the Architecture section below (tokenizer -> transformer ->
-policy/value heads) -- proves the shapes compose against a real captured `combat_play` decision, not
-a trained network. No MCTS yet (that's a search *around* this network, not part of it), and no
-materialization step yet that turns a whispering_earring trial file into training batches -- this
-only tokenizes one live decision at a time. See its module docstring for what's deliberately out of
-scope for v0 (piles, `history` counters, enemy powers, orbs/stars/osty).
+Three pieces exist so far, all v0/untrained -- none of this has been used to actually improve
+combat play yet, see each module's docstring for specifics and open questions:
+
+- `model.py` -- tokenizer -> transformer -> policy/value heads (`ClawsNet`), proving the
+  Architecture section below's shapes compose against a real captured `combat_play` decision.
+  Deliberately out of scope for v0: piles, `history` counters, enemy powers, orbs/stars/osty.
+- `materialize.py` -- replays a `whispering_earring` trial file through a fresh sts2-cli session to
+  reconstruct the state at each policy-bearing decision, and packs it with that decision's recorded
+  `policy`/`value` into a training example. No training loop consumes its output yet.
+- `mcts.py` -- the PUCT search from the MCTS strategy section below, wrapping `ClawsNet` as the
+  `(p, v)` evaluator. Several details in that section are underspecified (chance-node trigger, the
+  dynamical formula's constants, what "argmax[v]" means for final action selection) -- `mcts.py`'s
+  docstring documents the judgment call made for each rather than silently guessing. Not wired into
+  `whispering_earring/policy.py` yet -- doing that before there's a trained network would just
+  replace cheap random choices with expensive untrained-network-random ones.
 
 ## Prediction
 Predict an action capture the meaning of play_card("bash", "cultist_1"), re-analyze and give potion("block_potion, self) (because self is the only legal target), at some point "end_turn"

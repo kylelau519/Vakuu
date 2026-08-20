@@ -60,6 +60,8 @@ def _play_combat_only(session: Sts2Session, decision) -> str:
         if policy is not None:
             session.logger.attach_policy(policy)
         decision = session.step(name, **kwargs)
+    # Must match _OUTCOME_VALUE's keys (recorder.py) and main_worker_loop's convention below, or
+    # CompactRecorder.save() silently backfills no value at all.
     return "lost" if decision.decision == "game_over" else "won"
 
 
@@ -83,7 +85,8 @@ def main_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, stop_event) -> No
         main_id = f"{character}_{seed}"
 
         recorder = CompactRecorder({
-            "character": character, "seed": seed, "main_id": main_id, "role": "main",
+            "character": character, "seed": seed, "ascension": cfg.ascension,
+            "main_id": main_id, "role": "main",
         })
         session = Sts2Session(logger=recorder)
         outcome = None
@@ -104,7 +107,7 @@ def main_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, stop_event) -> No
                         recorder.attach_policy(policy)
                     prev_type = decision.decision
                     decision = session.step(name, **kwargs)
-                outcome = "won" if decision.victory else "died"
+                outcome = "won" if decision.victory else "lost"
             except Exception as e:
                 # a crashed trial (Sts2ActionError from an invalid action, or anything
                 # else) is still a dead main branch -- log it, save what we have, and
@@ -139,8 +142,8 @@ def branch_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, stop_event) -> 
 
         job = read_branch_job(path)
         recorder = CompactRecorder({
-            "character": job.character, "seed": job.seed, "main_id": job.main_id,
-            "floor": job.floor, "combat_index": job.combat_index,
+            "character": job.character, "seed": job.seed, "ascension": job.ascension,
+            "main_id": job.main_id, "floor": job.floor, "combat_index": job.combat_index,
             "branch_index": job.branch_index, "role": "branch",
         }, start_step=len(job.actions))
         session = Sts2Session(logger=recorder)

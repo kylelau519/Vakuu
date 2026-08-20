@@ -98,6 +98,18 @@ class TokenBatch:
     enemy_pos: dict[int, int] = field(default_factory=dict)  # Enemy.index -> token row
     potion_pos: dict[int, int] = field(default_factory=dict)  # Potion.index -> token row
 
+    @classmethod
+    def from_saved(cls, d: dict) -> "TokenBatch":
+        """Inverse of materialize.py's per-example dict -- materialize.py saves plain dicts
+        rather than TokenBatch instances (see its module docstring: pickling a dataclass by
+        import path breaks across scripts), so a training loop reads examples back through
+        this instead of torch.load handing back TokenBatch objects directly."""
+        return cls(
+            type_ids=d["type_ids"], global_ids=d["global_ids"], features=d["features"],
+            player_pos=d["player_pos"], hand_pos=d["hand_pos"], enemy_pos=d["enemy_pos"],
+            potion_pos=d["potion_pos"],
+        )
+
 
 def tokenize(decision: CombatPlay, gvocab: GlobalVocab) -> TokenBatch:
     types: list[int] = []
@@ -267,13 +279,14 @@ class ClawsNet(nn.Module):
             x = block(x)
         return self.final_ln(x).squeeze(0)
 
-    def forward(self, decision: CombatPlay) -> tuple[list[tuple[str, dict]], torch.Tensor, torch.Tensor]:
-        """Returns (options, logits [len(options)], value scalar). logits are unnormalized --
-        softmax over them for a policy distribution comparable to a trial file's `policy` list."""
-        batch = tokenize(decision, self.gvocab)
+    def score(
+        self, batch: TokenBatch, options: list[tuple[str, dict]]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Shared by forward() (live decision) and a training loop reading materialize.py's
+        saved batches -- both need the same option-query + head logic, just from a differently
+        sourced TokenBatch. Returns (logits [len(options)], value scalar); logits unnormalized,
+        softmax them for a distribution comparable to a trial file's `policy` list."""
         h = self.encode(batch)
-
-        options = legal_options(decision)
         queries = []
         for action, args in options:
             if action == "end_turn":
@@ -292,6 +305,13 @@ class ClawsNet(nn.Module):
 
         logits = self.policy_mlp(torch.stack(queries)).squeeze(-1)
         value = torch.tanh(self.value_mlp(h[batch.player_pos]).squeeze(-1))
+        return logits, value
+
+    def forward(self, decision: CombatPlay) -> tuple[list[tuple[str, dict]], torch.Tensor, torch.Tensor]:
+        """Returns (options, logits [len(options)], value scalar) for one live decision."""
+        batch = tokenize(decision, self.gvocab)
+        options = legal_options(decision)
+        logits, value = self.score(batch, options)
         return options, logits, value
 
 
