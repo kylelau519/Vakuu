@@ -6,11 +6,18 @@ policy produces decks too weak to make combat outcomes meaningful, which defeats
 training on them. map_select likewise delegates to Golden Compass (agents/golden_compass/
 policy.py), which value-to-go DPs the full map instead of picking a reachable node blindly.
 
-Returns (action_name, kwargs) rather than a built command, so callers pass it straight
-into Sts2Session.step(*choose_action(decision, session)) -- the session builds/validates the
-actual command via actions.action(), no need to duplicate that here. `session` is threaded
-through (rather than defaulted away) because map_select needs session.get_map() for full-map
+Returns (action_name, kwargs, policy) rather than a built command, so callers pass the first
+two straight into session.step(name, **kwargs) -- the session builds/validates the actual
+command via actions.action(), no need to duplicate that here. `session` is threaded through
+(rather than defaulted away) because map_select needs session.get_map() for full-map
 lookahead -- decision.choices alone is only the one-hop list.
+
+policy is None for every decision type except combat_play: it's a placeholder for the
+per-option distribution an MCTS search would produce, standing in as a one-hot weight on
+whichever option uniform-random happened to pick, so recorder.py's `policy` field has a
+consistent shape from the start. Swap _choose_combat_action's random.choice for a real
+search once one exists -- the record shape doesn't need to change, only how `policy` gets
+computed.
 """
 from __future__ import annotations
 
@@ -48,13 +55,14 @@ _REST_HEAL_HP_THRESHOLD = 35
 _pending_card_select_purpose: str | None = None
 
 # session is passed around incase we need extra info from the session and we can get through env.py
-def choose_action(decision: Decision, session: Sts2Session) -> tuple[str, dict]:
+def choose_action(decision: Decision, session: Sts2Session) -> tuple[str, dict, dict | None]:
     if isinstance(decision, CombatPlay):
         return _choose_combat_action(decision)
-    return _choose_generic_action(decision, session)
+    name, kwargs = _choose_generic_action(decision, session)
+    return name, kwargs, None
 
 
-def _choose_combat_action(decision: CombatPlay) -> tuple[str, dict]:
+def _choose_combat_action(decision: CombatPlay) -> tuple[str, dict, dict]:
     options: list[tuple[str, dict]] = [("end_turn", {})]
 
     for card in decision.hand:
@@ -71,7 +79,17 @@ def _choose_combat_action(decision: CombatPlay) -> tuple[str, dict]:
             args["target_index"] = random.choice(decision.enemies).index
         options.append(("use_potion", args))
 
-    return random.choice(options)
+    chosen = random.choice(options)
+    # Placeholder: a one-hot weight on the option uniform-random actually picked, standing
+    # in for an MCTS visit distribution over the same option list. A list of records rather
+    # than a dict keyed by action, since kwargs (e.g. target_index) can differ between two
+    # options that share an action name.
+    policy = [
+        {"action": name, "args": args, "prob": 1.0 if (name, args) == chosen else 0.0}
+        for name, args in options
+    ]
+    name, args = chosen
+    return name, args, policy
 
 
 def _choose_generic_action(decision: Decision, session: Sts2Session) -> tuple[str, dict]:

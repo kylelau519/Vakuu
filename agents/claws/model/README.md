@@ -23,5 +23,32 @@ Predict an action capture the meaning of play_card("bash", "cultist_1"), re-anal
 
 ## MCTS strategy
 - Each decision is a node. Expectimax strategy will be used to handle uncertainty. At a chance node, the only uncertainty is draw order. Child nodes can shuffle the draw order through the `Sts2session` after restoring the state. 
-- Not every decision must have child nodes, but when we decide to create an explicit chance node 80 children can be made.
-- Each child node end at the end of combat, either lose or win.
+- Not every decision must have child nodes, but when we decide to create an explicit chance node 80 children at most can be made. Dynamical formula `k(N) = ⌈C·N^α⌉` will be used for highly visited node to have even more children.
+- Each child node end at the end of combat, win, lose, or terminated. To preserve resource, there's main branch and sub-branches. 
+- Among the K attempts, if any won, use that attempt's resulting state (rewards, path choice, deck) as the one the run-level pipeline continues from into the next combat as a "main branch".
+- If all K attempts lose, accept the loss and end that lineage there, same as a real run would.
+- Node statistics: Visit count N(s,a), total backed-up value W(s,a), Q(s,a)=W/N, and the policy prior P(s,a) from the network. 
+- Standard PUCT strategy will be used to do exploration.
+- Each combat, run about 200 simulations (not per combat).
+- Backup strategy: at every `edge (s, a)` along that path, update:
+`N(s,a) ← N(s,a) + 1`
+`W(s,a) ← W(s,a) + v`
+`Q(s,a) ← W(s,a) / N(s,a)`
+- When a simulation's selection phase reaches a node with no children yet, expand it and call the network once — `(p, v) = f_θ(state)` — then immediately back up that v, without continuing the simulation further.
+- To protect the resources, if a combat is not ended in 100 decisions, terminate it by evaluating policy and value, and back propagate the value.
+- The Live game play will use `armgax[v]` as the decision.
+
+## Data
+- Every attempt's full trajectory — win or loss — is kept as real training data; a loss is valid signal and is not discarded.
+
+Data are in the format of :
+```
+{
+  "cmd": "action",
+  "action": "play_card",
+  "args": {"card_index": 1},
+  "policy": {"0": 0.05, "1": 0.71, "3": 0.19, "end_turn": 0.05},
+  "value": null
+}
+```
+Value stays null until the game ends, then you backfill it across the trajectory (or store it once per run and let the loader broadcast/discount it). 

@@ -29,7 +29,7 @@ from installation import ensure_setup
 
 from checkpoint import BranchJob, read_branch_job, write_branch_job
 from policy import choose_action
-from recorder import TrialRecorder
+from recorder import CompactRecorder
 
 _SEED_WORDS = ["falcon", "ember", "wolf", "raven", "thorn", "comet", "storm", "harbor"]
 
@@ -52,12 +52,15 @@ class FacilityConfig:
 def _play_combat_only(session: Sts2Session, decision) -> str:
     """Drives one combat to resolution (win -> next decision, or death -> game_over),
     from wherever `decision` currently sits. Used by branch workers, which only ever
-    care about a single combat and stop the moment it resolves. session.step() logs to
-    session.logger itself, so this loop doesn't touch the recorder directly."""
+    care about a single combat and stop the moment it resolves. session.step() logs
+    actions/state to session.logger itself, so this loop only reaches into the recorder
+    directly for attach_policy -- there's no other hook to pass a per-step policy through."""
     while decision.decision == "combat_play":
-        name, kwargs = choose_action(decision, session)
+        name, kwargs, policy = choose_action(decision, session)
+        if policy is not None:
+            session.logger.attach_policy(policy)
         decision = session.step(name, **kwargs)
-    return "died" if decision.decision == "game_over" else "won"
+    return "lost" if decision.decision == "game_over" else "won"
 
 
 def _spawn_branches(job_queue, cfg: FacilityConfig, main_id: str, floor: int, combat_index: int,
@@ -79,14 +82,14 @@ def main_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, stop_event) -> No
         seed = _random_seed()
         main_id = f"{character}_{seed}"
 
-        recorder = TrialRecorder(main_id, cfg.raw_dir, {
+        recorder = CompactRecorder({
             "character": character, "seed": seed, "main_id": main_id, "role": "main",
         })
         session = Sts2Session(logger=recorder)
+        outcome = None
         try:
             try:
                 decision = session.start(character, seed, cfg.ascension)
-                recorder.log_state(decision)
                 prev_type = None
                 combat_index = 0
 
@@ -96,9 +99,12 @@ def main_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, stop_event) -> No
                         _spawn_branches(job_queue, cfg, main_id, decision.context.floor, combat_index,
                                          character, seed, session.action_log)
 
-                    name, kwargs = choose_action(decision, session)
+                    name, kwargs, policy = choose_action(decision, session)
+                    if policy is not None:
+                        recorder.attach_policy(policy)
                     prev_type = decision.decision
                     decision = session.step(name, **kwargs)
+                outcome = "won" if decision.victory else "died"
             except Exception as e:
                 # a crashed trial (Sts2ActionError from an invalid action, or anything
                 # else) is still a dead main branch -- log it, save what we have, and
@@ -106,12 +112,12 @@ def main_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, stop_event) -> No
                 # game_over. Catching broadly on purpose: no failure here should be able
                 # to take the whole worker process down with it.
                 recorder.log_error(f"{type(e).__name__}: {e}")
+                outcome = "error"
             try:
-                session.save(f"{cfg.raw_dir}/{main_id}.json")
+                recorder.save(f"{cfg.raw_dir}/{main_id}.json", session.action_log, outcome=outcome)
             except Exception as e:
                 recorder.log_error(f"save failed: {type(e).__name__}: {e}")
         finally:
-            recorder.close()
             session.close()
         completed += 1
         # main branch is dead -- loop restarts with a fresh seed unless the target
@@ -132,25 +138,25 @@ def branch_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, stop_event) -> 
             return
 
         job = read_branch_job(path)
-        recorder = TrialRecorder(job.branch_id, cfg.raw_dir, {
+        recorder = CompactRecorder({
             "character": job.character, "seed": job.seed, "main_id": job.main_id,
             "floor": job.floor, "combat_index": job.combat_index,
             "branch_index": job.branch_index, "role": "branch",
-        })
+        }, start_step=len(job.actions))
         session = Sts2Session(logger=recorder)
+        outcome = None
         try:
             try:
                 decision = session.open_from_checkpoint(job.character, job.seed, job.ascension, job.actions)
-                recorder.log_state(decision)
-                _play_combat_only(session, decision)
+                outcome = _play_combat_only(session, decision)
             except Exception as e:
                 recorder.log_error(f"{type(e).__name__}: {e}")
+                outcome = "error"
             try:
-                session.save(f"{cfg.raw_dir}/{job.branch_id}.json")
+                recorder.save(f"{cfg.raw_dir}/{job.branch_id}.json", session.action_log, outcome=outcome)
             except Exception as e:
                 recorder.log_error(f"save failed: {type(e).__name__}: {e}")
         finally:
-            recorder.close()
             session.close()
 
 
