@@ -21,6 +21,7 @@ reconcile, until MCTS replaces the placeholder policy.
 from __future__ import annotations
 
 import itertools
+import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,7 +48,14 @@ FEATURE_DIM = 6
 
 
 def _log1p(x: float | int | None) -> float:
-    return float(torch.log1p(torch.tensor(float(x or 0))))
+    """Signed log1p, not plain log1p -- some of what feeds this can go negative (Strength and
+    other player_powers can drop below 0 from debuffs/curses), and log1p(x) is undefined for
+    x <= -1. A live self-play run hit exactly this: a negative power amount produced a NaN here,
+    which poisoned the whole forward pass and crashed torch.multinomial downstream ("probability
+    tensor contains nan") in whispering_earring/policy.py's ClawsNet-driven path. sign(x) *
+    log1p(|x|) keeps the same magnitude-compression behavior while staying defined everywhere."""
+    x = float(x or 0)
+    return math.copysign(math.log1p(abs(x)), x)
 
 
 # --- global id space ---------------------------------------------------------------------------
@@ -248,6 +256,17 @@ class TransformerBlock(nn.Module):
 
 
 class ClawsNet(nn.Module):
+    @classmethod
+    def from_checkpoint(cls, path: str, **kwargs) -> "ClawsNet":
+        """Loads a train.py-saved state_dict against a freshly loaded vocab. Vocab and
+        checkpoint must agree (vocab_ids.json unchanged since training -- see
+        common/tokenizer.py's module docstring on why that file is a breaking change, not a
+        routine regen); load_state_dict raises on a shape mismatch if they don't."""
+        net = cls(GlobalVocab(EntityVocab.load()), **kwargs)
+        net.load_state_dict(torch.load(path, weights_only=True))
+        net.eval()
+        return net
+
     def __init__(self, gvocab: GlobalVocab, dim: int = 64, n_layers: int = 2, n_heads: int = 4):
         super().__init__()
         self.gvocab = gvocab

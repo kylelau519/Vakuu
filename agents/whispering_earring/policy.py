@@ -15,19 +15,30 @@ lookahead -- decision.choices alone is only the one-hop list.
 policy is None for every decision type except combat_play: it's a placeholder for the
 per-option distribution an MCTS search would produce, standing in as a one-hot weight on
 whichever option uniform-random happened to pick, so recorder.py's `policy` field has a
-consistent shape from the start. Swap _choose_combat_action's random.choice for a real
-search once one exists -- the record shape doesn't need to change, only how `policy` gets
-computed.
+consistent shape from the start.
+
+If the CLAWS_CHECKPOINT env var is set, combat instead samples from ClawsNet's own softmax
+policy (temperature 1, no search) -- see _choose_combat_action_claws. That's a cheap first
+integration step, not the real target: mcts.py's PUCT search is what's supposed to drive combat
+eventually, but wiring that in here means spawning ~200 more sts2-cli subprocesses per combat
+decision from inside an already-running self-play worker, a much bigger change than swapping in
+a raw (even untrained) network. Unset CLAWS_CHECKPOINT (the default) to keep the uniform-random
+path -- nothing else about the record shape changes either way.
 """
 from __future__ import annotations
 
 import importlib.util
+import os
 import random
+import sys
 from pathlib import Path
 
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the import below)
 from env import Sts2Session
 from models import CombatPlay, Decision
+
+_CLAWS_CHECKPOINT = os.environ.get("CLAWS_CHECKPOINT")
+_claws_net = None  # lazy-loaded once per worker process, on first combat decision -- see below
 
 # Loaded by explicit file path, not sys.path + import, because this file is *also* named
 # policy.py -- an sys.path-based `import policy` would risk resolving to itself instead of
@@ -62,7 +73,47 @@ def choose_action(decision: Decision, session: Sts2Session) -> tuple[str, dict, 
     return name, kwargs, None
 
 
+def _load_claws_net():
+    """None if CLAWS_CHECKPOINT isn't set -- torch and claws/model are only imported (and only
+    need to be installed/present) when a checkpoint is actually configured, so the plain
+    uniform-random path stays lightweight."""
+    global _claws_net
+    if _claws_net is not None or not _CLAWS_CHECKPOINT:
+        return _claws_net
+
+    claws_model_dir = Path(__file__).resolve().parents[1] / "claws" / "model"
+    if str(claws_model_dir) not in sys.path:
+        sys.path.insert(0, str(claws_model_dir))
+    from model import ClawsNet  # noqa: E402  (path just inserted above)
+
+    _claws_net = ClawsNet.from_checkpoint(_CLAWS_CHECKPOINT)
+    return _claws_net
+
+
+def _choose_combat_action_claws(decision: CombatPlay, net) -> tuple[str, dict, dict]:
+    """Samples (not argmax) from the network's own softmax over model.py's legal_options() --
+    every (card, target) pair, not just one random target per card like the fallback below, so
+    the recorded `policy` list is already the richer shape materialize.py/train.py expect.
+    Sampling, not greedy, because this path still feeds self-play data generation: the point is
+    exploration, same as the uniform-random fallback, just weighted by whatever the network has
+    learned instead of picked blindly."""
+    import torch
+
+    options, logits, _value = net.forward(decision)
+    probs = torch.softmax(logits, dim=-1)
+    idx = int(torch.multinomial(probs, 1).item())
+    policy = [
+        {"action": a, "args": args, "prob": p} for (a, args), p in zip(options, probs.tolist())
+    ]
+    name, args = options[idx]
+    return name, args, policy
+
+
 def _choose_combat_action(decision: CombatPlay) -> tuple[str, dict, dict]:
+    net = _load_claws_net()
+    if net is not None:
+        return _choose_combat_action_claws(decision, net)
+
     options: list[tuple[str, dict]] = [("end_turn", {})]
 
     for card in decision.hand:

@@ -2,15 +2,20 @@
 
 AlphaZero(AZ) Monte Carlo Tree Search (MCTS) approach will be used as the backbone of the combat play. However, it is known that AZ is trained on minimax style, an opponent makes a move will diminish your value. Sts2 is expectimax style, we make decision base on the expectation of the uncertainty.
 
-Three pieces exist so far, all v0/untrained -- none of this has been used to actually improve
-combat play yet, see each module's docstring for specifics and open questions:
+Four pieces exist so far, all v0/untrained -- wired together end to end, but none of it has been
+trained on real data yet, so none of it has actually improved combat play. See each module's
+docstring for specifics and open questions.
 
 - `model.py` -- tokenizer -> transformer -> policy/value heads (`ClawsNet`), proving the
   Architecture section below's shapes compose against a real captured `combat_play` decision.
   Deliberately out of scope for v0: piles, `history` counters, enemy powers, orbs/stars/osty.
 - `materialize.py` -- replays a `whispering_earring` trial file through a fresh sts2-cli session to
   reconstruct the state at each policy-bearing decision, and packs it with that decision's recorded
-  `policy`/`value` into a training example. No training loop consumes its output yet.
+  `policy`/`value` into a training example.
+- `train.py` -- trains `ClawsNet` on `materialize.py`'s output: policy cross-entropy + value MSE,
+  batch size 1 (no padding -- see its docstring for why). Verified end to end (loss goes down,
+  `--init` correctly resumes from a saved checkpoint) on a single small trial's worth of data --
+  not a real training run, there isn't enough materialized data for one yet.
 - `mcts.py` -- the PUCT search from the MCTS strategy section below, wrapping `ClawsNet` as the
   `(p, v)` evaluator. A chance node is created for `play_card` on a card that draws mid-turn (e.g.
   Pommel Strike), not `end_turn` -- the once-per-turn draw is already covered by simulation
@@ -19,8 +24,16 @@ combat play yet, see each module's docstring for specifics and open questions:
   things from the doc are still genuinely underspecified (the dynamical formula's constants, what
   "argmax[Q(s,a)]" means for final action selection) -- `mcts.py`'s module docstring documents the
   judgment call made for each rather than silently guessing. Not wired into
-  `whispering_earring/policy.py` yet -- doing that before there's a trained network would just
-  replace cheap random choices with expensive untrained-network-random ones.
+  `whispering_earring/policy.py` -- that would mean spawning ~200 more sts2-cli subprocesses per
+  combat decision from inside an already-running self-play worker, a much bigger change than the
+  raw-network wiring below.
+
+`whispering_earring/policy.py` samples combat actions from a `ClawsNet` checkpoint's raw softmax
+policy (no search) when `CLAWS_CHECKPOINT` is set -- see its module docstring. `claws.pt` (an
+untrained init checkpoint, `train.py --epochs 0`) exists to prove this path end to end before
+there's anything trained; using it doesn't produce better play than uniform-random, only
+differently-random play with a real (if meaningless) probability distribution recorded as
+`policy` instead of a one-hot placeholder.
 
 ## Prediction
 Predict an action capture the meaning of play_card("bash", "cultist_1"), re-analyze and give potion("block_potion, self) (because self is the only legal target), at some point "end_turn"
