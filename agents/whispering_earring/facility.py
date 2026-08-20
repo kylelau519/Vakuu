@@ -4,19 +4,20 @@ idle until a branch job appears in the queue.
 Combat is delegated entirely to branches, per model/README.md's MCTS strategy section: "among
 the K attempts, if any won, use that attempt's resulting state... as the main branch. If all K
 attempts lose, accept the loss and end that lineage there." At every combat_play decision, the
-main worker writes `branches_per_combat` checkpoint .json files (clone of its action log so far)
-into the queue dir, pushes their paths onto the job queue, and *blocks* waiting for all K to
-finish (see _resolve_combat) -- it does not play that combat itself. Once results are in: if any
-branch won, its full action log (checkpoint prefix + the combat it just played) is adopted as the
-main line's own continuation -- the main worker's session is torn down and reopened from that
-action log, and the run proceeds from there. If none won, one attempt's action log is still
-adopted the same way (so the fatal combat gets recorded -- a loss is valid signal, see
-recorder.py), and the lineage ends.
+main worker puts `branches_per_combat` BranchJobs (clone of its action log so far, see
+checkpoint.py) directly onto the shared job queue and waits on the shared results queue -- it
+does not play that combat itself. It adopts the *first* branch that reports a win, without
+waiting for the rest (see _wait_for_combat_result): those stragglers just keep running and still
+get saved as ordinary (losing) trials, they just aren't blocking anyone. Only if every branch
+reports in with none winning does it fall back to adopting one loss, so the fatal combat still
+gets recorded (a loss is valid signal, see recorder.py), and the lineage ends there.
 
-This makes the main line's throughput gated by branch-worker capacity -- every combat is now a
-blocking round-trip through the job queue, not a background side-effect the main line ignores.
-Branch workers themselves are unaffected: branch_worker_loop still just replays a checkpoint and
-plays exactly one combat to resolution, same as before.
+Both queues are plain multiprocessing.Queue -- job dispatch and result reporting are in-memory
+handoffs between processes on one machine, not a disk-backed queue. A branch worker's trial JSON
+still gets written to raw_dir regardless of whether the main line was still waiting on it; the
+results queue is a coordination signal for adoption, not the data's source of truth, so a result
+that arrives after its combat was already resolved by an earlier winner is just discarded (it
+belongs to no one's `pending` set anymore, see _wait_for_combat_result).
 
 If the main branch dies (game_over) outside of combat (rare, but the loop doesn't assume
 otherwise), it's saved like everything else, and the same worker process immediately starts a new
@@ -27,9 +28,7 @@ because the main line stopped.
 """
 from __future__ import annotations
 
-import json
 import multiprocessing as mp
-import os
 import random
 import time
 from dataclasses import dataclass, field
@@ -39,7 +38,7 @@ import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imp
 from env import Sts2Session
 from installation import ensure_setup
 
-from checkpoint import BranchJob, read_branch_job, write_branch_job
+from checkpoint import BranchJob
 from policy import choose_action
 from recorder import CompactRecorder
 
@@ -58,7 +57,6 @@ class FacilityConfig:
     n_branch_workers: int = 4
     n_main_trials: int | None = None  # stop after this many main-line trials; None = forever
     raw_dir: str = "data/raw"
-    queue_dir: str = "data/queue"
 
 
 def _play_combat_only(session: Sts2Session, decision) -> str:
@@ -86,40 +84,47 @@ def _spawn_branches(job_queue, cfg: FacilityConfig, main_id: str, floor: int, co
             character=character, seed=seed, ascension=cfg.ascension,
             actions=list(actions_so_far),
         )
-        path = write_branch_job(job, cfg.queue_dir)
-        job_queue.put(path)
+        job_queue.put(job)
         branch_ids.append(job.branch_id)
     return branch_ids
 
 
-def _wait_for_branch_results(
-    raw_dir: str, branch_ids: list[str], stop_event, poll_interval: float = 1.0, timeout: float = 600
-) -> dict[str, dict]:
-    """Polls for each branch's saved trial file (branch_worker_loop always writes one, win, lose,
-    or error -- see its own try/finally). Returns whatever's readable once every id is accounted
-    for, `stop_event` fires, or `timeout` elapses -- a branch that never finishes (a hung/crashed
-    worker) is simply missing from the result, not an error raised here; the caller decides what
-    "fewer than K results" means."""
-    results: dict[str, dict] = {}
+def _wait_for_combat_result(
+    results_queue, branch_ids: list[str], prefix_len: int, stop_event, timeout: float = 600
+) -> dict | None:
+    """Blocks on results_queue (branch_id, result) pairs -- pushed by branch_worker_loop the
+    moment its trial is saved, see its own docstring -- and returns as soon as one of
+    `branch_ids` reports a win, without waiting on the rest (see module docstring: a winning
+    branch is immediately adoptable, slower siblings aren't blocking anyone). Falls back to any
+    one usable (losing) result once every expected branch_id has reported in, so a fatal combat
+    still gets recorded, or None if nothing usable showed up. `stop_event`/`timeout` bound the
+    wait the same way either way: a branch that never reports (a hung/crashed worker) just leaves
+    that id in `pending` at the end.
+
+    results_queue is shared across the whole facility's lifetime, so an item here might belong to
+    an already-abandoned earlier combat rather than this one -- anything whose branch_id isn't in
+    `pending` is silently dropped; that branch's trial was already written to raw_dir by the
+    worker regardless, this queue is a coordination signal, not the data's source of truth."""
+    usable: dict[str, dict] = {}
     pending = set(branch_ids)
     deadline = time.time() + timeout
     while pending and time.time() < deadline and not stop_event.is_set():
-        for branch_id in list(pending):
-            path = os.path.join(raw_dir, f"{branch_id}.json")
-            if not os.path.exists(path):
-                continue
-            try:
-                with open(path) as f:
-                    results[branch_id] = json.load(f)
-            except (OSError, json.JSONDecodeError):
-                continue  # still being written -- retry next poll
-            pending.discard(branch_id)
-        if pending:
-            time.sleep(poll_interval)
+        try:
+            branch_id, result = results_queue.get(timeout=1.0)
+        except Empty:
+            continue
+        if branch_id not in pending:
+            continue  # stale result from an already-resolved earlier combat
+        pending.discard(branch_id)
+        if result is None or len(result.get("actions") or []) < prefix_len:
+            continue  # branch errored before saving, or its prefix replay itself failed
+        usable[branch_id] = result
+        if result.get("outcome") == "won":
+            return result
     if pending:
         print(f"warning: {len(pending)}/{len(branch_ids)} branch(es) didn't finish within "
               f"{timeout}s: {sorted(pending)}")
-    return results
+    return next(iter(usable.values()), None)
 
 
 def _clean_actions(actions: list[dict]) -> list[dict]:
@@ -144,7 +149,7 @@ def _absorb_combat(recorder: CompactRecorder, full_actions: list[dict], prefix_l
 
 
 def _resolve_combat(
-    job_queue, cfg: FacilityConfig, recorder: CompactRecorder, session: Sts2Session,
+    job_queue, results_queue, cfg: FacilityConfig, recorder: CompactRecorder, session: Sts2Session,
     character: str, seed: str, main_id: str, floor: int, combat_index: int, stop_event,
 ):
     """Delegates one combat to cfg.branches_per_combat parallel attempts and adopts a result --
@@ -154,18 +159,11 @@ def _resolve_combat(
     session/decision are then just the unchanged inputs, since there was nothing to adopt."""
     prefix = list(session.action_log)
     branch_ids = _spawn_branches(job_queue, cfg, main_id, floor, combat_index, character, seed, prefix)
-    results = _wait_for_branch_results(cfg.raw_dir, branch_ids, stop_event)
-
-    # Guards against adopting a branch whose replay of the *prefix itself* failed (actions
-    # shorter than what it was handed) -- see _resolve_combat's docstring; adopting that would
-    # silently discard the run's actual history instead of continuing from it.
-    usable = {bid: r for bid, r in results.items() if len(r.get("actions") or []) >= len(prefix)}
-    winner = next((r for r in usable.values() if r.get("outcome") == "won"), None)
-    adopted = winner or next(iter(usable.values()), None)
+    adopted = _wait_for_combat_result(results_queue, branch_ids, len(prefix), stop_event)
 
     if adopted is None:
         recorder.log_error(
-            f"combat {combat_index}: no usable branch results ({len(usable)}/{len(branch_ids)} usable)"
+            f"combat {combat_index}: no usable branch results (0/{len(branch_ids)} usable)"
         )
         return session, None, "lost"
 
@@ -175,10 +173,10 @@ def _resolve_combat(
     new_decision = new_session.open_from_checkpoint(
         character, seed, cfg.ascension, _clean_actions(adopted["actions"])
     )
-    return new_session, new_decision, (None if winner is not None else "lost")
+    return new_session, new_decision, (None if adopted.get("outcome") == "won" else "lost")
 
 
-def main_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, stop_event) -> None:
+def main_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, results_queue: mp.Queue, stop_event) -> None:
     completed = 0
     while not stop_event.is_set() and (cfg.n_main_trials is None or completed < cfg.n_main_trials):
         character = random.choice(cfg.characters)
@@ -200,7 +198,7 @@ def main_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, stop_event) -> No
                     if decision.decision == "combat_play":
                         combat_index += 1
                         session, decision, combat_outcome = _resolve_combat(
-                            job_queue, cfg, recorder, session, character, seed, main_id,
+                            job_queue, results_queue, cfg, recorder, session, character, seed, main_id,
                             decision.context.floor, combat_index, stop_event,
                         )
                         if combat_outcome is not None:
@@ -236,18 +234,17 @@ def main_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, stop_event) -> No
     stop_event.set()  # no more branch jobs coming; branch workers drain the queue and exit
 
 
-def branch_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, stop_event) -> None:
+def branch_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, results_queue: mp.Queue, stop_event) -> None:
     while True:
         try:
-            path = job_queue.get(timeout=1.0)
+            job = job_queue.get(timeout=1.0)
         except Empty:
             if stop_event.is_set():
                 return
             continue
-        if path is None:  # shutdown sentinel
+        if job is None:  # shutdown sentinel
             return
 
-        job = read_branch_job(path)
         recorder = CompactRecorder({
             "character": job.character, "seed": job.seed, "ascension": job.ascension,
             "main_id": job.main_id, "floor": job.floor, "combat_index": job.combat_index,
@@ -255,6 +252,7 @@ def branch_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, stop_event) -> 
         }, start_step=len(job.actions))
         session = Sts2Session(logger=recorder)
         outcome = None
+        result = None
         try:
             try:
                 decision = session.open_from_checkpoint(job.character, job.seed, job.ascension, job.actions)
@@ -263,17 +261,21 @@ def branch_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, stop_event) -> 
                 recorder.log_error(f"{type(e).__name__}: {e}")
                 outcome = "error"
             try:
-                recorder.save(f"{cfg.raw_dir}/{job.branch_id}.json", session.action_log, outcome=outcome)
+                result = recorder.save(f"{cfg.raw_dir}/{job.branch_id}.json", session.action_log, outcome=outcome)
             except Exception as e:
                 recorder.log_error(f"save failed: {type(e).__name__}: {e}")
         finally:
             session.close()
+            # Always notify, even on failure (result stays None) -- the main line's
+            # pending set would otherwise wait out the full timeout for this branch_id.
+            results_queue.put((job.branch_id, result))
 
 
 class Facility:
     def __init__(self, cfg: FacilityConfig):
         self.cfg = cfg
         self.job_queue: mp.Queue = mp.Queue()
+        self.results_queue: mp.Queue = mp.Queue()
         self.stop_event = mp.Event()
         self.main_proc: mp.Process | None = None
         self.branch_procs: list[mp.Process] = []
@@ -282,13 +284,15 @@ class Facility:
         ensure_setup()  # once, here -- not per-session, which would repeat the same checks
 
         self.main_proc = mp.Process(
-            target=main_worker_loop, args=(self.cfg, self.job_queue, self.stop_event), daemon=True,
+            target=main_worker_loop,
+            args=(self.cfg, self.job_queue, self.results_queue, self.stop_event), daemon=True,
         )
         self.main_proc.start()
 
         for _ in range(self.cfg.n_branch_workers):
             p = mp.Process(
-                target=branch_worker_loop, args=(self.cfg, self.job_queue, self.stop_event), daemon=True,
+                target=branch_worker_loop,
+                args=(self.cfg, self.job_queue, self.results_queue, self.stop_event), daemon=True,
             )
             p.start()
             self.branch_procs.append(p)

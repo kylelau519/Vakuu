@@ -6,7 +6,8 @@ combat well itself -- it drives the game forward so that trajectories exist to t
 
 See `facility.py`'s module docstring for the branching scheme (one main-line worker per run, N
 sub-workers that fork off a checkpoint at each combat to explore an alternate line, discarded
-after that one combat resolves) and `policy.py` for the current action-selection policy: combat is
+after that one combat resolves -- the main line adopts whichever branch reports a win *first*,
+without waiting on the rest) and `policy.py` for the current action-selection policy: combat is
 uniform-random exploration by default (non-combat decisions delegate to the Choices Paradox and
 Golden Compass placeholder policies, since a random meta/path policy would produce decks and runs
 too weak to make combat outcomes meaningful) -- or, with `CLAWS_CHECKPOINT` set, samples from a
@@ -20,10 +21,9 @@ network -- see `policy.py`'s module docstring).
 | `facility.py` | Orchestrates main + branch workers; `Facility`/`FacilityConfig`; CLI entry point |
 | `policy.py` | `choose_action(decision, session)` -- combat is random (or ClawsNet-sampled if `CLAWS_CHECKPOINT` is set), meta decisions delegate out |
 | `recorder.py` | `CompactRecorder` -- per-trial JSON capture (action log, policy, backfilled value) |
-| `checkpoint.py` | `BranchJob` -- the replay-prefix format branch workers pick up off the queue |
+| `checkpoint.py` | `BranchJob` -- the replay-prefix format passed to branch workers via an in-memory queue |
 | `sts2_path.py` | Adds sts2-cli's `python/` to `sys.path`; import before anything from sts2-cli |
 | `data/raw/` | Recorded trial JSON per trial (gitignored) |
-| `data/queue/` | Pending `BranchJob` files, consumed by branch workers (gitignored) |
 
 ## Running
 

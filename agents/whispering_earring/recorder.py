@@ -57,10 +57,14 @@ class CompactRecorder:
     def close(self) -> None:
         pass
 
-    def save(self, path: str, action_log: list[dict], outcome: str | None = None) -> None:
+    def save(self, path: str, action_log: list[dict], outcome: str | None = None) -> dict:
         """action_log: the session's full action_log (checkpoint prefix + steps taken
         here) -- passed in rather than tracked internally since this recorder only
-        observes the steps taken through *this* session, not a replayed prefix."""
+        observes the steps taken through *this* session, not a replayed prefix.
+
+        Returns the same dict written to disk, so a branch worker can hand a combat's
+        outcome straight to facility.py's results queue without reading its own file
+        back -- the file write is for persisted training data, not for that handoff."""
         value = _OUTCOME_VALUE.get(outcome)
         actions = []
         for i, cmd in enumerate(action_log):
@@ -81,3 +85,4 @@ class CompactRecorder:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
+        return data
