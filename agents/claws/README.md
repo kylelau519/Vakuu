@@ -17,7 +17,7 @@ action taken in response.
 | Gold | `player.gold` | |
 | Round number | `round` | |
 | Act / floor / room / boss | `context.*` | `RunContext` |
-| Draw/discard/exhaust counts | `draw_pile_count`, `discard_pile_count`, `len(exhaust_pile)` | no `exhaust_pile_count` field -- exhaust never had one |
+| Draw/discard/exhaust counts | `draw_pile_count`, `discard_pile_count`, `len(exhaust_pile)` | |
 | Scaling counters ("misc counts") | `history.player.*`, `history.enemies[i].*` | see below |
 
 **Not available from `combat_play`, and not a gap to fix here** -- these are map/run-level, not

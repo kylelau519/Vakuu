@@ -20,7 +20,6 @@ from __future__ import annotations
 import multiprocessing as mp
 import random
 import time
-import uuid
 from dataclasses import dataclass, field
 from queue import Empty
 
@@ -31,6 +30,12 @@ from installation import ensure_setup
 from checkpoint import BranchJob, read_branch_job, write_branch_job
 from policy import choose_action
 from recorder import TrialRecorder
+
+_SEED_WORDS = ["falcon", "ember", "wolf", "raven", "thorn", "comet", "storm", "harbor"]
+
+
+def _random_seed() -> str:
+    return f"{random.choice(_SEED_WORDS)}-{random.randint(0, 999)}"
 
 
 @dataclass
@@ -71,7 +76,7 @@ def main_worker_loop(cfg: FacilityConfig, job_queue: mp.Queue, stop_event) -> No
     completed = 0
     while not stop_event.is_set() and (cfg.n_main_trials is None or completed < cfg.n_main_trials):
         character = random.choice(cfg.characters)
-        seed = uuid.uuid4().hex[:10]
+        seed = _random_seed()
         main_id = f"{character}_{seed}"
 
         recorder = TrialRecorder(main_id, cfg.raw_dir, {
