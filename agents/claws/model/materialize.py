@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -91,24 +92,53 @@ def materialize_trial(path: str, gvocab: GlobalVocab) -> list[Example]:
     return examples
 
 
+_gvocab: GlobalVocab | None = None
+
+
+def _init_worker() -> None:
+    # Each worker drives its own sts2-cli subprocess (see materialize_trial/Sts2Session), so the
+    # per-trial cost is almost entirely waiting on that external process, not this one's CPU --
+    # trials parallelize across worker processes with no shared state beyond the read-only vocab,
+    # which each worker builds once here rather than once per trial.
+    global _gvocab
+    _gvocab = GlobalVocab(EntityVocab.load())
+
+
+def _materialize_one(path: str) -> tuple[str, list[Example] | None, str | None]:
+    assert _gvocab is not None  # set by _init_worker before any task runs
+    try:
+        examples = materialize_trial(path, _gvocab)
+    except Exception as e:
+        return path, None, f"{type(e).__name__}: {e}"
+    return path, examples, None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("trials", nargs="+", help="trial JSON files (data/raw/*.json)")
     parser.add_argument("--out", default="dataset.pt")
+    parser.add_argument(
+        "--jobs", "-j", type=int, default=os.cpu_count(),
+        help="parallel worker processes, each spawning its own sts2-cli subprocess "
+             "(default: cpu count)",
+    )
     args = parser.parse_args()
 
-    ensure_setup()  # once, here -- not per-trial, which would repeat the same checks
-    gvocab = GlobalVocab(EntityVocab.load())
+    # Once, here, in the parent -- not per worker, so a first-time DLL copy/build (see
+    # ensure_setup) can't race across several worker processes hitting it at once.
+    ensure_setup()
 
     all_examples: list[Example] = []
-    for path in args.trials:
-        try:
-            examples = materialize_trial(path, gvocab)
-        except Exception as e:
-            print(f"skip {path}: {type(e).__name__}: {e}")
-            continue
-        print(f"{path}: {len(examples)} examples")
-        all_examples.extend(examples)
+    with ProcessPoolExecutor(max_workers=args.jobs, initializer=_init_worker) as pool:
+        futures = [pool.submit(_materialize_one, path) for path in args.trials]
+        for future in as_completed(futures):
+            path, examples, error = future.result()
+            if error is not None:
+                print(f"skip {path}: {error}")
+                continue
+            assert examples is not None
+            print(f"{path}: {len(examples)} examples")
+            all_examples.extend(examples)
 
     torch.save(all_examples, args.out)
     print(f"wrote {len(all_examples)} examples to {args.out}")
