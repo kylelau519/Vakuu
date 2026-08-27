@@ -1,38 +1,22 @@
-"""Combat is still uniform-random exploration -- the simplest possible action selection, used
-for the first self-play pass before any trained network exists. Non-combat (meta) decisions
-delegate to the Choices Paradox placeholder policy (agents/choices_paradox/policy.py), which
-scores cards off Baalorlord's STS2 tier lists instead of picking blindly -- a random meta
-policy produces decks too weak to make combat outcomes meaningful, which defeats the point of
-training on them. map_select likewise delegates to Golden Compass (agents/golden_compass/
+"""Non-combat (meta) decisions delegate to the Choices Paradox placeholder policy (agents/choices_paradox/policy.py), which
+scores cards off Baalorlord's STS2 tier lists instead of picking blindly 
+Map_select likewise delegates to Golden Compass (agents/golden_compass/
 policy.py), which value-to-go DPs the full map instead of picking a reachable node blindly.
 
 Returns (action_name, kwargs, policy) rather than a built command, so callers pass the first
 two straight into session.step(name, **kwargs) -- the session builds/validates the actual
-command via actions.action(), no need to duplicate that here. `session` is threaded through
-(rather than defaulted away) because map_select needs session.get_map() for full-map
-lookahead -- decision.choices alone is only the one-hop list.
+command via actions.action(), no need to duplicate that here. `
 
 policy is None for every decision type except combat_play: it's a placeholder for the
-per-option distribution an MCTS search would produce, standing in as a one-hot weight on
-whichever option uniform-random happened to pick, so recorder.py's `policy` field has a
-consistent shape from the start.
-
-If the CLAWS_CHECKPOINT env var is set (and CLAWS_MCTS isn't), combat instead samples from
-ClawsNet's own softmax policy (temperature 1, no search) -- see _choose_combat_action_claws.
-That was a cheap first integration step, not the real target.
+per-option distribution an MCTS search would produce.
 
 If the CLAWS_MCTS env var is set, combat is instead driven by mcts.py's PUCT search
 (_choose_combat_action_mcts), using ClawsNet as the (p, v) evaluator per README.md's "MCTS
-strategy" section -- CLAWS_CHECKPOINT supplies the weights if also set, otherwise a freshly
-initialized (untrained, same as claws.pt) net stands in, since the search still needs *some*
-evaluator to expand a leaf. This is the expensive path: mcts.py spawns a fresh sts2-cli
-subprocess for every genuinely new tree node, i.e. up to N_SIMULATIONS (mcts.py's default: 200)
-per combat_play decision, from inside an already-running self-play worker -- only turn it on
-deliberately, not as a default for bulk trial generation.
+strategy" section
 
-Unset both (the default) to keep the uniform-random path -- nothing else about the record shape
-changes either way; `policy` is always a list of {action, args, prob} records over the legal
-options, whether `prob` came from a one-hot placeholder, a raw softmax, or real MCTS visit counts.
+Simulations are budgeted per *combat*, not per decision. -- CombatSimBudget below is created once per combat by facility.py's
+_play_combat_only and threaded through choose_action, so the ~200-simulation total is spent in
+chunks across.
 """
 from __future__ import annotations
 
@@ -45,12 +29,50 @@ from pathlib import Path
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the import below)
 from env import Sts2Session
 from models import CombatPlay, Decision
+import buffer_layout as bl
+from buffer_env import BufferDecision
 
 _CLAWS_CHECKPOINT = os.environ.get("CLAWS_CHECKPOINT")
 _CLAWS_MCTS = os.environ.get("CLAWS_MCTS")
 _claws_net = None  # lazy-loaded once per worker process, on first combat decision -- see below
 _mcts_module = None  # lazy-loaded once per worker process, on first combat decision -- see below
 _mcts_net = None
+
+_MCTS_SIMS_PER_COMBAT = 200  
+_MCTS_SIMS_PER_DECISION = 20  
+class CombatSimBudget:
+    """Remaining MCTS simulation budget for one combat, and this combat's one persistent
+    Sts2Env. facility.py's _play_combat_only creates one fresh instance per combat and threads
+    it through choose_action, so _choose_combat_action_mcts spends down a shared per-combat
+    total instead of the N_SIMULATIONS-per-decision-regardless behavior the module docstring
+    above used to describe.
+
+    get_env() lazily creates mcts.py's Sts2Env on first use and hands back the same instance on
+    every later call within this combat -- Sts2Env itself holds one persistent sts2-cli
+    subprocess for its whole lifetime (see its docstring), so this is what makes "one subprocess
+    per combat" actually true across all of that combat's decisions, not just within a single
+    decision's own chunk of simulations. Caller (_play_combat_only) must call close() once the
+    combat ends to release the subprocess."""
+
+    def __init__(self, total: int = _MCTS_SIMS_PER_COMBAT):
+        self.remaining = total
+        self._env = None
+
+    def take(self, want: int) -> int:
+        n = max(0, min(want, self.remaining))
+        self.remaining -= n
+        return n
+
+    def get_env(self, character: str, seed: str, ascension: int):
+        if self._env is None:
+            mcts_module, _ = _load_mcts()
+            self._env = mcts_module.Sts2Env(character, seed, ascension)
+        return self._env
+
+    def close(self) -> None:
+        if self._env is not None:
+            self._env.close()
+            self._env = None
 
 _choices_paradox_path = Path(__file__).resolve().parents[1] / "choices_paradox" / "policy.py"
 _spec = importlib.util.spec_from_file_location("choices_paradox_policy", _choices_paradox_path)
@@ -65,27 +87,18 @@ golden_compass = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(golden_compass)
 
 _REST_HEAL_HP_THRESHOLD = 35
-
-# Set by _choose_shop_action/_choose_rest_site_action right before returning an action that
-# triggers a follow-up card_select, and consumed by the card_select branch below. The protocol
-# is strictly request/response -- the game emits that follow-up as its immediate next decision,
-# with no way to distinguish it from any other card_select by shape alone (see CardSelect's
-# docstring in sts2-cli's models.py) -- so tracking "what did we just do" here is the simplest
-# reliable way to tell a remove-card select apart from an upgrade select.
 _pending_card_select_purpose: str | None = None
 
-# session is passed around incase we need extra info from the session and we can get through env.py
-def choose_action(decision: Decision, session: Sts2Session) -> tuple[str, dict, dict | None]:
-    if isinstance(decision, CombatPlay):
-        return _choose_combat_action(decision, session)
+def choose_action(
+    decision: Decision | BufferDecision, session: Sts2Session, budget: CombatSimBudget | None = None
+) -> tuple[str, dict, dict | None]:
+    if decision.decision == "combat_play":
+        return _choose_combat_action(decision, session, budget)
     name, kwargs = _choose_generic_action(decision, session)
     return name, kwargs, None
 
 
 def _load_claws_net():
-    """None if CLAWS_CHECKPOINT isn't set -- torch and claws/model are only imported (and only
-    need to be installed/present) when a checkpoint is actually configured, so the plain
-    uniform-random path stays lightweight."""
     global _claws_net
     if _claws_net is not None or not _CLAWS_CHECKPOINT:
         return _claws_net
@@ -100,12 +113,7 @@ def _load_claws_net():
 
 
 def _choose_combat_action_claws(decision: CombatPlay, net) -> tuple[str, dict, dict]:
-    """Samples (not argmax) from the network's own softmax over model.py's legal_options() --
-    every (card, target) pair, not just one random target per card like the fallback below, so
-    the recorded `policy` list is already the richer shape materialize.py/train.py expect.
-    Sampling, not greedy, because this path still feeds self-play data generation: the point is
-    exploration, same as the uniform-random fallback, just weighted by whatever the network has
-    learned instead of picked blindly."""
+    """Samples (not argmax) from the network's own softmax over model.py's legal_options() """
     import torch
 
     options, logits, _value = net.forward(decision)
@@ -152,15 +160,35 @@ def _load_mcts():
     return _mcts_module, _mcts_net
 
 
-def _choose_combat_action_mcts(decision: CombatPlay, session: Sts2Session) -> tuple[str, dict, dict]:
+def _choose_combat_action_mcts(
+    decision: CombatPlay, session: Sts2Session, budget: CombatSimBudget | None
+) -> tuple[str, dict, dict]:
     """Real search: mcts.py's PUCT tree over the same (action, args) option list as the
     softmax/uniform-random paths, wrapping ClawsNet as the (p, v) evaluator per README.md's
-    "MCTS strategy" section. 
+    "MCTS strategy" section. Spends _MCTS_SIMS_PER_DECISION out of `budget`'s per-combat total
+    -- once that's exhausted, falls back to the raw network softmax (_choose_combat_action_claws)
+    for the rest of the combat rather than running a token-sized (or zero-simulation) search.
+
+    Gets its Sts2Env from `budget.get_env()` (when a budget is given) rather than constructing
+    one directly -- that's what makes the underlying sts2-cli subprocess persist across this
+    combat's decisions instead of being respawned by every call here. A one-off caller with no
+    budget (e.g. mcts.py's own live smoke test) still gets a fresh Env each time, which is fine
+    for a single standalone call.
     """
     mcts_module, net = _load_mcts()
-    env = mcts_module.Sts2Env(session.character, session.seed, session.ascension)
+    n_sims = (
+        budget.take(_MCTS_SIMS_PER_DECISION) if budget is not None else mcts_module.N_SIMULATIONS
+    )
+    if n_sims <= 0:
+        return _choose_combat_action_claws(decision, net)
+
+    env = (
+        budget.get_env(session.character, session.seed, session.ascension)
+        if budget is not None
+        else mcts_module.Sts2Env(session.character, session.seed, session.ascension)
+    )
     evaluate_fn = lambda d: mcts_module.net_evaluate(net, d)  # noqa: E731
-    root = mcts_module.run(decision, list(session.action_log), evaluate_fn, env)
+    root = mcts_module.run(decision, list(session.action_log), evaluate_fn, env, n_simulations=n_sims)
 
     total_n = sum(root.N)
     policy = [
@@ -172,14 +200,36 @@ def _choose_combat_action_mcts(decision: CombatPlay, session: Sts2Session) -> tu
     return name, args, policy
 
 
-def _choose_combat_action(decision: CombatPlay, session: Sts2Session) -> tuple[str, dict, dict]:
+def _choose_combat_action(
+    decision: CombatPlay | BufferDecision, session: Sts2Session, budget: CombatSimBudget | None
+) -> tuple[str, dict, dict]:
     if _CLAWS_MCTS:
-        return _choose_combat_action_mcts(decision, session)
+        return _choose_combat_action_mcts(decision, session, budget)
 
     net = _load_claws_net()
     if net is not None:
         return _choose_combat_action_claws(decision, net)
 
+    options = (
+        _combat_options_from_buffer(decision.arr)
+        if isinstance(decision, BufferDecision)
+        else _combat_options_from_decision(decision)
+    )
+
+    chosen = random.choice(options)
+    # Placeholder: a one-hot weight on the option uniform-random actually picked, standing
+    # in for an MCTS visit distribution over the same option list. A list of records rather
+    # than a dict keyed by action, since kwargs (e.g. target_index) can differ between two
+    # options that share an action name.
+    policy = [
+        {"action": name, "args": args, "prob": 1.0 if (name, args) == chosen else 0.0}
+        for name, args in options
+    ]
+    name, args = chosen
+    return name, args, policy
+
+
+def _combat_options_from_decision(decision: CombatPlay) -> list[tuple[str, dict]]:
     options: list[tuple[str, dict]] = [("end_turn", {})]
 
     for card in decision.hand:
@@ -196,17 +246,33 @@ def _choose_combat_action(decision: CombatPlay, session: Sts2Session) -> tuple[s
             args["target_index"] = random.choice(decision.enemies).index
         options.append(("use_potion", args))
 
-    chosen = random.choice(options)
-    # Placeholder: a one-hot weight on the option uniform-random actually picked, standing
-    # in for an MCTS visit distribution over the same option list. A list of records rather
-    # than a dict keyed by action, since kwargs (e.g. target_index) can differ between two
-    # options that share an action name.
-    policy = [
-        {"action": name, "args": args, "prob": 1.0 if (name, args) == chosen else 0.0}
-        for name, args in options
-    ]
-    name, args = chosen
-    return name, args, policy
+    return options
+
+
+def _combat_options_from_buffer(arr) -> list[tuple[str, dict]]:
+    """Buffer counterpart to _combat_options_from_decision -- same single-random-target-per-card
+    placeholder policy (see this module's docstring), read via buffer_layout instead of a
+    pydantic CombatPlay's attribute tree (see sts2-cli's buffer_env.py/buffer_layout.py)."""
+    options: list[tuple[str, dict]] = [("end_turn", {})]
+    en = bl.energy(arr)
+    enemy_indices = [i for i, _ in bl.enemies(arr)]
+
+    for idx, slot in bl.hand_cards(arr):
+        if not bl.hand_can_play(slot) or int(slot[bl.CARD_COST]) > en:
+            continue
+        args = {"card_index": idx}
+        if bl.hand_target_type(slot) == "AnyEnemy" and len(enemy_indices) >= 2:
+            args["target_index"] = random.choice(enemy_indices)
+        options.append(("play_card", args))
+
+    for idx, slot in bl.player_potions(arr):
+        args = {"potion_index": idx}
+        target_type = bl.POTION_TARGET_TYPES.get(int(slot[bl.POTION_TARGET_TYPE]))
+        if target_type == "AnyEnemy" and len(enemy_indices) >= 2:
+            args["target_index"] = random.choice(enemy_indices)
+        options.append(("use_potion", args))
+
+    return options
 
 
 def _choose_generic_action(decision: Decision, session: Sts2Session) -> tuple[str, dict]:
@@ -260,14 +326,29 @@ def _choose_map_action(decision: Decision, session: Sts2Session) -> tuple[str, d
     return "select_map_node", {"col": pick.col, "row": pick.row}
 
 
-def _choose_card_select_action(decision: Decision) -> tuple[str, dict]:
+def _choose_card_select_action(decision: Decision | BufferDecision) -> tuple[str, dict]:
     """Dispatches on _pending_card_select_purpose, set by whichever shop/rest_site action
     just triggered this follow-up. Anything else (True Grit's exhaust-select, Wish's
     deck-tutor-select, ...) falls back to a uniformly random legal pick -- CardSelect's shape
     alone can't tell those apart from a remove/upgrade select, and no purpose was staged for
-    them."""
+    them.
+
+    A BufferDecision only ever reaches here from within _play_combat_only's loop (a mid-combat
+    card_select -- Power Potion, Brand, ...); shop/rest_site (the only actions that ever set
+    _pending_card_select_purpose) run on the main line's own pydantic-decision session, never a
+    buffer one, so purpose is always None on this path -- no need for a buffer-aware
+    choices_paradox.choose_removal_target/choose_upgrade_target call."""
     global _pending_card_select_purpose
     purpose, _pending_card_select_purpose = _pending_card_select_purpose, None
+
+    if isinstance(decision, BufferDecision):
+        arr = decision.arr
+        indices = [i for i, _ in bl.select_cards(arr)]
+        lo, hi = bl.min_select(arr), min(bl.max_select(arr), len(indices))
+        n_pick = random.randint(lo, hi) if hi >= lo else 0
+        if n_pick == 0:
+            return "skip_select", {}
+        return "select_cards", {"indices": random.sample(indices, n_pick)}
 
     if purpose == "remove" and decision.cards:
         index = choices_paradox.choose_removal_target(decision.cards)
@@ -286,9 +367,6 @@ def _choose_card_select_action(decision: Decision) -> tuple[str, dict]:
 
 
 def _choose_shop_action(decision: Decision) -> tuple[str, dict]:
-    """Priority: remove a card if the removal service is affordable (targeting the deck's
-    worst-tier card via the card_select that follows), then top up potions, then buy the
-    highest-tier card still within budget. Leaves once nothing is affordable."""
     global _pending_card_select_purpose
     gold = decision.player.gold
 
@@ -311,8 +389,6 @@ def _choose_shop_action(decision: Decision) -> tuple[str, dict]:
 
 
 def _choose_rest_site_action(decision: Decision) -> tuple[str, dict]:
-    """Heal below the HP threshold, otherwise upgrade a card -- targeting whichever offered
-    card the tier list flags good_upgrade via the card_select that follows."""
     global _pending_card_select_purpose
     enabled = {o.option_id: o for o in decision.options if o.is_enabled}
     if not enabled:
