@@ -10,9 +10,18 @@ Loss = policy cross-entropy against the recorded (possibly sparse -- see materia
 _target_probs) distribution, plus value MSE, summed with equal weight -- no tuning of that
 weighting has been done, it's just the obvious starting point.
 
+--value-only skips the policy term. Recorded `policy` is only a real training signal when it
+came from an actual MCTS search (visit counts); a one-hot uniform-random pick or a raw
+untrained-network softmax is noise, and cross-entropy against noise actively teaches the network
+to imitate whatever exploration randomness happened to land on (e.g. `end_turn` drawing a stray
+high weight in a decision where it's clearly wrong) -- worse than no signal at all. Use this flag
+for datasets built without CLAWS_MCTS (see training.sh); the value target stays legitimate either
+way, since a combat's HP-loss outcome is real regardless of what policy generated the trajectory.
+
 Usage:
     conda activate sts2
     python train.py dataset.pt --epochs 5 --out claws.pt
+    python train.py dataset.pt --epochs 20 --out claws.pt --value-only  # non-MCTS data
 """
 from __future__ import annotations
 
@@ -43,7 +52,10 @@ def loss_fn(
     return policy_loss, value_loss
 
 
-def train(examples: list[dict], net: ClawsNet, epochs: int, lr: float, seed: int = 0) -> None:
+def train(
+    examples: list[dict], net: ClawsNet, epochs: int, lr: float, seed: int = 0,
+    value_only: bool = False,
+) -> None:
     opt = torch.optim.Adam(net.parameters(), lr=lr)
     rng = random.Random(seed)
 
@@ -57,7 +69,7 @@ def train(examples: list[dict], net: ClawsNet, epochs: int, lr: float, seed: int
             batch = TokenBatch.from_saved(ex)
             logits, value = net.score(batch, ex["options"])
             policy_loss, value_loss = loss_fn(logits, value, ex["target"], ex["value"])
-            loss = policy_loss + value_loss
+            loss = value_loss if value_only else policy_loss + value_loss
 
             opt.zero_grad()
             loss.backward()
@@ -67,7 +79,8 @@ def train(examples: list[dict], net: ClawsNet, epochs: int, lr: float, seed: int
             total_value += value_loss.item()
 
         n = len(examples)
-        print(f"epoch {epoch + 1}/{epochs}: policy_loss={total_policy / n:.4f} "
+        note = " (not trained on -- --value-only)" if value_only else ""
+        print(f"epoch {epoch + 1}/{epochs}: policy_loss={total_policy / n:.4f}{note} "
               f"value_loss={total_value / n:.4f}")
 
 
@@ -80,6 +93,10 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--out", default="claws.pt")
     parser.add_argument("--init", default=None, help="resume from an existing checkpoint")
+    parser.add_argument("--value-only", action="store_true",
+                         help="skip policy cross-entropy -- for datasets built without "
+                              "CLAWS_MCTS, where recorded `policy` is noise, not real search "
+                              "signal (see module docstring)")
     args = parser.parse_args()
 
     examples: list[dict] = []
@@ -95,7 +112,7 @@ def main() -> None:
         if not examples:
             raise SystemExit("no examples loaded -- pass a dataset, or --epochs 0 to just save "
                               "an untrained init checkpoint")
-        train(examples, net, epochs=args.epochs, lr=args.lr)
+        train(examples, net, epochs=args.epochs, lr=args.lr, value_only=args.value_only)
     else:
         print("--epochs 0: skipping training, saving weights as-is")
 

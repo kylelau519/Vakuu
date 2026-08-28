@@ -14,8 +14,23 @@ Golden Compass placeholder policies, since a random meta/path policy would produ
 too weak to make combat outcomes meaningful) -- or, with `CLAWS_CHECKPOINT` set, samples from a
 loaded `claws/model/ClawsNet` checkpoint's own softmax policy instead (still no search, just the
 raw network) -- or, with `CLAWS_MCTS` set, is driven by `claws/model/mcts.py`'s real PUCT search
-over that same network (see `policy.py`'s module docstring; this is the expensive path, up to
-~200 sts2-cli subprocess spawns per combat decision).
+over that same network (see `policy.py`'s module docstring; this is the expensive path -- a
+~200-simulation budget per *combat*, spent in chunks across that combat's decisions via
+`CombatSimBudget`, falling back to the raw softmax policy once a combat's budget runs out).
+
+Branch workers drive their own combat via sts2-cli's buffer protocol (`buffer_env.Sts2BufferSession`,
+in-process, no subprocess/JSON/pydantic decode) instead of the JSON `Sts2Session` -- see sts2-cli's
+`src/Sts2Headless/README.md` for the wire format and `policy.py`'s combat/card-select choosers for how
+they branch on the decision type (`isinstance(decision, BufferDecision)`) to read fields via
+`buffer_layout.py` instead of a pydantic attribute tree. The main self-play line still uses
+`Sts2Session`/pydantic `Decision` throughout, since it never plays `combat_play` directly (see
+`_resolve_combat`) -- only branch workers do. `CLAWS_MCTS`'s search (`mcts.py`'s `Sts2Env`)
+deliberately stays on the JSON `Sts2Session`, even though it runs alongside a branch worker's own
+buffer session: `sts2.dll`'s `RunManager`/`CombatManager` are process-wide static singletons, so two
+in-process `RunSimulator` instances in the same process would corrupt each other's game state (see
+`Sts2Env`'s docstring) -- a subprocess keeps the search's engine state isolated the same way it always
+did, just without the buffer speedup on that specific path (a possible follow-up: have that
+subprocess speak the buffer wire format over its pipe instead of JSON).
 
 ## Layout
 
@@ -46,9 +61,9 @@ checkpoint instead of uniform-random:
 CLAWS_CHECKPOINT=../claws/model/claws.pt python facility.py --trials 10 ...
 ```
 
-To drive combat with a real MCTS search instead (much slower -- up to ~200 sts2-cli subprocess
-spawns per combat decision, see `policy.py`'s module docstring; `CLAWS_CHECKPOINT` is optional
-here too, an untrained net is used if omitted):
+To drive combat with a real MCTS search instead (much slower -- a ~200-simulation sts2-cli
+subprocess budget per *combat*, spent across that combat's decisions, see `policy.py`'s module
+docstring; `CLAWS_CHECKPOINT` is optional here too, an untrained net is used if omitted):
 
 ```sh
 CLAWS_MCTS=1 CLAWS_CHECKPOINT=../claws/model/claws.pt python facility.py --trials 10 ...

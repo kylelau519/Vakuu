@@ -3,26 +3,25 @@ from __future__ import annotations
 import multiprocessing as mp
 import os
 import random
+import threading
 import time
 from dataclasses import dataclass, field
 from queue import Empty
 
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imports below)
 from env import Sts2Session
+from buffer_env import Sts2BufferSession
 from installation import ensure_setup
 
 from checkpoint import BranchJob
-from policy import choose_action
+from policy import CombatSimBudget, choose_action
 from recorder import CompactRecorder
 
 _SEED_WORDS = ["falcon", "ember", "wolf", "raven", "thorn", "comet", "storm", "harbor"]
 
-# README.md's Value head: "HP loss is used as the metric. Every combat allows 5-7 hp loss as
-# chip damage to avoid strongly discouraging values." No exact number is given -- 6 is that
-# range's midpoint, a judgment call, not derived from anywhere else. Death is still a hard
-# floor regardless of the allowance: the "avoid strongly discouraging values" instruction reads
-# as being about ordinary chip damage taken while still winning, not about dying.
-_CHIP_DAMAGE_ALLOWANCE = 6
+# README.md's Value head: "HP loss is used as the metric. Every combat allows mall hp loss as
+# chip damage to avoid strongly discouraging values."
+_CHIP_DAMAGE_ALLOWANCE = 3
 _DEATH_VALUE = -1.0
 
 
@@ -30,14 +29,36 @@ def _random_seed() -> str:
     return f"{random.choice(_SEED_WORDS)}-{random.randint(0, 999_999)}"
 
 
+_WORKER_TAG_COLORS = [31, 32, 33, 34, 35, 36, 91, 92, 93, 94, 95, 96]  # ANSI red..bright-cyan
+
+
+def _tag_worker_stderr(label: str, worker_index: int) -> None:
+    """Sts2BufferSession loads Sts2Headless's CLR in-process (clr_bridge.load_clr), and its
+    [SIM]/[INFO] logging writes unconditionally to this process's real fd 2 (Console.Error
+    dups it once on first access). With many branch workers as separate processes sharing one
+    inherited terminal, those writes interleave with no way to tell workers apart. Redirect fd 2
+    to a pipe *before* the CLR loads and relay it through a background thread that prefixes every
+    line with a colored worker tag -- this must run before the first Sts2BufferSession() call in
+    this process, since re-pointing fd 2 after the CLR has dup'd it is a no-op."""
+    color = _WORKER_TAG_COLORS[worker_index % len(_WORKER_TAG_COLORS)]
+    tag = f"\x1b[{color}m[{label} {worker_index}]\x1b[0m"
+
+    real_stderr = os.fdopen(os.dup(2), "w")
+    read_fd, write_fd = os.pipe()
+    os.dup2(write_fd, 2)
+    os.close(write_fd)
+
+    def relay() -> None:
+        with os.fdopen(read_fd) as pipe_reader:
+            for line in pipe_reader:
+                real_stderr.write(f"{tag} {line}")
+                real_stderr.flush()
+
+    threading.Thread(target=relay, daemon=True, name=f"stderr-relay-{label}-{worker_index}").start()
+
+
 def _combat_value(hp_before: int, hp_after: int, max_hp: int, died: bool) -> float:
-    """Per-combat value target for recorder.py's end_combat() -- see README.md's Value head
-    and _CHIP_DAMAGE_ALLOWANCE above. A clean win (hp loss within the chip-damage allowance)
-    scores 1.0, same ceiling as the old flat win value; a win that costs more HP than that
-    scores progressively lower (down toward, but not below, 0 as hp_after approaches 0) rather
-    than being flattened to the same 1.0 as a flawless win. Death overrides all of that with a
-    hard -1.0, independent of how much HP was left at the time -- dying is always worse than
-    any win, no matter how costly."""
+    """Per-combat value target for recorder.py's end_combat()"""
     if died:
         return _DEATH_VALUE
     if not max_hp:
@@ -57,21 +78,24 @@ class FacilityConfig:
     raw_dir: str = "data/raw"
 
 
-def _play_combat_only(session: Sts2Session, decision) -> str:
-    """Drives one combat to resolution, then scores it via recorder.py's begin_combat()/
-    end_combat() -- hp_before/max_hp come from the CombatPlay decision this combat started on;
-    hp_after comes from whatever decision follows (GameOver.player.hp is forced to 0 on death
-    by sts2-cli, see models.py's PlayerSummary.hp -- otherwise it's the post-combat reward
-    screen's actual current hp)."""
-    hp_before, max_hp = decision.player.hp, decision.player.max_hp
+def _play_combat_only(session: Sts2BufferSession, decision) -> str:
+    hp_before, max_hp = decision.player_hp, decision.player_max_hp
     session.logger.begin_combat()
-    while decision.decision == "combat_play":
-        name, kwargs, policy = choose_action(decision, session)
-        if policy is not None:
-            session.logger.attach_policy(policy)
-        decision = session.step(name, **kwargs)
+    budget = CombatSimBudget()
+    try:
+        while decision.decision in ("combat_play", "card_select"):
+            name, kwargs, policy = choose_action(decision, session, budget)
+            if policy is not None:
+                session.logger.attach_policy(policy)
+            decision = session.step(name, **kwargs)
+        assert decision.decision in ("card_reward", "game_over"), (
+            f"combat ended on unexpected decision {decision.decision!r} instead of card_reward/"
+            "game_over -- would silently score this combat wrong if treated as resolved"
+        )
+    finally:
+        budget.close()
     died = decision.decision == "game_over"
-    session.logger.end_combat(_combat_value(hp_before, decision.player.hp, max_hp, died))
+    session.logger.end_combat(_combat_value(hp_before, decision.player_hp, max_hp, died))
     return "lost" if died else "won"
 
 
@@ -119,8 +143,7 @@ def _wait_for_combat_result(
 
 
 def _clean_actions(actions: list[dict]) -> list[dict]:
-    """Strips CompactRecorder's added `policy`/`value` keys back to bare {cmd, action, args?} --
-    what Sts2Session.open_from_checkpoint replays over the wire."""
+    """Strips CompactRecorder's added `policy`/`value` keys back to bare {cmd, action, args?}"""
     return [
         {"cmd": e["cmd"], "action": e["action"], **({"args": e["args"]} if "args" in e else {})}
         for e in actions
@@ -128,14 +151,7 @@ def _clean_actions(actions: list[dict]) -> list[dict]:
 
 
 def _absorb_combat(recorder: CompactRecorder, full_actions: list[dict], prefix_len: int) -> None:
-    """Feeds an adopted branch's combat actions (with their recorded `policy` and per-combat
-    `value`) through `recorder` as though the main line had played them directly -- the same
-    attach_policy/attach_value/log_action calls main_worker_loop's own loop would have made,
-    just sourced from the branch's saved trial instead of a live session.step(). The branch
-    already scored these actions via its own begin_combat()/end_combat() in _play_combat_only,
-    so attach_value() carries that value over as-is rather than recomputing it here.
-    full_actions[:prefix_len] is the checkpoint prefix the branch was handed -- already
-    accounted for by the main recorder, skipped here."""
+    """Record the combat through logger"""
     for entry in full_actions[prefix_len:]:
         if "policy" in entry:
             recorder.attach_policy(entry["policy"])
@@ -151,8 +167,10 @@ def _resolve_combat(
     """Delegates one combat to cfg.branches_per_combat parallel attempts and adopts a result --
     see the module docstring. Returns (session, decision, outcome): outcome is None if a combat
     was resolved and the run should continue with the returned (freshly reopened) session/
-    decision; otherwise outcome is "lost" and the caller should stop -- the returned
-    session/decision are then just the unchanged inputs, since there was nothing to adopt."""
+    decision; otherwise outcome is "lost" (an adopted branch actually died) or "error" (no
+    branch produced a usable result -- infra failure, not a death) and the caller should stop
+    -- the returned session/decision are then just the unchanged inputs, since there was
+    nothing to adopt."""
     prefix = list(session.action_log)
     branch_ids = _spawn_branches(
         job_queue, main_worker_index, cfg, main_id, floor, combat_index, character, seed, prefix
@@ -163,7 +181,7 @@ def _resolve_combat(
         recorder.log_error(
             f"combat {combat_index}: no usable branch results (0/{len(branch_ids)} usable)"
         )
-        return session, None, "lost"
+        return session, None, "error"
 
     _absorb_combat(recorder, adopted["actions"], len(prefix))
     session.close()
@@ -242,8 +260,10 @@ def main_worker_loop(
 
 def branch_worker_loop(
     cfg: FacilityConfig, job_queue: mp.Queue, result_queues: list[mp.Queue], stop_event,
+    worker_index: int = 0,
 ) -> None:
     """result_queues: every main worker's private results_queue, indexed by main_worker_index."""
+    _tag_worker_stderr("branch", worker_index)
     while True:
         try:
             item = job_queue.get(timeout=1.0)
@@ -261,7 +281,7 @@ def branch_worker_loop(
             "main_id": job.main_id, "floor": job.floor, "combat_index": job.combat_index,
             "branch_index": job.branch_index, "role": "branch",
         }, start_step=len(job.actions))
-        session = Sts2Session(logger=recorder)
+        session = Sts2BufferSession(logger=recorder)
         outcome = None
         result = None
         try:
@@ -306,10 +326,10 @@ class Facility:
             p.start()
             self.main_procs.append(p)
 
-        for _ in range(self.cfg.n_branch_workers):
+        for i in range(self.cfg.n_branch_workers):
             p = mp.Process(
                 target=branch_worker_loop,
-                args=(self.cfg, self.job_queue, self.main_result_queues, self.stop_event), daemon=True,
+                args=(self.cfg, self.job_queue, self.main_result_queues, self.stop_event, i), daemon=True,
             )
             p.start()
             self.branch_procs.append(p)
@@ -354,6 +374,10 @@ if __name__ == "__main__":
     parser.add_argument("--main-workers", type=int, default=1,
                          help="concurrent main lines sharing the branch-worker pool above -- raise "
                               "this to keep branch workers fed between combats (default: 1)")
+    parser.add_argument("--raw-dir", default="data/raw",
+                         help="where trial JSON gets written -- resolved against the process's "
+                              "cwd if relative (default: 'data/raw'), so pass an absolute path "
+                              "when invoking this script from outside agents/whispering_earring/")
     args = parser.parse_args()
 
     facility = Facility(FacilityConfig(
@@ -362,5 +386,6 @@ if __name__ == "__main__":
         branches_per_combat=args.branches_per_combat,
         n_main_workers=args.main_workers,
         n_main_trials=args.trials,
+        raw_dir=args.raw_dir,
     ))
     facility.run()

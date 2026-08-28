@@ -28,13 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 # The `sts2` conda env has two OpenMP runtimes loaded in the same process -- conda's
-# llvm-openmp (a numpy/scipy dependency) and the copy PyPI's torch wheel bundles itself -- which
-# aborts on import with "Error #15: Initializing libomp.dylib, but found libomp.dylib already
-# initialized" unless this is set. setdefault, not direct assignment, so an explicit override
-# (e.g. to debug the real conflict) still wins. Real fix would be installing torch via
-# conda-forge instead of pip so it shares conda's libomp instead of bundling its own; this is
-# the standard workaround in the meantime, done once here since every other module in this
-# package imports torch via `model`.
+# llvm-openmp (a numpy/scipy dependency) and the copy PyPI's torch wheel bundles itself
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import torch
@@ -45,6 +39,8 @@ from common.tokenizer import EntityVocab  # noqa: E402
 
 import sts2_path  # noqa: E402,F401  (sets sys.path to sts2-cli/python before the import below)
 from models import CombatPlay  # noqa: E402  (sts2-cli's python/models.py -- see ../README.md)
+import buffer_layout as bl  # noqa: E402  (sts2-cli's python/buffer_layout.py)
+from buffer_env import BufferDecision, decode_token  # noqa: E402
 
 # --- token types ------------------------------------------------------------------------------
 
@@ -208,6 +204,98 @@ def tokenize(decision: CombatPlay, gvocab: GlobalVocab) -> TokenBatch:
     )
 
 
+def tokenize_from_buffer(buf: BufferDecision, gvocab: GlobalVocab) -> TokenBatch:
+    """Buffer counterpart to tokenize() -- same token layout and feature math, read directly off
+    buf.arr via buffer_layout's offset accessors instead of a pydantic CombatPlay's attribute
+    tree."""
+    arr = buf.arr
+    types: list[int] = []
+    ids: list[int] = []
+    feats: list[list[float]] = []
+
+    def add(type_name: str, global_id: int, feature: list[float]) -> int:
+        pos = len(types)
+        types.append(_TYPE_TO_IDX[type_name])
+        ids.append(global_id)
+        assert len(feature) == FEATURE_DIM
+        feats.append(feature)
+        return pos
+
+    hp, max_hp = bl.player_hp(arr), bl.player_max_hp(arr)
+    en, max_en = bl.energy(arr), bl.max_energy(arr)
+    player_pos = add(
+        "PLAYER",
+        EntityVocab.PAD_IDX,
+        [
+            hp / max_hp if max_hp else 0.0,
+            _log1p(hp),
+            _log1p(bl.player_block(arr)),
+            0.0,
+            0.0,
+            en / max_en if max_en else 0.0,
+        ],
+    )
+
+    hand_pos: dict[int, int] = {}
+    for idx, slot in bl.hand_cards(arr):
+        entry = decode_token(bl.card_token(slot, 0))
+        pos = add(
+            "CARD",
+            gvocab.entity("card", entry),
+            [0.0, 0.0, 0.0, float(slot[bl.CARD_COST]), float(bl.hand_can_play(slot)),
+             float(bool(slot[bl.CARD_UPGRADED]))],
+        )
+        hand_pos[idx] = pos
+
+    enemy_pos: dict[int, int] = {}
+    for idx, slot in bl.enemies(arr):
+        _, intent_dmg = bl.enemy_intent(slot, 0)
+        intent_damage = intent_dmg if intent_dmg >= 0 else 0
+        eh, emh = bl.enemy_hp(slot), bl.enemy_max_hp(slot)
+        entry = decode_token(int(slot[0]))
+        pos = add(
+            "ENEMY",
+            gvocab.entity("enemy", entry),
+            [
+                eh / emh if emh else 0.0,
+                _log1p(eh),
+                _log1p(bl.enemy_block(slot)),
+                _log1p(intent_damage),
+                float(bl.enemy_intends_attack(slot)),
+                0.0,
+            ],
+        )
+        enemy_pos[idx] = pos
+
+    for _, slot in bl.player_relics(arr):
+        entry = decode_token(int(slot[bl.RELIC_TOKEN]))
+        counter = slot[bl.RELIC_COUNTER]
+        add(
+            "RELIC", gvocab.entity("relic", entry),
+            [0.0, 0.0, 0.0, _log1p(counter if counter != -1 else None), 0.0, 0.0],
+        )
+
+    potion_pos: dict[int, int] = {}
+    for idx, slot in bl.player_potions(arr):
+        entry = decode_token(int(slot[bl.POTION_TOKEN]))
+        pos = add("POTION", gvocab.entity("potion", entry), [0.0] * FEATURE_DIM)
+        potion_pos[idx] = pos
+
+    for _, slot in bl.player_powers(arr):
+        entry = decode_token(int(slot[0]))
+        add("PLAYER_POWER", gvocab.entity("power", entry), [0.0, 0.0, 0.0, _log1p(slot[1]), 0.0, 0.0])
+
+    return TokenBatch(
+        type_ids=torch.tensor(types, dtype=torch.long),
+        global_ids=torch.tensor(ids, dtype=torch.long),
+        features=torch.tensor(feats, dtype=torch.float),
+        player_pos=player_pos,
+        hand_pos=hand_pos,
+        enemy_pos=enemy_pos,
+        potion_pos=potion_pos,
+    )
+
+
 # --- legal options (the policy head's action space) -----------------------------------------------
 
 
@@ -231,6 +319,36 @@ def legal_options(decision: CombatPlay) -> list[tuple[str, dict]]:
                 options.append(("use_potion", {"potion_index": potion.index, "target_index": enemy.index}))
         else:
             options.append(("use_potion", {"potion_index": potion.index}))
+
+    return options
+
+
+def legal_options_from_buffer(buf: BufferDecision) -> list[tuple[str, dict]]:
+    """Buffer counterpart to legal_options() -- same enumeration, read off buf.arr. Needs
+    hand_target_type() (see buffer_layout.py) to tell AnyEnemy cards (fan out per enemy target)
+    apart from AllEnemies/Self/None cards (single no-target option); damage_by_target alone can't
+    make that distinction since AllEnemies cards also populate a damage row per enemy."""
+    arr = buf.arr
+    options: list[tuple[str, dict]] = [("end_turn", {})]
+    en = bl.energy(arr)
+    enemy_indices = [i for i, _ in bl.enemies(arr)]
+
+    for idx, slot in bl.hand_cards(arr):
+        if not bl.hand_can_play(slot) or int(slot[bl.CARD_COST]) > en:
+            continue
+        if bl.hand_target_type(slot) == "AnyEnemy" and len(enemy_indices) >= 2:
+            for enemy_idx in enemy_indices:
+                options.append(("play_card", {"card_index": idx, "target_index": enemy_idx}))
+        else:
+            options.append(("play_card", {"card_index": idx}))
+
+    for idx, slot in bl.player_potions(arr):
+        target_type = bl.POTION_TARGET_TYPES.get(int(slot[bl.POTION_TARGET_TYPE]))
+        if target_type == "AnyEnemy" and len(enemy_indices) >= 2:
+            for enemy_idx in enemy_indices:
+                options.append(("use_potion", {"potion_index": idx, "target_index": enemy_idx}))
+        else:
+            options.append(("use_potion", {"potion_index": idx}))
 
     return options
 
@@ -329,10 +447,20 @@ class ClawsNet(nn.Module):
         value = torch.tanh(self.value_mlp(h[batch.player_pos]).squeeze(-1))
         return logits, value
 
-    def forward(self, decision: CombatPlay) -> tuple[list[tuple[str, dict]], torch.Tensor, torch.Tensor]:
-        """Returns (options, logits [len(options)], value scalar) for one live decision."""
-        batch = tokenize(decision, self.gvocab)
-        options = legal_options(decision)
+    def forward(
+        self, decision: CombatPlay | BufferDecision
+    ) -> tuple[list[tuple[str, dict]], torch.Tensor, torch.Tensor]:
+        """Returns (options, logits [len(options)], value scalar) for one live decision. Accepts
+        either shape decision can arrive in: a pydantic CombatPlay (the main self-play line,
+        materialize.py's saved batches) or a buffer_env.BufferDecision (whispering_earring's
+        branch-worker/MCTS hot path -- see tokenize_from_buffer's docstring for why that path
+        avoids the pydantic one)."""
+        if isinstance(decision, BufferDecision):
+            batch = tokenize_from_buffer(decision, self.gvocab)
+            options = legal_options_from_buffer(decision)
+        else:
+            batch = tokenize(decision, self.gvocab)
+            options = legal_options(decision)
         logits, value = self.score(batch, options)
         return options, logits, value
 

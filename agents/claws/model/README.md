@@ -23,10 +23,16 @@ docstring for specifics and open questions.
   otherwise always resolve to the same drawn card every time; see `draws_cards`'s docstring. Two
   things from the doc are still genuinely underspecified (the dynamical formula's constants, what
   "argmax[Q(s,a)]" means for final action selection) -- `mcts.py`'s module docstring documents the
-  judgment call made for each rather than silently guessing. Wired into
-  `whispering_earring/policy.py` behind `CLAWS_MCTS` -- opt-in, not the default, since it means
-  spawning ~200 more sts2-cli subprocesses per combat decision from inside an already-running
-  self-play worker, a much bigger cost than the raw-network wiring below.
+  judgment call made for each rather than silently guessing. `select_edge`'s PUCT exploration term
+  uses `sqrt(1 + sum(N))`, not `sqrt(sum(N))`, so a freshly expanded node's first-ever selection
+  still weighs the network's priors instead of every edge scoring 0 and ties defaulting to
+  option 0 regardless of `P(s,a)`. Wired into `whispering_earring/policy.py` behind `CLAWS_MCTS`
+  -- opt-in, not the default, since it means spawning sts2-cli subprocesses for every genuinely
+  new tree node from inside an already-running self-play worker, a much bigger cost than the
+  raw-network wiring below. `N_SIMULATIONS` (200) is a per-*combat* budget, not per-decision --
+  `whispering_earring/policy.py`'s `CombatSimBudget` spends it down in chunks across a combat's
+  decisions and falls back to the raw network softmax once it's exhausted, rather than re-running
+  a full 200-simulation search at every single decision in the combat.
 
 `whispering_earring/policy.py` samples combat actions from a `ClawsNet` checkpoint's raw softmax
 policy (no search) when `CLAWS_CHECKPOINT` is set (and `CLAWS_MCTS` isn't) -- see its module

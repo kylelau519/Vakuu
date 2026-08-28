@@ -12,7 +12,7 @@ export CLAWS_CHECKPOINT="$vakuu/agents/claws/model/claws.pt"
 rm -f "$vakuu/agents/whispering_earring/data/raw/"*.json
 
 python "$vakuu/agents/whispering_earring/facility.py" \
-    --trials 1 --branch-workers 1 --branches-per-combat 1 --main-workers 1 \
+    --trials 1 --branch-workers 10 --branches-per-combat 30 --main-workers 1 \
     --raw-dir "$vakuu/agents/whispering_earring/data/raw"
 
 python "$vakuu/agents/claws/model/materialize.py" \

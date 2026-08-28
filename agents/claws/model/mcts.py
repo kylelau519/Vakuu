@@ -6,10 +6,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
-os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")  # see model.py's top -- two OpenMP
-# runtimes (conda's llvm-openmp + torch's bundled copy) otherwise abort on import. Set here too,
-# even though this module only imports torch lazily (net_evaluate), so it's set before torch
-# loads no matter what order a caller imports mcts.py vs. model.py in.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")  
 
 C_PUCT = 1.5
 N_SIMULATIONS = 200  # per combat, not per decision -- README.md's "## MCTS strategy"
@@ -32,6 +29,10 @@ def draws_cards(decision, action: tuple[str, dict]) -> bool:
     name, args = action
     if name != "play_card":
         return False
+    if hasattr(decision, "arr"):  # BufferDecision -- see buffer_env.py
+        import buffer_layout as bl
+        slot = next((s for i, s in bl.hand_cards(decision.arr) if i == args["card_index"]), None)
+        return slot is not None and bl.hand_stat(slot, "cards") > 0
     card = next((c for c in decision.hand if c.index == args["card_index"]), None)
     return bool(card and card.stats and card.stats.get("cards"))
 
@@ -164,46 +165,115 @@ def best_action(root: Node) -> tuple[str, dict]:
 
 
 def net_evaluate(net, decision) -> tuple[list[tuple[str, dict]], list[float], float]:
-    """EvaluateFn adapter for model.py's ClawsNet."""
+    """EvaluateFn adapter for model.py's ClawsNet. no_grad """
     import torch
 
-    options, logits, value = net.forward(decision)
+    with torch.no_grad():
+        options, logits, value = net.forward(decision)
     priors = torch.softmax(logits, dim=-1).tolist()
     return options, priors, value.item()
 
 
 class Sts2Env:
-    """Env adapter over a real sts2-cli session. Every call spawns a fresh subprocess and
-    replays action_log from scratch (open_from_checkpoint's approach) -- expensive (~1-2s), but
-    only paid when the tree creates a genuinely new node (see module docstring)."""
+    """Env adapter over a real sts2-cli session. Holds ONE persistent Sts2Session/subprocess for
+    this Env's whole lifetime, reused across every step() call -- not respawned per call. Spawning
+    a fresh dotnet subprocess is the expensive part (~1-2s); replaying action_log against an
+    already-running process is comparatively cheap (RunSimulator.cs's StartRun calls CleanUp()
+    and fully reinitializes before creating the new run, so restarting in place on the same
+    process is a legitimate full reset, not a half-measure). So the only cost worth eliminating
+    is the respawn, not the replay -- this used to pay that spawn cost on every single tree node.
+    Callers own this Env's lifetime and must call close() when done with it (one Env per combat,
+    not per decision -- see policy.py's CombatSimBudget, which creates one lazily and reuses it
+    across a whole combat's decisions).
+
+    DELIBERATELY still the JSON-protocol Sts2Session, NOT buffer_env.py's Sts2BufferSession,
+    even though the caller (policy.py's _choose_combat_action_mcts) already holds its own
+    Sts2BufferSession for the real combat this search is exploring around. sts2.dll's
+    RunManager.Instance and CombatManager.Instance are process-wide static singletons (confirmed
+    in the decompiled source), not per-RunSimulator state -- the JSON protocol is safe with
+    multiple concurrent sessions only because each Sts2Session is its own OS subprocess, hence
+    its own CLR, hence its own singleton instances. Two in-process RunSimulator/BufferSession
+    instances alive in the same process (the branch worker's real session + this search env)
+    would both drive the SAME global RunManager/CombatManager, silently corrupting each other's
+    game state -- reproduced as combat never progressing (a live combat_play decision repeating
+    for 1000+ steps with no HP change) once the real+search sessions were both buffer-backed in
+    the same process. A subprocess-per-Sts2Env avoids that by construction. Making the search
+    path buffer-fast too would need the subprocess to speak the buffer wire format over its
+    stdin/stdout pipe instead of JSON -- a real follow-up, not done here."""
 
     def __init__(self, character: str, seed: str, ascension: int = 0):
         self.character = character
         self.seed = seed
         self.ascension = ascension
+        self._session = None
+
+    def _get_session(self):
+        if self._session is None:
+            from env import Sts2Session  # sts2_path must already be on sys.path -- see __main__
+            self._session = Sts2Session()
+        return self._session
 
     def step(
         self, action_log: list[dict], action: tuple[str, dict], draw_seed: int | None = None
     ) -> Node:
-        from env import Sts2Session  # sts2_path must already be on sys.path -- see __main__
-
         name, args = action
-        session = Sts2Session()
+        session = self._get_session()
         try:
-            decision = session.start(self.character, self.seed, self.ascension)
-            for cmd in action_log:
-                decision = session.step(cmd["action"], **cmd.get("args", {}))
+            decision = session.open_from_checkpoint(
+                self.character, self.seed, self.ascension, action_log
+            )
             if draw_seed is not None:
                 session.randomize_draw_pile(decision, seed=draw_seed)
             decision = session.step(name, **args)
-            new_log = action_log + [{"cmd": "action", "action": name, "args": args}]
-            if decision.decision != "combat_play":
-                won = decision.decision == "game_over" and getattr(decision, "victory", False)
-                outcome = "won" if (won or decision.decision != "game_over") else "lost"
-                return Node(action_log=new_log, outcome=outcome)
-            return Node(action_log=new_log, decision=decision)
-        finally:
-            session.close()
+            log = action_log + [{"cmd": "action", "action": name, "args": args}]
+
+            # Mid-combat effects (Power Potion, Brand, ...) surface as a card_select decision
+            # that must be answered before combat can resume -- see facility.py's
+            # _play_combat_only, which loops on this the same way at the real-play layer.
+            # Auto-resolved here with a uniform random pick (mcts.py's action space --
+            # legal_options()/legal_options_from_buffer() -- has no notion of card_select as a
+            # chosen "option", so this stays internal to step() rather than becoming part of the
+            # search tree). Not treating this as terminal fixes a real bug this method used to
+            # have: folding ANY non-combat_play/non-game_over decision into an immediate "won" --
+            # discovered via a live combat where a searched use_potion triggered a card_select,
+            # got miscounted as an instant win, and corrupted that subtree badly enough to throw
+            # an "EnergyCostTooHigh" error (a stale legal_options entry replayed against a state
+            # it no longer described) a few simulations later.
+            while decision.decision == "card_select":
+                lo, hi = decision.min_select, min(decision.max_select, len(decision.cards))
+                n_pick = random.randint(lo, hi) if hi >= lo else 0
+                if n_pick == 0:
+                    cs_name, cs_args = "skip_select", {}
+                else:
+                    picks = random.sample(decision.cards, n_pick)
+                    cs_name, cs_args = "select_cards", {"indices": [c.index for c in picks]}
+                decision = session.step(cs_name, **cs_args)
+                entry: dict = {"cmd": "action", "action": cs_name}
+                if cs_args:
+                    entry["args"] = cs_args
+                log = log + [entry]
+        except Exception:
+            self.close()  # discard a possibly-corrupted session -- next step() spawns fresh
+            raise
+
+        if decision.decision == "combat_play":
+            return Node(action_log=log, decision=decision)
+        if decision.decision == "card_reward":
+            return Node(action_log=log, outcome="won")
+        if decision.decision == "game_over":
+            return Node(action_log=log, outcome="won" if getattr(decision, "victory", False) else "lost")
+        raise RuntimeError(
+            f"Sts2Env.step landed on unexpected decision type {decision.decision!r} -- combat "
+            "should only ever end on card_reward/game_over, or continue on combat_play/"
+            "card_select (auto-resolved above); anything else means an unhandled mid-combat "
+            "decision type is silently being treated as some other outcome, the same class of "
+            "bug facility.py's _play_combat_only guards against with its own assert."
+        )
+
+    def close(self) -> None:
+        if self._session is not None:
+            self._session.close()
+            self._session = None
 
 
 # --- self-test -------------------------------------------------------------------------------------
@@ -247,8 +317,8 @@ if __name__ == "__main__":
     print("mock self-test passed")
 
     # Small live smoke test -- proves Sts2Env/net_evaluate actually wire up against a real
-    # session + ClawsNet, kept tiny (12 sims, not the doc's 200) since each simulation here costs
-    # a real subprocess spawn.
+    # session + ClawsNet, kept tiny (12 sims, not the doc's 200) since Sts2Env still pays one
+    # real subprocess spawn on its first step() (just not one per simulation anymore).
     try:
         import sys
         from pathlib import Path
@@ -275,11 +345,15 @@ if __name__ == "__main__":
         session.close()
 
         net = ClawsNet(GlobalVocab(EntityVocab.load()))
-        live_root = run(
-            root_decision, root_prefix,
-            lambda d: net_evaluate(net, d), Sts2Env(character, seed, 0),
-            n_simulations=12,
-        )
+        live_env = Sts2Env(character, seed, 0)
+        try:
+            live_root = run(
+                root_decision, root_prefix,
+                lambda d: net_evaluate(net, d), live_env,
+                n_simulations=12,
+            )
+        finally:
+            live_env.close()
         print(f"\nlive smoke test: {sum(live_root.N)} simulations run, "
               f"best_action={best_action(live_root)}")
         for (a, args), n, w in itertools.islice(zip(live_root.options, live_root.N, live_root.W), 6):
