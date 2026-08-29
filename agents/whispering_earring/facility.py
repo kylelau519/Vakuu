@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from queue import Empty
 
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imports below)
-from env import Sts2Session
+from env import Sts2ActionError, Sts2Session
 from buffer_env import Sts2BufferSession
 from installation import ensure_setup
 
@@ -92,6 +92,26 @@ def _play_combat_only(session: Sts2BufferSession, decision) -> str:
             f"combat ended on unexpected decision {decision.decision!r} instead of card_reward/"
             "game_over -- would silently score this combat wrong if treated as resolved"
         )
+        if decision.decision == "card_reward":
+            # A branch's own reward pick is discarded either way -- only the main line's adopted
+            # actions matter, and it makes its own pick itself, via choose_action's generic
+            # card_reward handling, once _resolve_combat's replay of this branch's adopted
+            # actions reaches this same point (see main_worker_loop). So this must NOT go through
+            # session.step(), which would append skip_card_reward to session.action_log --
+            # _absorb_combat/_resolve_combat replay that log verbatim onto the main line when this
+            # branch is adopted, which would permanently bake "skip the reward" into the main
+            # line's own history and pre-empt its own pick before it ever runs. Calling the
+            # buffer session directly (bypassing step()'s action_log/logger side effects) still
+            # does what's actually needed here: RunSimulator's card-reward prompt blocks a real
+            # background thread (HeadlessCardSelector.GetSelectedCardReward's
+            # ManualResetEventSlim.Wait) until skip_card_reward/select_card_reward resolves it,
+            # and branch_worker_loop reuses this OS process for many jobs in sequence -- every
+            # branch that wins without releasing that thread permanently strands one more
+            # ThreadPool thread in the process. Discovered via later jobs on the same worker
+            # increasingly failing with "Sts2ActionError: No pending card reward".
+            raw = session._session.Action("skip_card_reward", None)
+            if session._decision(raw).decision == "error":
+                raise Sts2ActionError(session._session.LastError or "unknown error")
     finally:
         budget.close()
     died = decision.decision == "game_over"

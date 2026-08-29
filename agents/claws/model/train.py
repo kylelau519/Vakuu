@@ -92,7 +92,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--out", default="claws.pt")
-    parser.add_argument("--init", default=None, help="resume from an existing checkpoint")
+    parser.add_argument("--init", default="claws.pt", help="resume from an existing checkpoint")
     parser.add_argument("--value-only", action="store_true",
                          help="skip policy cross-entropy -- for datasets built without "
                               "CLAWS_MCTS, where recorded `policy` is noise, not real search "

@@ -26,7 +26,7 @@ python "$vakuu/agents/claws/model/materialize.py" \
 # uniform-random/raw-softmax noise, not real search signal -- drop --value-only once a later
 # round actually generates data with CLAWS_MCTS=1.
 python "$vakuu/agents/claws/model/train.py" \
-    "$vakuu/agents/claws/model/dataset.pt" --epochs 20 \
+    "$vakuu/agents/claws/model/dataset.pt" --epochs 50 \
     --out "$vakuu/agents/claws/model/claws.pt" \
-    --init "$CLAWS_CHECKPOINT" \
+    --init "$vakuu/agents/claws/model/claws.pt" \
     --value-only
