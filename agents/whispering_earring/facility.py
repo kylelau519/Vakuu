@@ -14,7 +14,7 @@ from buffer_env import Sts2BufferSession
 from installation import ensure_setup
 
 from checkpoint import BranchJob
-from policy import CombatSimBudget, choose_action
+from policy import choose_action, get_claws_net
 from recorder import CompactRecorder
 
 _SEED_WORDS = ["falcon", "ember", "wolf", "raven", "thorn", "comet", "storm", "harbor"]
@@ -58,7 +58,8 @@ def _tag_worker_stderr(label: str, worker_index: int) -> None:
 
 
 def _combat_value(hp_before: int, hp_after: int, max_hp: int, died: bool) -> float:
-    """Per-combat value target for recorder.py's end_combat()"""
+    """Terminal (combat-ending) value target for recorder.py's end_turn() -- used by
+    _play_turn_only for whichever turn actually ends the combat."""
     if died:
         return _DEATH_VALUE
     if not max_hp:
@@ -71,62 +72,99 @@ def _combat_value(hp_before: int, hp_after: int, max_hp: int, died: bool) -> flo
 class FacilityConfig:
     characters: list[str] = field(default_factory=lambda: ["Ironclad"])
     ascension: int = 0
-    branches_per_combat: int = 3  # side-copies spawned per combat, on top of the main line
+    branches_per_turn: int = 3  # side-copies spawned per turn, on top of the main line
     n_branch_workers: int = 4
     n_main_workers: int = 1  # concurrent main lines, sharing one branch-worker pool
     n_main_trials: int | None = None  # stop after this many main-line trials *total*; None = forever
     raw_dir: str = "data/raw"
 
 
-def _play_combat_only(session: Sts2BufferSession, decision) -> str:
-    hp_before, max_hp = decision.player_hp, decision.player_max_hp
-    session.logger.begin_combat()
-    budget = CombatSimBudget()
-    try:
-        while decision.decision in ("combat_play", "card_select"):
-            name, kwargs, policy = choose_action(decision, session, budget)
-            if policy is not None:
-                session.logger.attach_policy(policy)
-            decision = session.step(name, **kwargs)
-        assert decision.decision in ("card_reward", "game_over"), (
-            f"combat ended on unexpected decision {decision.decision!r} instead of card_reward/"
-            "game_over -- would silently score this combat wrong if treated as resolved"
+def _bypass_card_reward(session: Sts2BufferSession) -> None:
+    # A branch's own reward pick is discarded either way -- only the main line's adopted
+    # actions matter, and it makes its own pick itself, via choose_action's generic
+    # card_reward handling, once _resolve_turn's replay of this branch's adopted actions
+    # reaches this same point (see main_worker_loop). So this must NOT go through
+    # session.step(), which would append skip_card_reward to session.action_log --
+    # _absorb_actions/_resolve_turn replay that log verbatim onto the main line when this
+    # branch is adopted, which would permanently bake "skip the reward" into the main
+    # line's own history and pre-empt its own pick before it ever runs. Calling the
+    # buffer session directly (bypassing step()'s action_log/logger side effects) still
+    # does what's actually needed here: RunSimulator's card-reward prompt blocks a real
+    # background thread (HeadlessCardSelector.GetSelectedCardReward's
+    # ManualResetEventSlim.Wait) until skip_card_reward/select_card_reward resolves it,
+    # and branch_worker_loop reuses this OS process for many jobs in sequence -- every
+    # branch that wins without releasing that thread permanently strands one more
+    # ThreadPool thread in the process. Discovered via later jobs on the same worker
+    # increasingly failing with "Sts2ActionError: No pending card reward".
+    raw = session._session.Action("skip_card_reward", None)
+    if session._decision(raw).decision == "error":
+        raise Sts2ActionError(session._session.LastError or "unknown error")
+
+
+def _play_turn_only(
+    session: Sts2BufferSession, decision, combat_hp_before: int, combat_max_hp: int
+) -> str:
+    """Plays exactly one turn (through the mid-turn card_select edge case, e.g. Power Potion/
+    Brand, the same way the old whole-combat loop did) and scores it before returning --
+    "continue" if the combat carries on into another round, "won"/"lost" if this turn ended
+    it. See facility.py module context / the turn-level branch-and-adopt plan for why turns,
+    not whole combats, are the branch unit now."""
+    hp_before_turn = decision.player_hp
+    session.logger.begin_turn()
+    ended_turn = False
+    while decision.decision in ("combat_play", "card_select"):
+        name, kwargs, policy = choose_action(decision, session)
+        if policy is not None:
+            session.logger.attach_policy(policy)
+        decision = session.step(name, **kwargs)
+        if name == "end_turn":
+            ended_turn = True
+        if ended_turn and decision.decision == "combat_play":
+            break  # new round started -- this turn is fully resolved, combat continues
+    assert decision.decision in ("combat_play", "card_reward", "game_over"), (
+        f"turn ended on unexpected decision {decision.decision!r} -- would silently score "
+        "this turn wrong if treated as resolved"
+    )
+
+    if decision.decision == "card_reward":
+        _bypass_card_reward(session)
+        outcome = "won"
+        turn_value = _combat_value(combat_hp_before, decision.player_hp, combat_max_hp, died=False)
+    elif decision.decision == "game_over":
+        outcome = "lost"
+        turn_value = _combat_value(combat_hp_before, decision.player_hp, combat_max_hp, died=True)
+    else:
+        # Combat continues past this turn -- TD-bootstrap: this turn's own HP delta plus the
+        # current value network's estimate of the resulting state, rather than waiting to know
+        # the eventual whole-combat outcome. v_net stays 0.0 (an uninformative prior) until a
+        # checkpoint exists -- known limitation on round 1, same as the pre-existing
+        # uniform-random policy fallback for that round.
+        outcome = "continue"
+        v_net = 0.0
+        net = get_claws_net()
+        if net is not None:
+            _, _, value_t = net.forward(decision)
+            v_net = float(value_t.item())
+        hp_term = (
+            -(hp_before_turn - decision.player_hp) / combat_max_hp if combat_max_hp else 0.0
         )
-        if decision.decision == "card_reward":
-            # A branch's own reward pick is discarded either way -- only the main line's adopted
-            # actions matter, and it makes its own pick itself, via choose_action's generic
-            # card_reward handling, once _resolve_combat's replay of this branch's adopted
-            # actions reaches this same point (see main_worker_loop). So this must NOT go through
-            # session.step(), which would append skip_card_reward to session.action_log --
-            # _absorb_combat/_resolve_combat replay that log verbatim onto the main line when this
-            # branch is adopted, which would permanently bake "skip the reward" into the main
-            # line's own history and pre-empt its own pick before it ever runs. Calling the
-            # buffer session directly (bypassing step()'s action_log/logger side effects) still
-            # does what's actually needed here: RunSimulator's card-reward prompt blocks a real
-            # background thread (HeadlessCardSelector.GetSelectedCardReward's
-            # ManualResetEventSlim.Wait) until skip_card_reward/select_card_reward resolves it,
-            # and branch_worker_loop reuses this OS process for many jobs in sequence -- every
-            # branch that wins without releasing that thread permanently strands one more
-            # ThreadPool thread in the process. Discovered via later jobs on the same worker
-            # increasingly failing with "Sts2ActionError: No pending card reward".
-            raw = session._session.Action("skip_card_reward", None)
-            if session._decision(raw).decision == "error":
-                raise Sts2ActionError(session._session.LastError or "unknown error")
-    finally:
-        budget.close()
-    died = decision.decision == "game_over"
-    session.logger.end_combat(_combat_value(hp_before, decision.player_hp, max_hp, died))
-    return "lost" if died else "won"
+        turn_value = hp_term + v_net  # gamma = 1.0
+
+    session.logger.end_turn(turn_value)
+    return outcome
 
 
-def _spawn_branches(job_queue, main_worker_index: int, cfg: FacilityConfig, main_id: str, floor: int,
-                     combat_index: int, character: str, seed: str,
-                     actions_so_far: list[dict]) -> list[str]:
+def _spawn_turn_branches(
+    job_queue, main_worker_index: int, cfg: FacilityConfig, main_id: str, floor: int,
+    combat_index: int, turn_index: int, character: str, seed: str, actions_so_far: list[dict],
+    combat_hp_before: int, combat_max_hp: int,
+) -> list[str]:
     branch_ids = []
-    for b in range(cfg.branches_per_combat):
+    for b in range(cfg.branches_per_turn):
         job = BranchJob(
-            main_id=main_id, floor=floor, combat_index=combat_index, branch_index=b,
-            character=character, seed=seed, ascension=cfg.ascension,
+            main_id=main_id, floor=floor, combat_index=combat_index, turn_index=turn_index,
+            branch_index=b, character=character, seed=seed, ascension=cfg.ascension,
+            combat_hp_before=combat_hp_before, combat_max_hp=combat_max_hp,
             actions=list(actions_so_far),
         )
         job_queue.put((job, main_worker_index))
@@ -134,12 +172,26 @@ def _spawn_branches(job_queue, main_worker_index: int, cfg: FacilityConfig, main
     return branch_ids
 
 
-def _wait_for_combat_result(
-    results_queue, branch_ids: list[str], prefix_len: int, stop_event, timeout: float = 600
+def _turn_score_key(result: dict) -> tuple[int, float]:
+    """Ranks a turn-branch result for adoption: any non-"lost" outcome beats a "lost" one,
+    then maximize the branch's own end_turn()-backfilled value -- identical across every one
+    of its new actions (end_turn() backfills the same scalar onto the whole turn's range), so
+    the last new action's `value` is representative."""
+    outcome = result.get("outcome")
+    actions = result.get("actions") or []
+    value = actions[-1].get("value", float("-inf")) if actions else float("-inf")
+    return (0 if outcome == "lost" else 1, value)
+
+
+def _wait_for_turn_result(
+    results_queue, branch_ids: list[str], prefix_len: int, stop_event, timeout: float = 120
 ) -> dict | None:
     """Blocks on results_queue (branch_id, result) pairs pushed by branch_worker_loop the
-    moment its trial is saved, see its own docstring -- and returns as soon as one of
-    `branch_ids` reports a win, without waiting on the rest """
+    moment its trial is saved. Unlike the old whole-combat version, most branches here report
+    "continue" (combat still ongoing) rather than a terminal outcome, so they can't just be
+    accepted on first success -- every branch's turn_value (see _turn_score_key) is compared
+    once all have reported (or timed out). A branch that itself won the combat this turn is
+    still an immediate, unambiguous best pick."""
     usable: dict[str, dict] = {}
     pending = set(branch_ids)
     deadline = time.time() + timeout
@@ -149,7 +201,7 @@ def _wait_for_combat_result(
         except Empty:
             continue
         if branch_id not in pending:
-            continue  # stale result from an already-resolved earlier combat
+            continue  # stale result from an already-resolved earlier turn
         pending.discard(branch_id)
         if result is None or len(result.get("actions") or []) < prefix_len:
             continue  # branch errored before saving, or its prefix replay itself failed
@@ -157,9 +209,9 @@ def _wait_for_combat_result(
         if result.get("outcome") == "won":
             return result
     if pending:
-        print(f"warning: {len(pending)}/{len(branch_ids)} branch(es) didn't finish within "
+        print(f"warning: {len(pending)}/{len(branch_ids)} turn branch(es) didn't finish within "
               f"{timeout}s: {sorted(pending)}")
-    return next(iter(usable.values()), None)
+    return max(usable.values(), key=_turn_score_key) if usable else None
 
 
 def _clean_actions(actions: list[dict]) -> list[dict]:
@@ -170,8 +222,9 @@ def _clean_actions(actions: list[dict]) -> list[dict]:
     ]
 
 
-def _absorb_combat(recorder: CompactRecorder, full_actions: list[dict], prefix_len: int) -> None:
-    """Record the combat through logger"""
+def _absorb_actions(recorder: CompactRecorder, full_actions: list[dict], prefix_len: int) -> None:
+    """Record an adopted branch's newly-taken actions (one turn's worth, or a combat-ending
+    turn's) through logger."""
     for entry in full_actions[prefix_len:]:
         if "policy" in entry:
             recorder.attach_policy(entry["policy"])
@@ -180,36 +233,73 @@ def _absorb_combat(recorder: CompactRecorder, full_actions: list[dict], prefix_l
         recorder.log_action(entry)
 
 
-def _resolve_combat(
+def _resolve_turn(
     job_queue, results_queue, main_worker_index: int, cfg: FacilityConfig, recorder: CompactRecorder,
-    session: Sts2Session, character: str, seed: str, main_id: str, floor: int, combat_index: int, stop_event,
+    session: Sts2Session, character: str, seed: str, main_id: str, floor: int, combat_index: int,
+    turn_index: int, combat_hp_before: int, combat_max_hp: int, stop_event,
 ):
-    """Delegates one combat to cfg.branches_per_combat parallel attempts and adopts a result --
-    see the module docstring. Returns (session, decision, outcome): outcome is None if a combat
-    was resolved and the run should continue with the returned (freshly reopened) session/
-    decision; otherwise outcome is "lost" (an adopted branch actually died) or "error" (no
-    branch produced a usable result -- infra failure, not a death) and the caller should stop
-    -- the returned session/decision are then just the unchanged inputs, since there was
-    nothing to adopt."""
+    """Delegates one turn to cfg.branches_per_turn parallel attempts and adopts the
+    best-scoring result -- see the module docstring. Returns (session, decision, outcome):
+    outcome is "continue" if the combat carries on into another round (session/decision are
+    the freshly reopened main line, decision.decision == "combat_play"); "won"/"lost" if this
+    turn ended the combat; "error" if no branch produced a usable result -- infra failure, not
+    a death -- and the caller should stop, with session/decision left as the unchanged inputs
+    since there was nothing to adopt."""
     prefix = list(session.action_log)
-    branch_ids = _spawn_branches(
-        job_queue, main_worker_index, cfg, main_id, floor, combat_index, character, seed, prefix
+    branch_ids = _spawn_turn_branches(
+        job_queue, main_worker_index, cfg, main_id, floor, combat_index, turn_index,
+        character, seed, prefix, combat_hp_before, combat_max_hp,
     )
-    adopted = _wait_for_combat_result(results_queue, branch_ids, len(prefix), stop_event)
+    adopted = _wait_for_turn_result(results_queue, branch_ids, len(prefix), stop_event)
 
     if adopted is None:
         recorder.log_error(
-            f"combat {combat_index}: no usable branch results (0/{len(branch_ids)} usable)"
+            f"combat {combat_index} turn {turn_index}: no usable branch results "
+            f"(0/{len(branch_ids)} usable)"
         )
         return session, None, "error"
 
-    _absorb_combat(recorder, adopted["actions"], len(prefix))
+    _absorb_actions(recorder, adopted["actions"], len(prefix))
     session.close()
     new_session = Sts2Session(logger=recorder)
     new_decision = new_session.open_from_checkpoint(
         character, seed, cfg.ascension, _clean_actions(adopted["actions"])
     )
-    return new_session, new_decision, (None if adopted.get("outcome") == "won" else "lost")
+    return new_session, new_decision, adopted.get("outcome")  # "continue" | "won" | "lost"
+
+
+def _resolve_combat(
+    job_queue, results_queue, main_worker_index: int, cfg: FacilityConfig, recorder: CompactRecorder,
+    session: Sts2Session, decision, character: str, seed: str, main_id: str, combat_index: int, stop_event,
+):
+    """Drives _resolve_turn turn-by-turn until the combat actually ends. Returns (session,
+    decision, outcome) in _resolve_turn's original external shape: outcome is None if the
+    combat was won and the run should continue with the returned (freshly reopened) session/
+    decision; otherwise "lost" or "error" and the caller should stop."""
+    floor = decision.context.floor
+    combat_hp_before, combat_max_hp = decision.player.hp, decision.player.max_hp
+    turn_index = 0
+    while True:
+        turn_index += 1
+        session, decision, turn_outcome = _resolve_turn(
+            job_queue, results_queue, main_worker_index, cfg, recorder, session,
+            character, seed, main_id, floor, combat_index, turn_index,
+            combat_hp_before, combat_max_hp, stop_event,
+        )
+        if turn_outcome == "continue":
+            continue
+        if turn_outcome == "won":
+            # NOTE (2026-08-29): this is where the planned HealAndEnterCombat-based combat-variant
+            # fan-out (see whispering_earring_heal_reenter_branching_plan memory) will hook in once
+            # engine-integrity is confirmed. A won combat leaves `decision` on a pending
+            # `card_reward` -- HealAndEnterCombat called while that's still pending does NOT
+            # re-enter combat, it silently no-ops back onto card_reward (only healing HP as a side
+            # effect) instead of erroring, so a caller not checking decision.decision=="combat_play"
+            # would think it worked. Must call session.step("skip_card_reward") (or
+            # select_card_reward) first, THEN heal_and_enter_combat, whenever combat_outcome=="won".
+            # (No such gotcha on a loss -- heal_and_enter_combat works immediately from game_over.)
+            return session, decision, None
+        return session, decision, turn_outcome  # "lost" or "error"
 
 
 def main_worker_loop(
@@ -251,7 +341,7 @@ def main_worker_loop(
                         combat_index += 1
                         session, decision, combat_outcome = _resolve_combat(
                             job_queue, results_queue, main_worker_index, cfg, recorder, session,
-                            character, seed, main_id, decision.context.floor, combat_index, stop_event,
+                            decision, character, seed, main_id, combat_index, stop_event,
                         )
                         if combat_outcome is not None:
                             outcome = combat_outcome
@@ -299,7 +389,7 @@ def branch_worker_loop(
         recorder = CompactRecorder({
             "character": job.character, "seed": job.seed, "ascension": job.ascension,
             "main_id": job.main_id, "floor": job.floor, "combat_index": job.combat_index,
-            "branch_index": job.branch_index, "role": "branch",
+            "turn_index": job.turn_index, "branch_index": job.branch_index, "role": "branch",
         }, start_step=len(job.actions))
         session = Sts2BufferSession(logger=recorder)
         outcome = None
@@ -307,7 +397,7 @@ def branch_worker_loop(
         try:
             try:
                 decision = session.open_from_checkpoint(job.character, job.seed, job.ascension, job.actions)
-                outcome = _play_combat_only(session, decision)
+                outcome = _play_turn_only(session, decision, job.combat_hp_before, job.combat_max_hp)
             except Exception as e:
                 recorder.log_error(f"{type(e).__name__}: {e}")
                 outcome = "error"
@@ -390,7 +480,7 @@ if __name__ == "__main__":
     parser.add_argument("--branch-workers", type=int, default=4,
                          help="shared pool size -- serves branch jobs from every main worker, not "
                               "one dedicated set per main line (default: 4)")
-    parser.add_argument("--branches-per-combat", type=int, default=3)
+    parser.add_argument("--branches-per-turn", type=int, default=3)
     parser.add_argument("--main-workers", type=int, default=1,
                          help="concurrent main lines sharing the branch-worker pool above -- raise "
                               "this to keep branch workers fed between combats (default: 1)")
@@ -403,7 +493,7 @@ if __name__ == "__main__":
     facility = Facility(FacilityConfig(
         characters=args.characters,
         n_branch_workers=args.branch_workers,
-        branches_per_combat=args.branches_per_combat,
+        branches_per_turn=args.branches_per_turn,
         n_main_workers=args.main_workers,
         n_main_trials=args.trials,
         raw_dir=args.raw_dir,

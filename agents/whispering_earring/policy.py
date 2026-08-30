@@ -1,5 +1,5 @@
 """Non-combat (meta) decisions delegate to the Choices Paradox placeholder policy (agents/choices_paradox/policy.py), which
-scores cards off Baalorlord's STS2 tier lists instead of picking blindly 
+scores cards off Baalorlord's STS2 tier lists instead of picking blindly
 Map_select likewise delegates to Golden Compass (agents/golden_compass/
 policy.py), which value-to-go DPs the full map instead of picking a reachable node blindly.
 
@@ -10,13 +10,13 @@ command via actions.action(), no need to duplicate that here. `
 policy is None for every decision type except combat_play: it's a placeholder for the
 per-option distribution an MCTS search would produce.
 
-If the CLAWS_MCTS env var is set, combat is instead driven by mcts.py's PUCT search
-(_choose_combat_action_mcts), using ClawsNet as the (p, v) evaluator per README.md's "MCTS
-strategy" section
-
-Simulations are budgeted per *combat*, not per decision. -- CombatSimBudget below is created once per combat by facility.py's
-_play_combat_only and threaded through choose_action, so the ~200-simulation total is spent in
-chunks across.
+Combat decisions sample from ClawsNet's own softmax (_choose_combat_action_claws), or pick
+uniformly at random if no checkpoint is loaded yet -- this is what gives branch-to-branch
+diversity for facility.py's turn-level branch-and-adopt scheme (see its _resolve_turn),
+which now supplies the sequencing-search role an in-loop MCTS search used to play. mcts.py
+still exists (PUCT search over ClawsNet as the (p, v) evaluator) but is no longer wired into
+this live generation path -- it was too expensive against this engine's replay-only
+checkpointing (every simulation replays a combat's full history) for what it bought.
 """
 from __future__ import annotations
 
@@ -33,46 +33,7 @@ import buffer_layout as bl
 from buffer_env import BufferDecision
 
 _CLAWS_CHECKPOINT = os.environ.get("CLAWS_CHECKPOINT")
-_CLAWS_MCTS = os.environ.get("CLAWS_MCTS")
 _claws_net = None  # lazy-loaded once per worker process, on first combat decision -- see below
-_mcts_module = None  # lazy-loaded once per worker process, on first combat decision -- see below
-_mcts_net = None
-
-_MCTS_SIMS_PER_COMBAT = 200  
-_MCTS_SIMS_PER_DECISION = 20  
-class CombatSimBudget:
-    """Remaining MCTS simulation budget for one combat, and this combat's one persistent
-    Sts2Env. facility.py's _play_combat_only creates one fresh instance per combat and threads
-    it through choose_action, so _choose_combat_action_mcts spends down a shared per-combat
-    total instead of the N_SIMULATIONS-per-decision-regardless behavior the module docstring
-    above used to describe.
-
-    get_env() lazily creates mcts.py's Sts2Env on first use and hands back the same instance on
-    every later call within this combat -- Sts2Env itself holds one persistent sts2-cli
-    subprocess for its whole lifetime (see its docstring), so this is what makes "one subprocess
-    per combat" actually true across all of that combat's decisions, not just within a single
-    decision's own chunk of simulations. Caller (_play_combat_only) must call close() once the
-    combat ends to release the subprocess."""
-
-    def __init__(self, total: int = _MCTS_SIMS_PER_COMBAT):
-        self.remaining = total
-        self._env = None
-
-    def take(self, want: int) -> int:
-        n = max(0, min(want, self.remaining))
-        self.remaining -= n
-        return n
-
-    def get_env(self, character: str, seed: str, ascension: int):
-        if self._env is None:
-            mcts_module, _ = _load_mcts()
-            self._env = mcts_module.Sts2Env(character, seed, ascension)
-        return self._env
-
-    def close(self) -> None:
-        if self._env is not None:
-            self._env.close()
-            self._env = None
 
 _choices_paradox_path = Path(__file__).resolve().parents[1] / "choices_paradox" / "policy.py"
 _spec = importlib.util.spec_from_file_location("choices_paradox_policy", _choices_paradox_path)
@@ -90,10 +51,10 @@ _REST_HEAL_HP_THRESHOLD = 35
 _pending_card_select_purpose: str | None = None
 
 def choose_action(
-    decision: Decision | BufferDecision, session: Sts2Session, budget: CombatSimBudget | None = None
+    decision: Decision | BufferDecision, session: Sts2Session
 ) -> tuple[str, dict, dict | None]:
     if decision.decision == "combat_play":
-        return _choose_combat_action(decision, session, budget)
+        return _choose_combat_action(decision, session)
     name, kwargs = _choose_generic_action(decision, session)
     return name, kwargs, None
 
@@ -112,6 +73,14 @@ def _load_claws_net():
     return _claws_net
 
 
+def get_claws_net():
+    """Public accessor for facility.py's TD-bootstrap value term (_play_turn_only) -- reuses
+    this module's lazily-loaded ClawsNet (see _load_claws_net) rather than a second load in
+    the same branch-worker process. Returns None if CLAWS_CHECKPOINT isn't set (no checkpoint
+    yet -- round 1)."""
+    return _load_claws_net()
+
+
 def _choose_combat_action_claws(decision: CombatPlay, net) -> tuple[str, dict, dict]:
     """Samples (not argmax) from the network's own softmax over model.py's legal_options() """
     import torch
@@ -126,86 +95,9 @@ def _choose_combat_action_claws(decision: CombatPlay, net) -> tuple[str, dict, d
     return name, args, policy
 
 
-def _load_mcts():
-    """Lazily imports mcts.py (same directory-insert trick as _load_claws_net -- claws/model
-    isn't a package on sys.path by default) and builds its (p, v) evaluator net. Only called
-    when CLAWS_MCTS is set, so the import cost (and the eventual per-decision subprocess-spawn
-    cost) is opt-in.
-
-    Reuses CLAWS_CHECKPOINT's weights if that's also set; otherwise falls back to a freshly
-    initialized (untrained) ClawsNet, same as `train.py --epochs 0`'s claws.pt -- the search
-    still needs an evaluator to expand a leaf, an untrained one is just an uninformative prior
-    to search around rather than a real one."""
-    global _mcts_module, _mcts_net
-    if _mcts_module is not None:
-        return _mcts_module, _mcts_net
-
-    claws_model_dir = Path(__file__).resolve().parents[1] / "claws" / "model"
-    if str(claws_model_dir) not in sys.path:
-        sys.path.insert(0, str(claws_model_dir))
-    agents_dir = Path(__file__).resolve().parents[1]  # for `common` -- same as materialize.py/train.py
-    if str(agents_dir) not in sys.path:
-        sys.path.insert(0, str(agents_dir))
-    import mcts as mcts_module_
-    from model import ClawsNet, GlobalVocab  # noqa: E402  (path just inserted above)
-    from common.tokenizer import EntityVocab  # noqa: E402  (path just inserted above)
-
-    if _CLAWS_CHECKPOINT:
-        net = ClawsNet.from_checkpoint(_CLAWS_CHECKPOINT)
-    else:
-        net = ClawsNet(GlobalVocab(EntityVocab.load()))
-        net.eval()
-
-    _mcts_module, _mcts_net = mcts_module_, net
-    return _mcts_module, _mcts_net
-
-
-def _choose_combat_action_mcts(
-    decision: CombatPlay, session: Sts2Session, budget: CombatSimBudget | None
-) -> tuple[str, dict, dict]:
-    """Real search: mcts.py's PUCT tree over the same (action, args) option list as the
-    softmax/uniform-random paths, wrapping ClawsNet as the (p, v) evaluator per README.md's
-    "MCTS strategy" section. Spends _MCTS_SIMS_PER_DECISION out of `budget`'s per-combat total
-    -- once that's exhausted, falls back to the raw network softmax (_choose_combat_action_claws)
-    for the rest of the combat rather than running a token-sized (or zero-simulation) search.
-
-    Gets its Sts2Env from `budget.get_env()` (when a budget is given) rather than constructing
-    one directly -- that's what makes the underlying sts2-cli subprocess persist across this
-    combat's decisions instead of being respawned by every call here. A one-off caller with no
-    budget (e.g. mcts.py's own live smoke test) still gets a fresh Env each time, which is fine
-    for a single standalone call.
-    """
-    mcts_module, net = _load_mcts()
-    n_sims = (
-        budget.take(_MCTS_SIMS_PER_DECISION) if budget is not None else mcts_module.N_SIMULATIONS
-    )
-    if n_sims <= 0:
-        return _choose_combat_action_claws(decision, net)
-
-    env = (
-        budget.get_env(session.character, session.seed, session.ascension)
-        if budget is not None
-        else mcts_module.Sts2Env(session.character, session.seed, session.ascension)
-    )
-    evaluate_fn = lambda d: mcts_module.net_evaluate(net, d)  # noqa: E731
-    root = mcts_module.run(decision, list(session.action_log), evaluate_fn, env, n_simulations=n_sims)
-
-    total_n = sum(root.N)
-    policy = [
-        {"action": name, "args": args, "prob": n / total_n}
-        for (name, args), n in zip(root.options, root.N)
-    ]
-    idx = random.choices(range(len(root.options)), weights=root.N, k=1)[0]
-    name, args = root.options[idx]
-    return name, args, policy
-
-
 def _choose_combat_action(
-    decision: CombatPlay | BufferDecision, session: Sts2Session, budget: CombatSimBudget | None
+    decision: CombatPlay | BufferDecision, session: Sts2Session
 ) -> tuple[str, dict, dict]:
-    if _CLAWS_MCTS:
-        return _choose_combat_action_mcts(decision, session, budget)
-
     net = _load_claws_net()
     if net is not None:
         return _choose_combat_action_claws(decision, net)
@@ -333,7 +225,7 @@ def _choose_card_select_action(decision: Decision | BufferDecision) -> tuple[str
     alone can't tell those apart from a remove/upgrade select, and no purpose was staged for
     them.
 
-    A BufferDecision only ever reaches here from within _play_combat_only's loop (a mid-combat
+    A BufferDecision only ever reaches here from within _play_turn_only's loop (a mid-combat
     card_select -- Power Potion, Brand, ...); shop/rest_site (the only actions that ever set
     _pending_card_select_purpose) run on the main line's own pydantic-decision session, never a
     buffer one, so purpose is always None on this path -- no need for a buffer-aware

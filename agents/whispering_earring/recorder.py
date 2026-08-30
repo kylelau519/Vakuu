@@ -12,15 +12,18 @@ exists during the search itself. attach_policy() is the hook for recording it: c
 right before session.step() with the visit distribution that produced the upcoming action,
 and it gets attached to that action's entry in the saved file.
 
-Value is scoped per combat, not per trial. facility.py brackets each individual combat with
-begin_combat()/end_combat(value) -- value is computed from that one combat's own HP loss
-(README.md's Value head: "HP loss is used as the metric"), not the trial's eventual overall
-outcome, so a clean early win and a narrow late win in the same run get different training
-signal instead of being flattened to the same +1. end_combat() backfills every step recorded
-since the matching begin_combat() -- the value can only be known once the combat resolves,
-so it's applied retroactively to the range, not per-action like attach_policy(). Branch trials
-adopted by a main line already carry their own per-combat value in their saved file;
-facility.py's _absorb_combat replays those through attach_value() (an immediate, per-action
+Value is scoped per turn, not per combat or per trial. facility.py brackets each individual
+turn with begin_turn()/end_turn(value) -- every turn (including the one that ends the
+combat) gets its own value, so a turn that took damage to set up a good follow-up isn't
+flattened to the same scalar as every other turn in that combat. For a turn that ends the
+combat, value is the combat's own terminal HP-loss outcome (README.md's Value head: "HP loss
+is used as the metric"); for a turn that doesn't, it's a TD-bootstrapped estimate (this
+turn's HP delta plus the value network's own estimate of the resulting state) -- see
+facility.py's _play_turn_only for both formulas. end_turn() backfills every step recorded
+since the matching begin_turn() -- the value can only be known once the turn resolves, so
+it's applied retroactively to the range, not per-action like attach_policy(). Branch trials
+adopted by a main line already carry their own per-turn value in their saved file;
+facility.py's _absorb_actions replays those through attach_value() (an immediate, per-action
 counterpart to attach_policy()) rather than recomputing it.
 """
 from __future__ import annotations
@@ -37,7 +40,7 @@ class CompactRecorder:
         self._pending_policy: dict | None = None
         self._values: dict[int, float] = {}
         self._pending_value: float | None = None
-        self._combat_start: int | None = None
+        self._turn_start: int | None = None
         self._step = start_step
 
     def attach_policy(self, policy: dict) -> None:
@@ -46,21 +49,22 @@ class CompactRecorder:
     def attach_value(self, value: float) -> None:
         """Immediate counterpart to attach_policy(): assigns `value` to the *next* logged
         step. For replaying an adopted branch's already-scored actions (see facility.py's
-        _absorb_combat) -- for scoring a combat as it's actually played live, use
-        begin_combat()/end_combat() instead, since the value isn't known until it resolves."""
+        _absorb_actions) -- for scoring a turn as it's actually played live, use
+        begin_turn()/end_turn() instead, since the value isn't known until it resolves."""
         self._pending_value = value
 
-    def begin_combat(self) -> None:
-        self._combat_start = self._step
+    def begin_turn(self) -> None:
+        self._turn_start = self._step
 
-    def end_combat(self, value: float) -> None:
-        """Backfills `value` onto every step since the matching begin_combat() -- the
-        combat's outcome (and thus its value) is only known once it resolves, so unlike
-        attach_policy()/attach_value() this scores retroactively rather than the next step."""
-        assert self._combat_start is not None, "end_combat() with no matching begin_combat()"
-        for step in range(self._combat_start, self._step):
+    def end_turn(self, value: float) -> None:
+        """Backfills `value` onto every step since the matching begin_turn() -- a turn's
+        value (terminal outcome if it ends the combat, TD-bootstrap estimate otherwise) is
+        only known once it resolves, so unlike attach_policy()/attach_value() this scores
+        retroactively rather than the next step."""
+        assert self._turn_start is not None, "end_turn() with no matching begin_turn()"
+        for step in range(self._turn_start, self._step):
             self._values[step] = value
-        self._combat_start = None
+        self._turn_start = None
 
     def log_action(self, cmd: dict) -> None:
         if self._pending_policy is not None:

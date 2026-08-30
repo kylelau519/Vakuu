@@ -90,7 +90,7 @@ def main() -> None:
                          help="materialize.py output(s), e.g. dataset.pt "
                               "(omit with --epochs 0 to just save an untrained init checkpoint)")
     parser.add_argument("--epochs", type=int, default=5)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--out", default="claws.pt")
     parser.add_argument("--init", default="claws.pt", help="resume from an existing checkpoint")
     parser.add_argument("--value-only", action="store_true",
