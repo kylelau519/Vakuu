@@ -14,6 +14,19 @@ improving, or flat, at 3am?), every invocation:
      recorded so far, plus a per-round trend table (win rate / avg value / throughput over
      time) -- this is the "is it improving or doing nothing" view.
 
+Terminology (one main-line trial == one "seed" == one attempted STS2 run):
+
+- "combat": one resolved encounter (regular fight, elite, or boss) within a seed's run --
+  see facility.py's _resolve_combat, called once per encounter as the seed's main line steps
+  through the map. Not a whole run, and not a single turn within a fight.
+- "floor": the map floor (within an act) the game was on when that combat happened
+  (decision.context.floor at the time -- floors don't repeat within a run, they only
+  increase, but not every floor has a combat: rest sites, events, and shops don't).
+- "combat #" / combat_index: this combat's 1-indexed position within its own seed's run (the
+  2nd combat this seed fought is combat_index=2, wherever on the map it happened) -- this is
+  what answers "how many combats had this seed already fought by the time it reached floor
+  F?", since floor number alone conflates two runs that took different paths to get there.
+
 Two kinds of per-round data feed this:
 
 - Floor/outcome stats: (act, floor, outcome) is recorded live by facility.py's _resolve_combat
@@ -41,13 +54,25 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "claws" / "model"))
-import materialize  # noqa: E402  (_scan_trials -- shared-prefix branch grouping, reused as-is)
+materialize = bl = Sts2BufferSession = decode_token = ensure_setup = None  # see _import_card_stats_deps
 
-import sts2_path  # noqa: E402,F401  (sets sys.path to sts2-cli/python before the imports below)
-import buffer_layout as bl  # noqa: E402
-from buffer_env import Sts2BufferSession, decode_token  # noqa: E402
-from installation import ensure_setup  # noqa: E402
+
+def _import_card_stats_deps() -> None:
+    """Only the card offer/pick replay path (_card_stats/_init_card_worker) needs torch
+    (via materialize) and the CLR bridge (via buffer_env) -- --history-only and --no-card-stats
+    runs shouldn't have to pay for or even have those installed, so these are imported lazily
+    instead of at module load. Cheap to call more than once (sys.modules caches it)."""
+    global materialize, bl, Sts2BufferSession, decode_token, ensure_setup
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "claws" / "model"))
+    import materialize as _materialize  # _scan_trials -- shared-prefix branch grouping, reused as-is
+
+    import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imports below)
+    import buffer_layout as _bl
+    from buffer_env import Sts2BufferSession as _Sts2BufferSession, decode_token as _decode_token
+    from installation import ensure_setup as _ensure_setup
+
+    materialize, bl = _materialize, _bl
+    Sts2BufferSession, decode_token, ensure_setup = _Sts2BufferSession, _decode_token, _ensure_setup
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +118,7 @@ def _mtime_span(raw_dir: Path) -> float | None:
 
 def _floor_stats(main_trials: list[dict]) -> dict:
     per_floor: dict[tuple[int, int], dict[str, int]] = defaultdict(
-        lambda: {"combats": 0, "won": 0, "lost": 0}
+        lambda: {"combats": 0, "won": 0, "lost": 0, "combat_idx_sum": 0}
     )
     max_floor_per_run: dict[str, tuple[int, int]] = {}
 
@@ -103,6 +128,10 @@ def _floor_stats(main_trials: list[dict]) -> dict:
             key = (combat["act"], combat["floor"])
             per_floor[key]["combats"] += 1
             per_floor[key][combat["outcome"]] += 1
+            # combat_index is 1-indexed within *this* trial's own run -- summed here so the
+            # table below can show, per floor, the average number of combats a seed had
+            # already fought by the time it got there (see module docstring's Terminology).
+            per_floor[key]["combat_idx_sum"] += combat["combat_index"]
             if main_id not in max_floor_per_run or key > max_floor_per_run[main_id]:
                 max_floor_per_run[main_id] = key
 
@@ -122,7 +151,8 @@ def _fmt_rate(num: int, den: int) -> str:
 
 
 def _print_floor_table(per_floor: dict[str, dict], reached_floors: list, title: str) -> None:
-    print(f"\n-- {title}: floors --")
+    print(f"\n-- {title}: floors -- 'AvgCombat#' is, on average, how many combats a seed had "
+          f"already fought (this one included) by the time it fought at that floor --")
     if not per_floor:
         print("no combat stats found (no main-line files with a recorded 'combats' list yet).")
         return
@@ -130,12 +160,18 @@ def _print_floor_table(per_floor: dict[str, dict], reached_floors: list, title: 
     total_runs = len(reached)
     keys = sorted(tuple(int(x) for x in k.split(",")) for k in per_floor)
 
-    print(f"{'Act':>3} {'Floor':>5} {'Runs Reached':>12} {'Combats':>7} {'Won':>5} {'Lost':>5}")
+    print(f"{'Act':>3} {'Floor':>5} {'Runs Reached':>12} {'Combats':>7} {'Won':>5} {'Lost':>5} "
+          f"{'AvgCombat#':>10}")
     for act, floor in keys:
         stats = per_floor[f"{act},{floor}"]
         runs_reached = sum(1 for f in reached if f >= (act, floor))
-        print(f"{act:>3} {floor:>5} {runs_reached:>12} {stats.get('combats', 0):>7} "
-              f"{stats.get('won', 0):>5} {stats.get('lost', 0):>5}")
+        n_combats = stats.get("combats", 0)
+        idx_sum = stats.get("combat_idx_sum", 0)
+        # combat_index is always >= 1, so idx_sum == 0 here can only mean this bucket was
+        # aggregated from pre-upgrade history lines that don't carry the field yet.
+        avg_idx = f"{idx_sum / n_combats:.1f}" if n_combats and idx_sum else "n/a"
+        print(f"{act:>3} {floor:>5} {runs_reached:>12} {n_combats:>7} "
+              f"{stats.get('won', 0):>5} {stats.get('lost', 0):>5} {avg_idx:>10}")
     print(f"{total_runs} run(s) with combat data")
 
 
@@ -145,6 +181,42 @@ def _print_outcomes(outcomes: dict[str, int], title: str) -> None:
                                      or "none")
     line += f"  (win_rate={_fmt_rate(won, won + lost)})"
     print(line)
+
+
+def _seed_rows(main_trials: list[dict]) -> list[dict]:
+    """One row per seed (== per main-line trial) -- this round's raw material for the
+    aggregate floor/outcome tables above, but shown per-run since e.g. two seeds reaching
+    "act 1 floor 9" via 6 vs. 9 combats is lost once they're blended into one bucket. Doesn't
+    survive into --history-file: raw_dir's per-seed files get wiped every round (see module
+    docstring), so this view only ever covers "this round"."""
+    rows = []
+    for trial in main_trials:
+        combats = trial.get("combats", [])
+        reached = max(((c["act"], c["floor"]) for c in combats), default=None)
+        rows.append({
+            "seed": trial.get("seed", "?"),
+            "character": trial.get("character", "?"),
+            "n_combats": len(combats),
+            "n_won": sum(1 for c in combats if c["outcome"] == "won"),
+            "n_lost": sum(1 for c in combats if c["outcome"] == "lost"),
+            "reached": reached,
+            "outcome": trial.get("outcome", "unknown"),
+        })
+    rows.sort(key=lambda r: (r["reached"] or (0, 0)), reverse=True)
+    return rows
+
+
+def _print_seed_table(rows: list[dict], title: str) -> None:
+    print(f"\n-- {title}: per-seed -- one row per attempted run --")
+    if not rows:
+        print("no main-line trials found.")
+        return
+    print(f"{'Seed':<20} {'Character':<10} {'Combats':>7} {'Won':>5} {'Lost':>5} "
+          f"{'Reached':>9} {'Outcome':>9}")
+    for r in rows:
+        reached = f"{r['reached'][0]},{r['reached'][1]}" if r["reached"] else "n/a"
+        print(f"{r['seed']:<20} {r['character']:<10} {r['n_combats']:>7} {r['n_won']:>5} "
+              f"{r['n_lost']:>5} {reached:>9} {r['outcome']:>9}")
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +235,8 @@ _card_session: Sts2BufferSession | None = None
 
 
 def _init_card_worker() -> None:
+    # Fresh subprocess (ProcessPoolExecutor spawns) -- doesn't inherit the parent's lazy import.
+    _import_card_stats_deps()
     # Sts2BufferSession loads Sts2Headless's CLR in-process, and its [SIM]/[INFO] logging
     # writes unconditionally to this process's real fd 2 -- silence it the same way
     # materialize.py's workers do.
@@ -213,6 +287,7 @@ def _card_stats(raw_dir: Path, jobs: int) -> tuple[dict[str, list], list[float],
     """Returns (name -> [n_offered, n_picked, prob_mass], all turn-values seen, groups skipped,
     total groups). Empty/zero if there's nothing to replay yet (e.g. round 1 before any branch
     has finished)."""
+    _import_card_stats_deps()
     paths = [str(p) for p in raw_dir.glob("*.json")]
     try:
         _, groups = materialize._scan_trials(paths)
@@ -304,7 +379,9 @@ def _append_history(history_file: Path, record: dict) -> None:
 
 
 def _aggregate(records: list[dict]) -> dict:
-    per_floor: dict[str, dict] = defaultdict(lambda: {"combats": 0, "won": 0, "lost": 0})
+    per_floor: dict[str, dict] = defaultdict(
+        lambda: {"combats": 0, "won": 0, "lost": 0, "combat_idx_sum": 0}
+    )
     reached_floors: list = []
     outcomes: dict[str, int] = defaultdict(int)
     card_stats: dict[str, list] = defaultdict(lambda: [0, 0, 0.0])
@@ -319,6 +396,7 @@ def _aggregate(records: list[dict]) -> dict:
             row["combats"] += v.get("combats", 0)
             row["won"] += v.get("won", 0)
             row["lost"] += v.get("lost", 0)
+            row["combat_idx_sum"] += v.get("combat_idx_sum", 0)  # absent in pre-upgrade history lines -> 0
         reached_floors.extend(rec.get("reached_floors", []))
         for k, v in rec.get("outcomes", {}).items():
             outcomes[k] += v
@@ -398,11 +476,43 @@ def main() -> None:
     parser.add_argument("--no-card-stats", action="store_true",
                          help="skip the replay-based card offer/pick table (faster; floor/"
                               "outcome stats only, still logged to history)")
+    parser.add_argument("--history-only", action="store_true",
+                         help="just pretty-print --history-file's cumulative Summary/trend "
+                              "tables and exit -- doesn't touch --raw-dir or append a new round. "
+                              "For casually checking progress (e.g. mid-run) without the "
+                              "raw_dir's current contents or a card-stats replay pass")
+    parser.add_argument("--trend-limit", type=int, default=40,
+                         help="how many of the most recent rounds to show in the trend table "
+                              "(default: 40)")
     args = parser.parse_args()
 
     raw_dir = Path(args.raw_dir)
     history_file = (Path(args.history_file) if args.history_file
                      else raw_dir.parent / "stats_history.jsonl")
+
+    if args.history_only:
+        history = _read_history(history_file)
+        if not history:
+            print(f"no history found in {history_file}")
+            return
+        cumulative = _aggregate(history)
+        print(f"=== Summary: cumulative across {cumulative['n_rounds']} round(s) "
+              f"in {history_file} ===")
+        _print_floor_table(cumulative["per_floor"], cumulative["reached_floors"], "Summary")
+        _print_outcomes(cumulative["outcomes"], "Summary")
+        _print_card_table(cumulative["card_stats"], "Summary")
+        _print_value_summary(cumulative["value_summary"], "Summary turn value")
+        if cumulative["n_branch_errors"]:
+            print(f"Summary branch trial errors: {cumulative['n_branch_errors']}/"
+                  f"{cumulative['n_branch_trials']}")
+        if cumulative["gen_wall_seconds_total"]:
+            total_trials = cumulative["n_main_trials"] + cumulative["n_branch_trials"]
+            rate = total_trials / cumulative["gen_wall_seconds_total"] * 3600
+            print(f"lifetime generation throughput: {total_trials} trial(s) over "
+                  f"{cumulative['gen_wall_seconds_total'] / 3600:.2f}h of generation time "
+                  f"(~{rate:.1f} trials/hr)")
+        _print_trend(history, limit=args.trend_limit)
+        return
 
     main_trials, n_branch, n_branch_errors = _load_trials(raw_dir)
     floor = _floor_stats(main_trials)
@@ -417,11 +527,13 @@ def main() -> None:
 
     _print_floor_table(floor["per_floor"], floor["reached_floors"], "This round")
     _print_outcomes(floor["outcomes"], "This round")
+    _print_seed_table(_seed_rows(main_trials), "This round")
 
     card_total: dict[str, list] = {}
     values: list[float] = []
     n_groups = skipped = 0
     if not args.no_card_stats:
+        _import_card_stats_deps()
         ensure_setup()
         card_total, values, skipped, n_groups = _card_stats(raw_dir, args.jobs)
         _print_card_table(card_total, "This round")
@@ -475,7 +587,7 @@ def main() -> None:
               f"{cumulative['gen_wall_seconds_total'] / 3600:.2f}h of generation time "
               f"(~{rate:.1f} trials/hr)")
 
-    _print_trend(all_records)
+    _print_trend(all_records, limit=args.trend_limit)
 
 
 if __name__ == "__main__":
