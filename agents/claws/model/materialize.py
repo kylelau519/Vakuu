@@ -1,34 +1,8 @@
-"""Turns whispering_earring trial files into tokenized training examples -- the "materializing
-training features" step CompactRecorder's docstring calls out as a deliberate, one-time offline
-step, since trial files store only the action log + recorded policy/value, never full state (see
-../README.md's Data section).
+"""Turns whispering_earring trial files into tokenized training examples 
 
 Every branch spawned by whispering_earring's turn-level branch-and-adopt (see
 ../../whispering_earring/facility.py) replays an identical shared prefix before diverging on its
-own first action. Only that first novel action (`i == prefix_len`) is ever directly comparable
-against siblings that replayed the same prefix -- everything deeper in a branch's own tail shares
-that turn's single backfilled value (recorder.py's end_turn()) and, per train.py's module
-docstring, never contributes a policy term regardless (only `policy_real` examples do). So a
-branch's tail past its first action was never pulling weight worth its replay cost: this module
-groups branch trials by their shared (main_id, prefix) key (`_scan_trials`), replays that shared
-prefix exactly ONCE per group (not once per sibling), and emits one `policy_real` example per
-sibling straight from its own recorded first action + value -- no per-sibling replay at all. Where
-`branches_per_turn` siblings used to each pay a full prefix replay (the same O(depth) cost
-`facility.py`'s own generation pays, multiplied by branch count), this pays it once per group.
-
-`_build_baselines`'s REINFORCE-style baseline (mean realized `value` across every sibling that
-diverged from the same turn-start decision) still applies per group: a branch's own `value` minus
-that baseline is its *advantage* -- how much better or worse its first action did than the turn's
-own average -- and it's this advantage, not a fitted target distribution, that trains the policy
-head (see train.py's module docstring): positive advantage pushes that action's probability up,
-negative pushes it down, directly and in proportion. A group needs at least 2 distinct first
-actions among its siblings to have a real baseline at all (a single observed option is no
-comparison); groups that never got that get skipped entirely, no replay wasted on them either.
-
-Main-line trials (whichever branch each turn's checkpoint actually adopted) are unaffected by any
-of this -- they still get a full, ordinary replay (`materialize_main_trial`), since they're few
-relative to the branch-file count and are the source of every non-`policy_real` (value-only)
-training example.
+own first action. 
 
 Usage:
     conda activate sts2
@@ -71,9 +45,7 @@ def _same_option(option: tuple[str, dict], recorded: dict) -> bool:
 
 def _option_index(options: list[tuple[str, dict]], entry: dict) -> int | None:
     """Which slot in the model's own legal_options_from_buffer() matches the action a trial
-    actually recorded -- that's the index net.score()'s logits are ordered by, so it's what a
-    policy-gradient loss needs to know which log-prob to push on. None if somehow absent from
-    the current option list (shouldn't happen for a legal recorded action; defensive)."""
+    actually recorded"""
     for i, option in enumerate(options):
         if _same_option(option, entry):
             return i
@@ -117,8 +89,7 @@ def _group_baseline(group: _Group) -> float | None:
 def _scan_trials(paths: list[str]) -> tuple[list[str], dict[tuple, _Group]]:
     """Single read pass over every trial file: classifies each as main-line (its bare path,
     for full replay via materialize_main_trial) or branch (grouped by the exact shared prefix
-    it replayed before diverging). Keyed by (main_id, prefix) rather than prefix alone so two
-    unrelated runs can't collide on a coincidentally-identical short prefix."""
+    it replayed before diverging)."""
     main_paths: list[str] = []
     groups: dict[tuple, _Group] = {}
 
@@ -233,24 +204,12 @@ _session: Sts2BufferSession | None = None
 
 
 def _silence_worker_stderr() -> None:
-    """Sts2BufferSession's CLR writes unprompted [SIM]/[INFO] lines straight to this process's
-    real fd 2 on every action (see clr_bridge.silence_stderr's docstring), and Console.Error dups
-    fd 2 once on first access -- redirecting afterwards is a no-op. So this must run before the
-    first Sts2BufferSession() in this process. Unlike facility.py's _tag_worker_stderr (which
-    relays through a tagged pipe so several branch workers stay distinguishable on one terminal),
-    materialize.py's workers have nothing worth surfacing there -- failures already come back
-    through the task's return value -- so this just drops fd 2 to devnull for good."""
     devnull_fd = os.open(os.devnull, os.O_WRONLY)
     os.dup2(devnull_fd, 2)
     os.close(devnull_fd)
 
 
 def _init_worker() -> None:
-    # One session per worker, reused across every trial/group that worker handles via
-    # session.start() (not one Sts2BufferSession() per task) -- constructing a BufferSession is
-    # the expensive part (it loads this process's in-process CLR on first use, see
-    # buffer_env.py/clr_bridge.py, and allocates the native buffer), while start() just resets
-    # it for a new run.
     _silence_worker_stderr()
     global _gvocab, _session
     _gvocab = GlobalVocab(EntityVocab.load())

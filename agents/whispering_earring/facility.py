@@ -21,10 +21,8 @@ from recorder import CompactRecorder
 
 _SEED_WORDS = ["falcon", "ember", "wolf", "raven", "thorn", "comet", "storm", "harbor"]
 
-# README.md's Value head: "HP loss is used as the metric. Every combat allows mall hp loss as
-# chip damage to avoid strongly discouraging values."
-_CHIP_DAMAGE_ALLOWANCE = 3
-_DEATH_VALUE = -1.0
+_HEALTHY_HP_FRACTION = 0.5
+_LOW_HP_SLOPE = 3.0
 
 
 def _random_seed() -> str:
@@ -44,25 +42,7 @@ _CONTROL_SEQUENCE_RE = re.compile(
 def _tag_worker_stderr(label: str, worker_index: int, log_queue: mp.Queue) -> None:
     """Sts2BufferSession loads Sts2Headless's CLR in-process (clr_bridge.load_clr), and its
     [SIM]/[INFO] logging writes unconditionally to this process's real fd 2 (Console.Error
-    dups it once on first access). With many branch workers as separate processes sharing one
-    inherited terminal, those writes interleave with no way to tell workers apart. Redirect fd 2
-    to a pipe *before* the CLR loads and relay it through a background thread -- this must run
-    before the first Sts2BufferSession() call in this process, since re-pointing fd 2 after the
-    CLR has dup'd it is a no-op.
-
-    The relay thread does NOT write to the real terminal itself -- it strips control/escape
-    sequences out of each line (_CONTROL_SEQUENCE_RE; the CLR's raw stderr is unsanitized, e.g. an
-    uncaught .NET exception can dump arbitrary bytes) and puts (worker_index, clean_line) onto
-    log_queue for Facility's single log-writer thread to print. That thread is the *only* thing
-    that ever writes to the real terminal on this path: terminal (pty) writes from independent
-    OS processes are not guaranteed atomic, so with n_branch_workers processes each writing their
-    own colored tag directly, the kernel can interleave two processes' writes mid-sequence and
-    splice together bytes neither one sent -- e.g. one process's own "\\x1b[" landing right before
-    another's line that happens to start with "i" completes "ESC[i", ANSI "Media Copy" (print
-    screen), which iTerm2 maps straight to its Print dialog. Funneling every worker's output
-    through one queue and one consumer thread removes the concurrent writers entirely, so there's
-    nothing left to interleave -- stripping foreign sequences (still done here, defense in depth)
-    is no longer load-bearing on its own."""
+    dups it once on first access)."""
     read_fd, write_fd = os.pipe()
     os.dup2(write_fd, 2)
     os.close(write_fd)
@@ -78,9 +58,7 @@ def _tag_worker_stderr(label: str, worker_index: int, log_queue: mp.Queue) -> No
 
 def _log_writer_loop(log_queue: mp.Queue) -> None:
     """Runs in a single background thread in the parent (Facility) process -- the only writer to
-    the real terminal for every branch worker's relayed stderr, so their output can never
-    interleave at the byte level. See _tag_worker_stderr for why that matters. Sentinel `None`
-    shuts it down once every branch process has exited (pushed by Facility.stop())."""
+    the real terminal for every branch worker's relayed stderr."""
     while True:
         item = log_queue.get()
         if item is None:
@@ -92,15 +70,21 @@ def _log_writer_loop(log_queue: mp.Queue) -> None:
         sys.stderr.flush()
 
 
-def _combat_value(hp_before: int, hp_after: int, max_hp: int, died: bool) -> float:
+def _combat_value(hp_after: int, max_hp: int, died: bool) -> float:
     """Terminal (combat-ending) value target for recorder.py's end_turn() -- used by
-    _play_turn_only for whichever turn actually ends the combat."""
-    if died:
-        return _DEATH_VALUE
+    _play_turn_only for whichever turn actually ends the combat. Continuous in the resulting
+    HP fraction across the death boundary (hp_after is forced to 0 when died, not handled as a
+    separate case) -- see this module's _HEALTHY_HP_FRACTION/_LOW_HP_SLOPE comment for why: a
+    branch that barely died and a sibling that barely survived, from the same branch-and-adopt
+    turn-start, shouldn't be scored a full cliff apart for what may have been a marginal
+    difference."""
     if not max_hp:
         return 1.0
-    excess_loss = max(0, (hp_before - hp_after) - _CHIP_DAMAGE_ALLOWANCE)
-    return 1.0 - excess_loss / max_hp
+    hp_frac = max(0.0, hp_after) / max_hp if not died else 0.0
+    if hp_frac >= _HEALTHY_HP_FRACTION:
+        return hp_frac
+    shortfall = _HEALTHY_HP_FRACTION - hp_frac
+    return _HEALTHY_HP_FRACTION - shortfall * _LOW_HP_SLOPE
 
 
 @dataclass
@@ -116,20 +100,7 @@ class FacilityConfig:
 
 def _bypass_card_reward(session: Sts2BufferSession) -> None:
     # A branch's own reward pick is discarded either way -- only the main line's adopted
-    # actions matter, and it makes its own pick itself, via choose_action's generic
-    # card_reward handling, once _resolve_turn's replay of this branch's adopted actions
-    # reaches this same point (see main_worker_loop). So this must NOT go through
-    # session.step(), which would append skip_card_reward to session.action_log --
-    # _absorb_actions/_resolve_turn replay that log verbatim onto the main line when this
-    # branch is adopted, which would permanently bake "skip the reward" into the main
-    # line's own history and pre-empt its own pick before it ever runs. Calling the
-    # buffer session directly (bypassing step()'s action_log/logger side effects) still
-    # does what's actually needed here: RunSimulator's card-reward prompt blocks a real
-    # background thread (HeadlessCardSelector.GetSelectedCardReward's
-    # ManualResetEventSlim.Wait) until skip_card_reward/select_card_reward resolves it,
-    # and branch_worker_loop reuses this OS process for many jobs in sequence -- every
-    # branch that wins without releasing that thread permanently strands one more
-    # ThreadPool thread in the process. Discovered via later jobs on the same worker
+    # actions matter, and it makes its own pick itself. Discovered via later jobs on the same worker
     # increasingly failing with "Sts2ActionError: No pending card reward".
     raw = session._session.Action("skip_card_reward", None)
     if session._decision(raw).decision == "error":
@@ -164,16 +135,11 @@ def _play_turn_only(
     if decision.decision == "card_reward":
         _bypass_card_reward(session)
         outcome = "won"
-        turn_value = _combat_value(combat_hp_before, decision.player_hp, combat_max_hp, died=False)
+        turn_value = _combat_value(decision.player_hp, combat_max_hp, died=False)
     elif decision.decision == "game_over":
         outcome = "lost"
-        turn_value = _combat_value(combat_hp_before, decision.player_hp, combat_max_hp, died=True)
+        turn_value = _combat_value(decision.player_hp, combat_max_hp, died=True)
     else:
-        # Combat continues past this turn -- TD-bootstrap: this turn's own HP delta plus the
-        # current value network's estimate of the resulting state, rather than waiting to know
-        # the eventual whole-combat outcome. v_net stays 0.0 (an uninformative prior) until a
-        # checkpoint exists -- known limitation on round 1, same as the pre-existing
-        # uniform-random policy fallback for that round.
         outcome = "continue"
         v_net = 0.0
         net = get_claws_net()
@@ -183,7 +149,7 @@ def _play_turn_only(
         hp_term = (
             -(hp_before_turn - decision.player_hp) / combat_max_hp if combat_max_hp else 0.0
         )
-        turn_value = 0.75 * hp_term + 0.25 * v_net  # gamma = 1.0
+        turn_value = 0.75 * hp_term + 1 * v_net 
 
     session.logger.end_turn(turn_value)
     return outcome
@@ -274,12 +240,7 @@ def _resolve_turn(
     turn_index: int, combat_hp_before: int, combat_max_hp: int, stop_event,
 ):
     """Delegates one turn to cfg.branches_per_turn parallel attempts and adopts the
-    best-scoring result -- see the module docstring. Returns (session, decision, outcome):
-    outcome is "continue" if the combat carries on into another round (session/decision are
-    the freshly reopened main line, decision.decision == "combat_play"); "won"/"lost" if this
-    turn ended the combat; "error" if no branch produced a usable result -- infra failure, not
-    a death -- and the caller should stop, with session/decision left as the unchanged inputs
-    since there was nothing to adopt."""
+    best-scoring result """
     prefix = list(session.action_log)
     branch_ids = _spawn_turn_branches(
         job_queue, main_worker_index, cfg, main_id, floor, combat_index, turn_index,
@@ -307,10 +268,7 @@ def _resolve_combat(
     job_queue, results_queue, main_worker_index: int, cfg: FacilityConfig, recorder: CompactRecorder,
     session: Sts2Session, decision, character: str, seed: str, main_id: str, combat_index: int, stop_event,
 ):
-    """Drives _resolve_turn turn-by-turn until the combat actually ends. Returns (session,
-    decision, outcome) in _resolve_turn's original external shape: outcome is None if the
-    combat was won and the run should continue with the returned (freshly reopened) session/
-    decision; otherwise "lost" or "error" and the caller should stop."""
+    """Drives _resolve_turn turn-by-turn until the combat actually ends."""
     act = decision.context.act
     floor = decision.context.floor
     combat_hp_before, combat_max_hp = decision.player.hp, decision.player.max_hp

@@ -109,16 +109,18 @@ paths have at most one entry per `card_index`. The list shape is what lets a rea
 more than one — trial files recorded with `CLAWS_MCTS` set do exactly that, no format change
 needed.
 
-`value` is scoped per combat, not per trial, per this section's own Value head spec ("HP loss is
-used as the metric"): `whispering_earring/facility.py`'s `_combat_value` scores each combat from
-its own hp-before/hp-after (via `recorder.py`'s `begin_combat()`/`end_combat()`, backfilled onto
-just that combat's actions once it resolves), not the trial's eventual overall outcome — so a
-clean early win and a narrow late win in the same run get different training signal instead of
-being flattened to the same `1.0`. A clean win (HP loss within `_CHIP_DAMAGE_ALLOWANCE`, a small
-allowance so ordinary chip damage doesn't count against it) scores `1.0`; a costlier win scores
-progressively lower; death is a hard `-1.0` regardless of HP left, since dying always outranks any
-win. A combat a trial never reaches (e.g. it errors out mid-run) gets no value on any of its
-actions: an aborted combat says nothing about whether the actions in it were good.
+`value` is scoped per turn, not per trial or per combat (see `recorder.py`'s
+`begin_turn()`/`end_turn()`, backfilled onto just that turn's actions once it resolves) — so a
+turn that took damage to set up a good follow-up scores differently from one that didn't, instead
+of the whole combat being flattened to one scalar. The turn that actually ends a combat is scored
+by `whispering_earring/facility.py`'s `_combat_value`, graded on the *resulting* HP fraction of
+max HP, not loss relative to that combat's own starting HP: at or above `_HEALTHY_HP_FRACTION`
+(0.5) the grade is just that fraction (`1.0` at full health, gently lower as it drops); below it
+the same formula continues at a steeper slope (`_LOW_HP_SLOPE`), so death (HP fraction `0`) falls
+out of that same curve at exactly `-1.0` rather than being a separately injected penalty on top of
+whatever the fall to low HP already cost. A combat a trial never reaches (e.g. it errors out
+mid-run) gets no value on any of its actions: an aborted combat says nothing about whether the
+actions in it were good.
 
 Non-`combat_play` actions in the same file (`map_select`, `card_reward`, ...) never carry a `policy`
 or `value` — only combat is currently policy-driven; meta decisions delegate to Choices Paradox /

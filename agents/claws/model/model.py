@@ -1,22 +1,9 @@
-"""Untrained skeleton of the network described in README.md -- tokenizer -> typed-token
+"""The network described in README.md -- tokenizer -> typed-token
 transformer -> policy/value heads. Exists to prove the shapes described in the README actually
 compose (a `CombatPlay` decision in, a policy over legal options + a scalar value out), not as a
 trained or tuned model. Run directly (`python model.py`, `sts2` conda env) for a smoke test against
 a real captured decision from schema/tests/fixtures/ironclad_run_01.jsonl.
 
-Scope deliberately cut from this v0 to keep the skeleton small: draw/discard/exhaust pile cards,
-`history` scaling counters, enemy `powers`, orbs/stars/osty. None of those are wired into tokens or
-features yet -- add a token type + feature block for each the same way CARD/ENEMY/RELIC/POTION/
-PLAYER_POWER are done below when they're needed.
-
-Legal-option enumeration (`legal_options`) is the model's own action space, not a copy of
-whispering_earring/policy.py's -- that module's `_choose_combat_action` only ever samples one
-random candidate target per AnyEnemy card (see its docstring), since it's a placeholder for
-generating *some* self-play data, not a definition of the action space. This module enumerates
-every (card, target) and (potion, target) pair, matching what an MCTS expansion would actually
-need to score as separate children (see ../README.md's MCTS strategy section). The two will only
-ever produce different-shaped option lists for multi-target decisions -- expected, not a bug to
-reconcile, until MCTS replaces the placeholder policy.
 """
 from __future__ import annotations
 
@@ -63,10 +50,7 @@ def _log1p(x: float | int | None) -> float:
 class GlobalVocab:
     """EntityVocab (common/tokenizer.py) indexes each category from 2 independently -- card id 5
     and potion id 5 are unrelated entities that collide if fed straight into one shared embedding
-    table. README.md's `self.emb[global_id]` wants one table, so this offsets each category by
-    the cumulative size of the categories before it, giving every (category, local_id) pair a
-    unique row. Wrapping EntityVocab rather than changing it -- Choices Paradox/Golden Compass
-    still want the plain per-category indices for their own (non-shared-embedding) use."""
+    table. """
 
     def __init__(self, vocab: EntityVocab):
         self.vocab = vocab
@@ -93,9 +77,7 @@ class GlobalVocab:
 @dataclass
 class TokenBatch:
     """Tokens for a single decision (batch size 1 -- see ClawsNet.forward's docstring for why
-    batching is deferred). Index maps point from a schema field's own `index` (HandCard.index,
-    Enemy.index, Potion.index) to that entity's row in the token tensors, since those indices
-    aren't dense/0-based-contiguous once options are filtered (see legal_options)."""
+    batching is deferred)."""
 
     type_ids: torch.Tensor  # [N] long
     global_ids: torch.Tensor  # [N] long
@@ -326,8 +308,7 @@ def legal_options(decision: CombatPlay) -> list[tuple[str, dict]]:
 def legal_options_from_buffer(buf: BufferDecision) -> list[tuple[str, dict]]:
     """Buffer counterpart to legal_options() -- same enumeration, read off buf.arr. Needs
     hand_target_type() (see buffer_layout.py) to tell AnyEnemy cards (fan out per enemy target)
-    apart from AllEnemies/Self/None cards (single no-target option); damage_by_target alone can't
-    make that distinction since AllEnemies cards also populate a damage row per enemy."""
+    apart from AllEnemies/Self/None cards (single no-target option)."""
     arr = buf.arr
     options: list[tuple[str, dict]] = [("end_turn", {})]
     en = bl.energy(arr)
@@ -379,10 +360,7 @@ class TransformerBlock(nn.Module):
 class ClawsNet(nn.Module):
     @classmethod
     def from_checkpoint(cls, path: str, **kwargs) -> "ClawsNet":
-        """Loads a train.py-saved state_dict against a freshly loaded vocab. Vocab and
-        checkpoint must agree (vocab_ids.json unchanged since training -- see
-        common/tokenizer.py's module docstring on why that file is a breaking change, not a
-        routine regen); load_state_dict raises on a shape mismatch if they don't."""
+        """Loads a train.py-saved state_dict against a freshly loaded vocab."""
         net = cls(GlobalVocab(EntityVocab.load()), **kwargs)
         net.load_state_dict(torch.load(path, weights_only=True))
         net.eval()
@@ -405,9 +383,7 @@ class ClawsNet(nn.Module):
         self.value_mlp = nn.Sequential(nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, 1))
 
     def encode(self, batch: TokenBatch) -> torch.Tensor:
-        """Returns per-token hidden states [N, dim] for one decision (no batch dim -- MCTS calls
-        this once per leaf node with a single freshly-tokenized state, so there's no natural
-        batch axis to pad token counts against; revisit if training throughput needs batching)."""
+        """Returns per-token hidden states [N, dim] for one decision."""
         tok = self.id_emb(batch.global_ids) + self.type_emb(batch.type_ids)
         for t in TOKEN_TYPES:
             mask = batch.type_ids == _TYPE_TO_IDX[t]

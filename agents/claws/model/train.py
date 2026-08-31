@@ -1,38 +1,16 @@
 """Trains ClawsNet on materialize.py's output.
 
-Batch size 1, no padding: each example has a different token count and option count
-(materialize.py's output isn't rectangular), the same constraint ClawsNet.encode/score already
-assume -- see their docstrings, MCTS calls them one leaf at a time too. Revisit if batch-size-1
-throughput actually becomes a bottleneck; padding/masking to batch examples is a real complexity
-jump not worth taking preemptively.
-
-Value loss is plain MSE against the recorded `value`, every example, always real (a combat's
-HP-loss outcome is real no matter what policy generated the trajectory).
+Batch saize 1, no padding: each example has a different token count and option count
+(materialize.py's output isn't rectangular).
 
 Policy loss is an advantage-weighted log-likelihood, not cross-entropy against a fitted target
 distribution -- see materialize.py's module docstring for where `advantage` comes from
-(whispering_earring's turn-level branch-and-adopt: a branch's own realized `value` minus the
-mean value across every sibling branch that replayed the same turn-start). `policy_loss =
--advantage * log_prob(action_index)`: a positive advantage (this action did better than the
-turn's own average) pushes that action's probability up on minimization; a negative advantage
-pushes it down, directly, not just "less pull toward it than something else" the way a softmax
-target would. Only examples with `policy_real = True` (materialize.py's `_build_baselines` found
->= 2 distinct first actions to compare) carry a meaningful `advantage`/`action_index` and ever
-contribute this term -- everything else (`policy_real = False`) trains the value head only, same
-reasoning as before: with nothing to compare against, there's no real signal to train on.
-
---value-only is a global override that skips the policy term entirely even on `policy_real`
-examples -- for A/B comparison.
+ 
+`policy_loss =-advantage * log_prob(action_index)`: a positive advantage pushes that action's probability up on minimization; a negative advantage
+pushes it down.
 
 Note policy_loss can be negative here (when advantage < 0, minimizing it means driving that
-action's probability *down*) -- expected for this signed objective, not a bug. This loss also
-has no floor the way cross-entropy does (-advantage*log_prob keeps growing in magnitude as
-log_prob -> -inf, it never saturates once a target is matched), so `_normalize_advantages`
-rescales advantages to zero-mean/unit-std before training -- keeps step size independent of
-that round's raw HP-loss scale, though it doesn't remove the underlying unboundedness. Pair
-with a modest epoch count (this is closer to on-policy RL than supervised imitation of a fixed
-label set -- grinding many epochs against the same static advantages risks the collapse
-normalization alone won't fully prevent).
+action's probability *down*)
 
 Usage:
     conda activate sts2
@@ -67,14 +45,7 @@ from model import ClawsNet, GlobalVocab, TokenBatch  # noqa: E402
 
 
 def _normalize_advantages(examples: list[dict]) -> None:
-    """In-place, zero-mean/unit-std across every policy_real example's advantage. Raw
-    advantages are HP-loss-scale (see materialize.py's _build_baselines) with no fixed
-    reference -- without this, step size on the policy term drifts with whatever scale that
-    round's combats happened to produce, and -advantage*log_prob(a) has no floor as
-    log_prob->-inf (unlike bounded cross-entropy), so an ungoverned scale is what turns normal
-    training into runaway collapse over many epochs. Standard practice for advantage-weighted
-    policy gradients (e.g. PPO); doesn't remove that unboundedness, just keeps typical step
-    size sane -- still pair with a modest epoch count, not 50."""
+    """In-place, zero-mean/unit-std across every policy_real example's advantage."""
     advantages = [ex["advantage"] for ex in examples if ex.get("policy_real", False)]
     if not advantages:
         return
