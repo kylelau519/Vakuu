@@ -38,8 +38,18 @@ _CONTROL_SEQUENCE_RE = re.compile(
     r"|[\x00-\x08\x0b-\x1f\x7f]"
 )
 
+# Sts2Headless's [SIM]/[INFO] logging is all free text through one generic Log() call in the
+# engine -- there's no separate "milestone" vs. "per-action" log level to hook. In non-verbose
+# mode (the default), only lines matching this are relayed -- the per-turn/per-room events that
+# tell you a branch is actually advancing, not every card play, potion use, or RNG roll inside it.
+_MILESTONE_RE = re.compile(
+    r"Creating RunState|Rooms generated|Run launched|relics finalized|Entered Act|"
+    r"EnterRoom:|Post-combat:|Moving to map coord|Card reward pending|Selected card reward|"
+    r"Bundle selection pending|has won against encounter|has lost"
+)
 
-def _tag_worker_stderr(label: str, worker_index: int, log_queue: mp.Queue) -> None:
+
+def _tag_worker_stderr(label: str, worker_index: int, log_queue: mp.Queue, verbose: bool) -> None:
     """Sts2BufferSession loads Sts2Headless's CLR in-process (clr_bridge.load_clr), and its
     [SIM]/[INFO] logging writes unconditionally to this process's real fd 2 (Console.Error
     dups it once on first access)."""
@@ -51,7 +61,8 @@ def _tag_worker_stderr(label: str, worker_index: int, log_queue: mp.Queue) -> No
         with os.fdopen(read_fd) as pipe_reader:
             for line in pipe_reader:
                 clean = _CONTROL_SEQUENCE_RE.sub("", line)
-                log_queue.put((label, worker_index, clean))
+                if verbose or _MILESTONE_RE.search(clean):
+                    log_queue.put((label, worker_index, clean))
 
     threading.Thread(target=relay, daemon=True, name=f"stderr-relay-{label}-{worker_index}").start()
 
@@ -96,6 +107,7 @@ class FacilityConfig:
     n_main_workers: int = 1  # concurrent main lines, sharing one branch-worker pool
     n_main_trials: int | None = None  # stop after this many main-line trials *total*; None = forever
     raw_dir: str = "data/raw"
+    verbose: bool = False  # relay every branch worker's [SIM]/[INFO] line, not just milestones
 
 
 def _bypass_card_reward(session: Sts2BufferSession) -> None:
@@ -369,7 +381,7 @@ def branch_worker_loop(
     log_queue: mp.Queue, worker_index: int = 0,
 ) -> None:
     """result_queues: every main worker's private results_queue, indexed by main_worker_index."""
-    _tag_worker_stderr("branch", worker_index, log_queue)
+    _tag_worker_stderr("branch", worker_index, log_queue, cfg.verbose)
     while True:
         try:
             item = job_queue.get(timeout=1.0)
@@ -498,6 +510,10 @@ if __name__ == "__main__":
                          help="where trial JSON gets written -- resolved against the process's "
                               "cwd if relative (default: 'data/raw'), so pass an absolute path "
                               "when invoking this script from outside agents/whispering_earring/")
+    parser.add_argument("--verbose", action="store_true",
+                         help="relay every branch worker's [SIM]/[INFO] line (card plays, RNG "
+                              "rolls, etc.) instead of just per-turn/per-room milestones "
+                              "(default: milestones only)")
     args = parser.parse_args()
 
     facility = Facility(FacilityConfig(
@@ -507,5 +523,6 @@ if __name__ == "__main__":
         n_main_workers=args.main_workers,
         n_main_trials=args.trials,
         raw_dir=args.raw_dir,
+        verbose=args.verbose,
     ))
     facility.run()
