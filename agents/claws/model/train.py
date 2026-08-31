@@ -6,11 +6,19 @@ Batch saize 1, no padding: each example has a different token count and option c
 Policy loss is an advantage-weighted log-likelihood, not cross-entropy against a fitted target
 distribution -- see materialize.py's module docstring for where `advantage` comes from
  
-`policy_loss =-advantage * log_prob(action_index)`: a positive advantage pushes that action's probability up on minimization; a negative advantage
-pushes it down.
+`policy_loss = -advantage * log_prob(action_index).clamp(min=_LOGP_FLOOR)`: a positive advantage
+pushes that action's probability up on minimization; a negative advantage pushes it down.
 
 Note policy_loss can be negative here (when advantage < 0, minimizing it means driving that
-action's probability *down*)
+action's probability *down*). The log_prob floor exists because that push-down direction is
+otherwise unbounded: log_prob(action) -> -inf as prob(action) -> 0, so a fixed dataset replayed
+over many epochs (this isn't on-policy REINFORCE -- the same (state, action, advantage) triples
+recur every epoch) has no equilibrium and drives every negative-advantage action's probability to
+exactly 0, collapsing the whole policy to one-hot. Clamping log_prob at _LOGP_FLOOR still lets a
+bad action get actively penalized (same sign, same gradient direction) but gives that penalty a
+floor -- once the action's probability is low enough, the clamp zeroes the gradient instead of
+chasing it further. The positive-advantage side never needed this: pushing prob(action) -> 1
+saturates naturally at log_prob = 0.
 
 Usage:
     conda activate sts2
@@ -42,6 +50,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # for `common`
 from common.tokenizer import EntityVocab  # noqa: E402
 
 from model import ClawsNet, GlobalVocab, TokenBatch  # noqa: E402
+
+_LOGP_FLOOR = -6.0  # ~0.25% probability -- see module docstring for why this exists
 
 
 def _normalize_advantages(examples: list[dict]) -> None:
@@ -82,7 +92,8 @@ def train(
 
             if train_policy:
                 log_probs = F.log_softmax(logits, dim=-1)
-                policy_loss = -ex["advantage"] * log_probs[ex["action_index"]]
+                log_prob = log_probs[ex["action_index"]].clamp(min=_LOGP_FLOOR)
+                policy_loss = -ex["advantage"] * log_prob
                 loss = policy_loss + value_loss
             else:
                 loss = value_loss

@@ -20,7 +20,7 @@ while true; do
 
     echo "[2/4] Running facility.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility.py" \
-        --trials 3 --branch-workers 30 --branches-per-turn 40 --main-workers 3 \
+        --trials 3 --branch-workers 30 --branches-per-turn 30 --main-workers 3 \
         --raw-dir "$vakuu/agents/whispering_earring/data/raw"
     # branches_per_turn spends roughly branches_per_turn x turns-per-combat branch-worker-
     # seconds per combat now (branching happens once per turn, not once per whole combat) --
