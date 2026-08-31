@@ -3,6 +3,8 @@ from __future__ import annotations
 import multiprocessing as mp
 import os
 import random
+import re
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -31,19 +33,36 @@ def _random_seed() -> str:
 
 _WORKER_TAG_COLORS = [31, 32, 33, 34, 35, 36, 91, 92, 93, 94, 95, 96]  # ANSI red..bright-cyan
 
+# Strips ANSI/terminal control sequences (CSI, OSC, lone ESC) and other C0 control bytes (except
+# \t/\n) out of relayed worker output before it reaches the real terminal -- see _tag_worker_stderr.
+_CONTROL_SEQUENCE_RE = re.compile(
+    r"\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])"
+    r"|[\x00-\x08\x0b-\x1f\x7f]"
+)
 
-def _tag_worker_stderr(label: str, worker_index: int) -> None:
+
+def _tag_worker_stderr(label: str, worker_index: int, log_queue: mp.Queue) -> None:
     """Sts2BufferSession loads Sts2Headless's CLR in-process (clr_bridge.load_clr), and its
     [SIM]/[INFO] logging writes unconditionally to this process's real fd 2 (Console.Error
     dups it once on first access). With many branch workers as separate processes sharing one
     inherited terminal, those writes interleave with no way to tell workers apart. Redirect fd 2
-    to a pipe *before* the CLR loads and relay it through a background thread that prefixes every
-    line with a colored worker tag -- this must run before the first Sts2BufferSession() call in
-    this process, since re-pointing fd 2 after the CLR has dup'd it is a no-op."""
-    color = _WORKER_TAG_COLORS[worker_index % len(_WORKER_TAG_COLORS)]
-    tag = f"\x1b[{color}m[{label} {worker_index}]\x1b[0m"
+    to a pipe *before* the CLR loads and relay it through a background thread -- this must run
+    before the first Sts2BufferSession() call in this process, since re-pointing fd 2 after the
+    CLR has dup'd it is a no-op.
 
-    real_stderr = os.fdopen(os.dup(2), "w")
+    The relay thread does NOT write to the real terminal itself -- it strips control/escape
+    sequences out of each line (_CONTROL_SEQUENCE_RE; the CLR's raw stderr is unsanitized, e.g. an
+    uncaught .NET exception can dump arbitrary bytes) and puts (worker_index, clean_line) onto
+    log_queue for Facility's single log-writer thread to print. That thread is the *only* thing
+    that ever writes to the real terminal on this path: terminal (pty) writes from independent
+    OS processes are not guaranteed atomic, so with n_branch_workers processes each writing their
+    own colored tag directly, the kernel can interleave two processes' writes mid-sequence and
+    splice together bytes neither one sent -- e.g. one process's own "\\x1b[" landing right before
+    another's line that happens to start with "i" completes "ESC[i", ANSI "Media Copy" (print
+    screen), which iTerm2 maps straight to its Print dialog. Funneling every worker's output
+    through one queue and one consumer thread removes the concurrent writers entirely, so there's
+    nothing left to interleave -- stripping foreign sequences (still done here, defense in depth)
+    is no longer load-bearing on its own."""
     read_fd, write_fd = os.pipe()
     os.dup2(write_fd, 2)
     os.close(write_fd)
@@ -51,10 +70,26 @@ def _tag_worker_stderr(label: str, worker_index: int) -> None:
     def relay() -> None:
         with os.fdopen(read_fd) as pipe_reader:
             for line in pipe_reader:
-                real_stderr.write(f"{tag} {line}")
-                real_stderr.flush()
+                clean = _CONTROL_SEQUENCE_RE.sub("", line)
+                log_queue.put((label, worker_index, clean))
 
     threading.Thread(target=relay, daemon=True, name=f"stderr-relay-{label}-{worker_index}").start()
+
+
+def _log_writer_loop(log_queue: mp.Queue) -> None:
+    """Runs in a single background thread in the parent (Facility) process -- the only writer to
+    the real terminal for every branch worker's relayed stderr, so their output can never
+    interleave at the byte level. See _tag_worker_stderr for why that matters. Sentinel `None`
+    shuts it down once every branch process has exited (pushed by Facility.stop())."""
+    while True:
+        item = log_queue.get()
+        if item is None:
+            return
+        label, worker_index, line = item
+        color = _WORKER_TAG_COLORS[worker_index % len(_WORKER_TAG_COLORS)]
+        tag = f"\x1b[{color}m[{label} {worker_index}]\x1b[0m"
+        sys.stderr.write(f"{tag} {line}")
+        sys.stderr.flush()
 
 
 def _combat_value(hp_before: int, hp_after: int, max_hp: int, died: bool) -> float:
@@ -148,7 +183,7 @@ def _play_turn_only(
         hp_term = (
             -(hp_before_turn - decision.player_hp) / combat_max_hp if combat_max_hp else 0.0
         )
-        turn_value = hp_term + v_net  # gamma = 1.0
+        turn_value = 0.75 * hp_term + 0.25 * v_net  # gamma = 1.0
 
     session.logger.end_turn(turn_value)
     return outcome
@@ -276,6 +311,7 @@ def _resolve_combat(
     decision, outcome) in _resolve_turn's original external shape: outcome is None if the
     combat was won and the run should continue with the returned (freshly reopened) session/
     decision; otherwise "lost" or "error" and the caller should stop."""
+    act = decision.context.act
     floor = decision.context.floor
     combat_hp_before, combat_max_hp = decision.player.hp, decision.player.max_hp
     turn_index = 0
@@ -288,6 +324,8 @@ def _resolve_combat(
         )
         if turn_outcome == "continue":
             continue
+        if turn_outcome in ("won", "lost"):
+            recorder.record_combat(act, floor, combat_index, turn_outcome)
         if turn_outcome == "won":
             # NOTE (2026-08-29): this is where the planned HealAndEnterCombat-based combat-variant
             # fan-out (see whispering_earring_heal_reenter_branching_plan memory) will hook in once
@@ -370,10 +408,10 @@ def main_worker_loop(
 
 def branch_worker_loop(
     cfg: FacilityConfig, job_queue: mp.Queue, result_queues: list[mp.Queue], stop_event,
-    worker_index: int = 0,
+    log_queue: mp.Queue, worker_index: int = 0,
 ) -> None:
     """result_queues: every main worker's private results_queue, indexed by main_worker_index."""
-    _tag_worker_stderr("branch", worker_index)
+    _tag_worker_stderr("branch", worker_index, log_queue)
     while True:
         try:
             item = job_queue.get(timeout=1.0)
@@ -390,6 +428,7 @@ def branch_worker_loop(
             "character": job.character, "seed": job.seed, "ascension": job.ascension,
             "main_id": job.main_id, "floor": job.floor, "combat_index": job.combat_index,
             "turn_index": job.turn_index, "branch_index": job.branch_index, "role": "branch",
+            "prefix_len": len(job.actions),
         }, start_step=len(job.actions))
         session = Sts2BufferSession(logger=recorder)
         outcome = None
@@ -416,14 +455,21 @@ class Facility:
     def __init__(self, cfg: FacilityConfig):
         self.cfg = cfg
         self.job_queue: mp.Queue = mp.Queue()  # shared dispatch pool -- every main worker feeds it
+        self.log_queue: mp.Queue = mp.Queue()  # every branch worker's relayed stderr -- see _tag_worker_stderr
         self.stop_event = mp.Event()
         self.trial_counter = mp.Value("i", 0) if cfg.n_main_trials is not None else None
         self.main_procs: list[mp.Process] = []
         self.main_result_queues: list[mp.Queue] = []
         self.branch_procs: list[mp.Process] = []
+        self.log_thread: threading.Thread | None = None
 
     def start(self) -> None:
         ensure_setup()  # once, here -- not per-session, which would repeat the same checks
+
+        self.log_thread = threading.Thread(
+            target=_log_writer_loop, args=(self.log_queue,), daemon=True, name="branch-log-writer",
+        )
+        self.log_thread.start()
 
         self.main_result_queues.extend(mp.Queue() for _ in range(self.cfg.n_main_workers))
 
@@ -439,7 +485,8 @@ class Facility:
         for i in range(self.cfg.n_branch_workers):
             p = mp.Process(
                 target=branch_worker_loop,
-                args=(self.cfg, self.job_queue, self.main_result_queues, self.stop_event, i), daemon=True,
+                args=(self.cfg, self.job_queue, self.main_result_queues, self.stop_event, self.log_queue, i),
+                daemon=True,
             )
             p.start()
             self.branch_procs.append(p)
@@ -452,6 +499,11 @@ class Facility:
             p.join(timeout)
         for p in self.branch_procs:
             p.join(timeout)
+        # Every branch process (the only producers) has exited by now -- safe to shut the single
+        # terminal-writer thread down.
+        self.log_queue.put(None)
+        if self.log_thread is not None:
+            self.log_thread.join(timeout)
 
     def run(self) -> None:
         self.start()
