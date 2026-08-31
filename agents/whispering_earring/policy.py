@@ -17,6 +17,16 @@ which now supplies the sequencing-search role an in-loop MCTS search used to pla
 still exists (PUCT search over ClawsNet as the (p, v) evaluator) but is no longer wired into
 this live generation path -- it was too expensive against this engine's replay-only
 checkpointing (every simulation replays a combat's full history) for what it bought.
+
+_choose_combat_action_claws mixes AlphaZero-style Dirichlet noise into that softmax before
+sampling (see _DIRICHLET_EPS/_DIRICHLET_ALPHA_SCALE below) rather than reintroducing search --
+without it, an option whose probability drifts near 0 is rarely/never one of
+branches_per_turn's on-policy samples, so it never appears in new training data and its
+probability estimate can never correct itself. Confirmed empirically (debug_card_bias.py) on
+an overnight training.sh run: over a dozen legal Ironclad cards sat at exactly 0.0 average
+probability across hundreds of sightings despite being playable. training.sh loops forever
+with --init resuming the previous round's checkpoint, so this lockout compounds round over
+round instead of resetting.
 """
 from __future__ import annotations
 
@@ -34,6 +44,13 @@ from buffer_env import BufferDecision
 
 _CLAWS_CHECKPOINT = os.environ.get("CLAWS_CHECKPOINT")
 _claws_net = None  # lazy-loaded once per worker process, on first combat decision -- see below
+
+_DIRICHLET_EPS = 0.25  # fraction of root probability mass replaced by noise -- AlphaZero's own
+# self-play default
+_DIRICHLET_ALPHA_SCALE = 10.0  # concentration = this / n_legal_options, the same "~10 / average
+# legal move count" convention AlphaZero-style implementations use so alpha adapts to how many
+# options are actually on offer instead of a single fixed value across very different option
+# counts (end_turn-only vs. a full hand + potions)
 
 _choices_paradox_path = Path(__file__).resolve().parents[1] / "choices_paradox" / "policy.py"
 _spec = importlib.util.spec_from_file_location("choices_paradox_policy", _choices_paradox_path)
@@ -82,11 +99,15 @@ def get_claws_net():
 
 
 def _choose_combat_action_claws(decision: CombatPlay, net) -> tuple[str, dict, dict]:
-    """Samples (not argmax) from the network's own softmax over model.py's legal_options() """
+    """Samples (not argmax) from the network's own softmax over model.py's legal_options(),
+    mixed with root Dirichlet noise -- see this module's docstring for why."""
     import torch
 
     options, logits, _value = net.forward(decision)
     probs = torch.softmax(logits, dim=-1)
+    alpha = _DIRICHLET_ALPHA_SCALE / len(options)
+    noise = torch.distributions.Dirichlet(torch.full((len(options),), alpha)).sample()
+    probs = (1 - _DIRICHLET_EPS) * probs + _DIRICHLET_EPS * noise
     idx = int(torch.multinomial(probs, 1).item())
     policy = [
         {"action": a, "args": args, "prob": p} for (a, args), p in zip(options, probs.tolist())
