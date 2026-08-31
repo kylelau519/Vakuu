@@ -15,40 +15,36 @@ while true; do
     # claws.pt, the next run of this same script picks it up automatically -- this is what
     # turns repeated runs into a self-play improvement loop.
 
-    echo "[1/4] Cleaning up old raw data..."
+    echo "[1/5] Cleaning up old raw data..."
     rm -f "$vakuu/agents/whispering_earring/data/raw/"*.json
 
-    echo "[2/4] Running facility.py (Data Generation)..."
+    echo "[2/5] Running facility.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility.py" \
-        --trials 3 --branch-workers 30 --branches-per-turn 30 --main-workers 3 \
+        --trials 3 --branch-workers 15 --branches-per-turn 30 --main-workers 3 \
         --raw-dir "$vakuu/agents/whispering_earring/data/raw"
     # branches_per_turn spends roughly branches_per_turn x turns-per-combat branch-worker-
     # seconds per combat now (branching happens once per turn, not once per whole combat) --
     # retune deliberately rather than assuming this number means what it used to.
 
-    echo "[3/4] Floor/combat stats for this round..."
+    echo "[3/5] Floor/combat stats for this round..."
     python "$vakuu/agents/whispering_earring/stats.py" \
-        --raw-dir "$vakuu/agents/whispering_earring/data/raw"
+        --raw-dir "$vakuu/agents/whispering_earring/data/raw" \
+        --round "$ROUND"
+    # Cumulative stats persist to data/stats_history.jsonl (a sibling of data/raw, so it
+    # survives the "Cleaning up old raw data" wipe above) -- that's what to check mid-run to
+    # see whether the model is actually improving over the day, not just this round's numbers.
 
-    echo "[4/4] Materializing dataset..."
+    echo "[4/5] Materializing dataset..."
     python "$vakuu/agents/claws/model/materialize.py" \
         "$vakuu/agents/whispering_earring/data/raw/"*.json \
-        --out "$vakuu/agents/claws/model/dataset.pt"
+        --out "$vakuu/agents/claws/model/dataset.pt" \
+        --jobs 5
 
-    echo "[4/4] Training model..."
-    # --init resumes from the previous round's weights -- without it, every run trains a fresh
-    # randomly initialized network from scratch and discards it, since CLAWS_CHECKPOINT above only
-    # feeds facility.py's generation step, not training; empty/unset is fine too (train.py treats ""
-    # as "no checkpoint yet"). No --value-only: MCTS was dropped from the live generation path
-    # entirely (too expensive against this engine's replay-only checkpointing -- see
-    # agents/whispering_earring/policy.py's module docstring), but materialize.py now aggregates a
-    # real target policy per turn from branch-and-adopt's own discarded branches (see its module
-    # docstring) and tags it policy_real -- train.py only ever backprops the policy term on those,
-    # so the rest of the (still-placeholder) recorded `policy` values are automatically excluded.
+    echo "[5/5] Training model..."
     python "$vakuu/agents/claws/model/train.py" \
-        "$vakuu/agents/claws/model/dataset.pt" --epochs 50 \
+        "$vakuu/agents/claws/model/dataset.pt" --epochs 30 \
         --out "$vakuu/agents/claws/model/claws.pt" \
-        --init "${CLAWS_CHECKPOINT:-}"
+        --init "${CLAWS_CHECKPOINT:-}" 
 
     echo "==========================================="
     echo " Round $ROUND complete! Restarting in 3s..."
