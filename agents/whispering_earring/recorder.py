@@ -42,6 +42,7 @@ class CompactRecorder:
         self._pending_value: float | None = None
         self._turn_start: int | None = None
         self._step = start_step
+        self._combats: list[dict] = []
 
     def attach_policy(self, policy: dict) -> None:
         self._pending_policy = policy
@@ -78,6 +79,14 @@ class CompactRecorder:
     def log_state(self, decision) -> None:
         pass  # state is derived by replay at materialization time, never stored here
 
+    def record_combat(self, act: int, floor: int, combat_index: int, outcome: str) -> None:
+        """Records one resolved combat's (act, floor, outcome) for the stats module
+        (see stats.py) -- cheap, already-known-live bookkeeping, not derived by replay
+        like everything else this recorder deliberately omits."""
+        self._combats.append({
+            "act": act, "floor": floor, "combat_index": combat_index, "outcome": outcome,
+        })
+
     def log_error(self, message: str) -> None:
         self.error = message
 
@@ -100,6 +109,8 @@ class CompactRecorder:
             data["outcome"] = outcome
         if self.error is not None:
             data["error"] = self.error
+        if self._combats:
+            data["combats"] = self._combats
 
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w") as f:
