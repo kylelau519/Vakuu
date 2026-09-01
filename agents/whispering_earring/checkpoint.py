@@ -11,7 +11,17 @@ numbering), so "floor 17" by itself doesn't say which act it's in. turn_index is
 time, not a whole combat (see facility.py's _resolve_turn). combat_hp_before/combat_max_hp
 are constant across every turn of a combat and let a turn-branch that happens to end the
 combat score it with the same terminal formula facility.py uses everywhere else, even though
-the branch itself only ever replayed from the turn's start, not the combat's. A BranchJob is
+the branch itself only ever replayed from the turn's start, not the combat's. is_last_of_act is
+likewise decided once, from the main line's live context.room_type at combat entry (see
+facility.py's _resolve_combat), and carried on every turn-branch of that combat so a branch
+worker -- which only ever sees a buffer-protocol decision with no room_type of its own --
+still scores turns with the boss-specific reward shaping. boss_ids/boss_max_hp are decided at
+the same point and for the same reason: the set of enemy entity ids present when the boss combat
+was entered (context.enemies, main line, JSON side), and the combined max_hp of just those
+entities -- fixed for the whole fight so a branch worker can recognize them via decode_token
+despite only ever seeing buffer-protocol enemy tokens, and so anything summoned mid-fight is
+silently ignored rather than counted as boss progress (see facility.py's _tracked_enemy_hp).
+Empty/0 whenever is_last_of_act is False. A BranchJob is
 handed to a branch worker directly through facility.py's job queue (an mp.Queue -- plain
 Python objects, no disk round-trip needed for a single-machine facility).
 
@@ -45,6 +55,9 @@ class BranchJob:
     ascension: int
     combat_hp_before: int
     combat_max_hp: int
+    is_last_of_act: bool = False
+    boss_ids: frozenset[str] = frozenset()
+    boss_max_hp: int = 0
     actions: list[dict] = field(default_factory=list)
     checkpoint_path: str | None = None
     combat_start_index: int = 0

@@ -45,7 +45,7 @@ from buffer_env import BufferDecision
 _CLAWS_CHECKPOINT = os.environ.get("CLAWS_CHECKPOINT")
 _claws_net = None  # lazy-loaded once per worker process, on first combat decision -- see below
 
-_DIRICHLET_EPS = 0.125  # fraction of root probability mass replaced by noise -- AlphaZero's own
+_DIRICHLET_EPS = 0.15  # fraction of root probability mass replaced by noise -- AlphaZero's own
 # self-play default
 _DIRICHLET_ALPHA_SCALE = 10.0  # concentration = this / n_legal_options, the same "~10 / average
 # legal move count" convention AlphaZero-style implementations use so alpha adapts to how many
