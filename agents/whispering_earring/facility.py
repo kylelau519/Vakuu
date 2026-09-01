@@ -11,8 +11,9 @@ from dataclasses import dataclass, field
 from queue import Empty
 
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imports below)
+import buffer_layout as bl
 from env import Sts2ActionError, Sts2Session
-from buffer_env import Sts2BufferSession
+from buffer_env import Sts2BufferSession, decode_token
 from installation import ensure_setup
 
 from checkpoint import BranchJob
@@ -23,6 +24,20 @@ _SEED_WORDS = ["falcon", "ember", "wolf", "raven", "thorn", "comet", "storm", "h
 
 _HEALTHY_HP_FRACTION = 0.5
 _LOW_HP_SLOPE = 3.0
+
+# Boss-fight (act-final combat) reward shaping. At ascension 2+, winning an act heals 80% of
+# missing HP, so HP left over at the end of a boss fight is worth roughly 1/5 of what it's worth
+# in a normal fight, and turtling to preserve it just gets outscaled by the boss instead of
+# banking anything real -- so player HP loss is weighted down (_BOSS_HP_WEIGHT) and win/loss
+# dominates (_BOSS_WIN_FLOOR). _BOSS_ENEMY_WEIGHT is the mirror-image signal: damage dealt to the
+# boss this turn, which normal fights deliberately don't reward (it'd just encourage reckless
+# damage races with no clock forcing urgency) but boss fights should, since scaling makes racing
+# the boss's HP down before it out-scales you the actually-correct play. Starts at the same
+# magnitude as _BOSS_HP_WEIGHT (taking and dealing damage weighted symmetrically) until there's
+# training signal to tune it.
+_BOSS_HP_WEIGHT = 0.2
+_BOSS_WIN_FLOOR = 0.8
+_BOSS_ENEMY_WEIGHT = 0.2
 
 
 def _random_seed() -> str:
@@ -81,21 +96,41 @@ def _log_writer_loop(log_queue: mp.Queue) -> None:
         sys.stderr.flush()
 
 
-def _combat_value(hp_after: int, max_hp: int, died: bool) -> float:
-    """Terminal (combat-ending) value target for recorder.py's end_turn() -- used by
-    _play_turn_only for whichever turn actually ends the combat. Continuous in the resulting
-    HP fraction across the death boundary (hp_after is forced to 0 when died, not handled as a
-    separate case) -- see this module's _HEALTHY_HP_FRACTION/_LOW_HP_SLOPE comment for why: a
-    branch that barely died and a sibling that barely survived, from the same branch-and-adopt
-    turn-start, shouldn't be scored a full cliff apart for what may have been a marginal
-    difference."""
-    if not max_hp:
+@dataclass
+class CombatOutcome:
+    """Bundles _combat_value's inputs -- one struct instead of a positional-argument list that
+    grows every time a new reward signal comes in (e.g. a boss-fight enemy-HP-race term: how
+    close the boss was to dying, not just the player, still being designed -- see the module's
+    _BOSS_HP_WEIGHT/_BOSS_WIN_FLOOR comment)."""
+    player_hp_after: int
+    player_max_hp: int
+    is_last_of_act: bool = False
+
+
+def _combat_value(outcome: CombatOutcome) -> float:
+    if not outcome.player_max_hp:
         return 1.0
-    hp_frac = max(0.0, hp_after) / max_hp if not died else 0.0
+    hp_frac = max(0.0, outcome.player_hp_after) / outcome.player_max_hp
+    if outcome.is_last_of_act:
+        return _BOSS_WIN_FLOOR + _BOSS_HP_WEIGHT * hp_frac
     if hp_frac >= _HEALTHY_HP_FRACTION:
         return hp_frac
     shortfall = _HEALTHY_HP_FRACTION - hp_frac
     return _HEALTHY_HP_FRACTION - shortfall * _LOW_HP_SLOPE
+
+
+def _tracked_enemy_hp(arr, boss_ids: frozenset[str]) -> int:
+    """Sums current HP across only the enemy slots whose decoded token is in boss_ids -- the
+    entities present when this boss combat was entered (see _resolve_combat), fixed for the
+    whole fight. Deliberately ignores anything else in the room: a mid-fight summon never
+    matches boss_ids so it never contributes, and a tracked entity that has since died simply
+    contributes 0 (its slot is gone, not matched) rather than needing special-casing."""
+    if not boss_ids:
+        return 0
+    return sum(
+        bl.enemy_hp(slot) for _, slot in bl.enemies(arr)
+        if decode_token(bl.enemy_token(slot)) in boss_ids
+    )
 
 
 @dataclass
@@ -120,14 +155,23 @@ def _bypass_card_reward(session: Sts2BufferSession) -> None:
 
 
 def _play_turn_only(
-    session: Sts2BufferSession, decision, combat_hp_before: int, combat_max_hp: int
+    session: Sts2BufferSession, decision, combat_hp_before: int, combat_max_hp: int,
+    is_last_of_act: bool = False, boss_ids: frozenset[str] = frozenset(), boss_max_hp: int = 0,
 ) -> str:
     """Plays exactly one turn (through the mid-turn card_select edge case, e.g. Power Potion/
     Brand, the same way the old whole-combat loop did) and scores it before returning --
     "continue" if the combat carries on into another round, "won"/"lost" if this turn ended
     it. See facility.py module context / the turn-level branch-and-adopt plan for why turns,
-    not whole combats, are the branch unit now."""
+    not whole combats, are the branch unit now.
+
+    is_last_of_act, boss_ids, boss_max_hp all come from the matching BranchJob fields (decided
+    once at combat entry from the main line's live context.room_type/context.enemies -- the
+    buffer protocol used here has no room_type of its own, see checkpoint.py's BranchJob
+    docstring) and drive the boss-fight reward shaping in both the terminal (_combat_value) and
+    non-terminal branches below. boss_ids/boss_max_hp are only ever non-empty when
+    is_last_of_act is True."""
     hp_before_turn = decision.player_hp
+    enemy_hp_before_turn = _tracked_enemy_hp(decision.arr, boss_ids) if is_last_of_act else 0
     session.logger.begin_turn()
     ended_turn = False
     while decision.decision in ("combat_play", "card_select"):
@@ -147,10 +191,12 @@ def _play_turn_only(
     if decision.decision == "card_reward":
         _bypass_card_reward(session)
         outcome = "won"
-        turn_value = _combat_value(decision.player_hp, combat_max_hp, died=False)
+        turn_value = _combat_value(
+            CombatOutcome(decision.player_hp, combat_max_hp, is_last_of_act)
+        )
     elif decision.decision == "game_over":
         outcome = "lost"
-        turn_value = _combat_value(decision.player_hp, combat_max_hp, died=True)
+        turn_value = -1.0
     else:
         outcome = "continue"
         v_net = 0.0
@@ -161,7 +207,15 @@ def _play_turn_only(
         hp_term = (
             -(hp_before_turn - decision.player_hp) / combat_max_hp if combat_max_hp else 0.0
         )
-        turn_value = 0.75 * hp_term + 1 * v_net 
+        enemy_term = 0.0
+        if is_last_of_act and boss_max_hp:
+            enemy_hp_after_turn = _tracked_enemy_hp(decision.arr, boss_ids)
+            enemy_term = (enemy_hp_before_turn - enemy_hp_after_turn) / boss_max_hp
+        hp_weight = _BOSS_HP_WEIGHT if is_last_of_act else 0.75
+        turn_value = hp_weight * hp_term + _BOSS_ENEMY_WEIGHT * enemy_term + 1 * v_net
+        # hp_term and v_net are independently bounded but their sum isn't -- floor it so a live,
+        # still-recoverable turn can never score worse than an outright loss (-1.0, set above).
+        turn_value = max(turn_value, -1.0)
 
     session.logger.end_turn(turn_value)
     return outcome
@@ -171,13 +225,15 @@ def _spawn_turn_branches(
     job_queue, main_worker_index: int, cfg: FacilityConfig, main_id: str, act: int, floor: int,
     combat_index: int, turn_index: int, character: str, seed: str, actions_so_far: list[dict],
     combat_hp_before: int, combat_max_hp: int, checkpoint_path: str | None, combat_start_index: int,
+    is_last_of_act: bool = False, boss_ids: frozenset[str] = frozenset(), boss_max_hp: int = 0,
 ) -> list[str]:
     branch_ids = []
     for b in range(cfg.branches_per_turn):
         job = BranchJob(
             main_id=main_id, act=act, floor=floor, combat_index=combat_index, turn_index=turn_index,
             branch_index=b, character=character, seed=seed, ascension=cfg.ascension,
-            combat_hp_before=combat_hp_before, combat_max_hp=combat_max_hp,
+            combat_hp_before=combat_hp_before, combat_max_hp=combat_max_hp, is_last_of_act=is_last_of_act,
+            boss_ids=boss_ids, boss_max_hp=boss_max_hp,
             actions=list(actions_so_far), checkpoint_path=checkpoint_path,
             combat_start_index=combat_start_index,
         )
@@ -259,7 +315,8 @@ def _resolve_turn(
     job_queue, results_queue, main_worker_index: int, cfg: FacilityConfig, recorder: CompactRecorder,
     session: Sts2Session, character: str, seed: str, main_id: str, act: int, floor: int, combat_index: int,
     turn_index: int, combat_hp_before: int, combat_max_hp: int, stop_event,
-    checkpoint_path: str | None, combat_start_index: int,
+    checkpoint_path: str | None, combat_start_index: int, is_last_of_act: bool = False,
+    boss_ids: frozenset[str] = frozenset(), boss_max_hp: int = 0,
 ):
     """Delegates one turn to cfg.branches_per_turn parallel attempts and adopts the
     best-scoring result """
@@ -267,7 +324,7 @@ def _resolve_turn(
     branch_ids = _spawn_turn_branches(
         job_queue, main_worker_index, cfg, main_id, act, floor, combat_index, turn_index,
         character, seed, prefix, combat_hp_before, combat_max_hp,
-        checkpoint_path, combat_start_index,
+        checkpoint_path, combat_start_index, is_last_of_act, boss_ids, boss_max_hp,
     )
     adopted = _wait_for_turn_result(results_queue, branch_ids, len(prefix), stop_event)
 
@@ -316,9 +373,19 @@ def _resolve_combat(
     position in session.action_log, captured once here: session.action_log already has the
     entry action as its last element the moment this is called, and every turn-branch spawned
     for this combat replays from the same fixed point regardless of which session object later
-    comes to represent the main line's turn-by-turn state (see _resolve_turn's new_session)."""
+    comes to represent the main line's turn-by-turn state (see _resolve_turn's new_session).
+    is_last_of_act is decided once here, from context.room_type -- a live per-room field read fresh by
+    the engine every decision (unlike the buffer protocol's boss1_token/boss2_token, which are
+    per-act constants and stay set through every combat of the act, boss or not) -- and carried
+    for the whole combat via BranchJob.is_last_of_act (see checkpoint.py's docstring). boss_ids/
+    boss_max_hp are captured the same way, from context.enemies -- the entities actually in the
+    room at boss-combat entry, ignoring anything summoned later (see facility.py's
+    _tracked_enemy_hp and checkpoint.py's docstring)."""
     act = decision.context.act
     floor = decision.context.floor
+    is_last_of_act = decision.context.room_type == "Boss"
+    boss_ids = frozenset(e.id for e in decision.enemies if e.id) if is_last_of_act else frozenset()
+    boss_max_hp = sum(e.max_hp for e in decision.enemies if e.id in boss_ids)
     combat_hp_before, combat_max_hp = decision.player.hp, decision.player.max_hp
     combat_start_index = len(session.action_log) - 1
     turn_index = 0
@@ -328,7 +395,7 @@ def _resolve_combat(
             job_queue, results_queue, main_worker_index, cfg, recorder, session,
             character, seed, main_id, act, floor, combat_index, turn_index,
             combat_hp_before, combat_max_hp, stop_event,
-            checkpoint_path, combat_start_index,
+            checkpoint_path, combat_start_index, is_last_of_act, boss_ids, boss_max_hp,
         )
         if turn_outcome == "continue":
             continue
@@ -560,7 +627,10 @@ def branch_worker_loop(
                     decision = session.open_from_checkpoint(
                         job.character, job.seed, job.ascension, job.actions
                     )
-                outcome = _play_turn_only(session, decision, job.combat_hp_before, job.combat_max_hp)
+                outcome = _play_turn_only(
+                    session, decision, job.combat_hp_before, job.combat_max_hp, job.is_last_of_act,
+                    job.boss_ids, job.boss_max_hp,
+                )
             except Exception as e:
                 recorder.log_error(f"{type(e).__name__}: {e}")
                 outcome = "error"

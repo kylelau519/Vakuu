@@ -237,7 +237,12 @@ def _materialize_group_task(group: _Group) -> tuple[str, list[Example] | None, s
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("trials", nargs="+", help="trial JSON files (data/raw/*.json)")
+    parser.add_argument(
+        "trials", nargs="+",
+        help="trial JSON files, or directories to glob *.json from (data/raw/*.json) -- "
+             "directories let a huge data/raw/ be passed as one argument instead of a shell-"
+             "expanded file list, which can exceed the OS's exec argument-length limit",
+    )
     parser.add_argument("--out", default="dataset.pt")
     parser.add_argument(
         "--jobs", "-j", type=int, default=os.cpu_count(),
@@ -246,6 +251,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    trial_paths: list[str] = []
+    for trial in args.trials:
+        if os.path.isdir(trial):
+            trial_paths.extend(sorted(str(p) for p in Path(trial).glob("*.json")))
+        else:
+            trial_paths.append(trial)
+
     # Once, here, in the parent -- not per worker, so a first-time DLL copy/build (see
     # ensure_setup) can't race across several worker processes hitting it at once.
     ensure_setup()
@@ -253,7 +265,7 @@ def main() -> None:
     # Single read pass (cheap -- no CLR session needed, just reading the files) that both
     # separates out main-line trials and groups every branch trial by its shared prefix -- see
     # _scan_trials's docstring.
-    main_paths, groups = _scan_trials(args.trials)
+    main_paths, groups = _scan_trials(trial_paths)
     real_groups = {k: g for k, g in groups.items() if _group_baseline(g) is not None}
     print(f"{len(main_paths)} main-line trial(s), {len(groups)} branch group(s) "
           f"({len(real_groups)} with real cross-branch signal)")
