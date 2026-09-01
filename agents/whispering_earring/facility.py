@@ -273,9 +273,25 @@ def _resolve_turn(
     _absorb_actions(recorder, adopted["actions"], len(prefix))
     session.close()
     new_session = Sts2Session(logger=recorder)
-    new_decision = new_session.open_from_checkpoint(
-        character, seed, cfg.ascension, _clean_actions(adopted["actions"])
-    )
+    cleaned = _clean_actions(adopted["actions"])
+    if checkpoint_path is not None:
+        # Same fast path branch_worker_loop uses (see checkpoint.py's docstring) -- resync the
+        # main line to the winning branch's state via load_save + this combat's own actions,
+        # instead of open_from_checkpoint's full replay from StartRun. That full replay used to
+        # be paid here on EVERY turn regardless of the branch-side fix, growing with total run
+        # depth (not just combat depth) since this is the main line's own history, not a
+        # branch's -- measured turn-to-turn latency climbing from ~1.7s early in a run to ~7s+
+        # by ~200 actions in. load_and_resume_combat has no memory of anything before the
+        # checkpoint, so the pre-combat prefix is spliced back onto action_log afterward to keep
+        # the main line's own history complete for the trial's final output JSON.
+        entry_action = cleaned[combat_start_index]
+        in_combat_actions = cleaned[combat_start_index + 1:]
+        new_decision = new_session.load_and_resume_combat(
+            checkpoint_path, entry_action, in_combat_actions
+        )
+        new_session.action_log = cleaned[:combat_start_index] + new_session.action_log
+    else:
+        new_decision = new_session.open_from_checkpoint(character, seed, cfg.ascension, cleaned)
     return new_session, new_decision, adopted.get("outcome")  # "continue" | "won" | "lost"
 
 
