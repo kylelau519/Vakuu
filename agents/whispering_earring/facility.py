@@ -168,17 +168,18 @@ def _play_turn_only(
 
 
 def _spawn_turn_branches(
-    job_queue, main_worker_index: int, cfg: FacilityConfig, main_id: str, floor: int,
+    job_queue, main_worker_index: int, cfg: FacilityConfig, main_id: str, act: int, floor: int,
     combat_index: int, turn_index: int, character: str, seed: str, actions_so_far: list[dict],
-    combat_hp_before: int, combat_max_hp: int,
+    combat_hp_before: int, combat_max_hp: int, checkpoint_path: str | None, combat_start_index: int,
 ) -> list[str]:
     branch_ids = []
     for b in range(cfg.branches_per_turn):
         job = BranchJob(
-            main_id=main_id, floor=floor, combat_index=combat_index, turn_index=turn_index,
+            main_id=main_id, act=act, floor=floor, combat_index=combat_index, turn_index=turn_index,
             branch_index=b, character=character, seed=seed, ascension=cfg.ascension,
             combat_hp_before=combat_hp_before, combat_max_hp=combat_max_hp,
-            actions=list(actions_so_far),
+            actions=list(actions_so_far), checkpoint_path=checkpoint_path,
+            combat_start_index=combat_start_index,
         )
         job_queue.put((job, main_worker_index))
         branch_ids.append(job.branch_id)
@@ -248,15 +249,17 @@ def _absorb_actions(recorder: CompactRecorder, full_actions: list[dict], prefix_
 
 def _resolve_turn(
     job_queue, results_queue, main_worker_index: int, cfg: FacilityConfig, recorder: CompactRecorder,
-    session: Sts2Session, character: str, seed: str, main_id: str, floor: int, combat_index: int,
+    session: Sts2Session, character: str, seed: str, main_id: str, act: int, floor: int, combat_index: int,
     turn_index: int, combat_hp_before: int, combat_max_hp: int, stop_event,
+    checkpoint_path: str | None, combat_start_index: int,
 ):
     """Delegates one turn to cfg.branches_per_turn parallel attempts and adopts the
     best-scoring result """
     prefix = list(session.action_log)
     branch_ids = _spawn_turn_branches(
-        job_queue, main_worker_index, cfg, main_id, floor, combat_index, turn_index,
+        job_queue, main_worker_index, cfg, main_id, act, floor, combat_index, turn_index,
         character, seed, prefix, combat_hp_before, combat_max_hp,
+        checkpoint_path, combat_start_index,
     )
     adopted = _wait_for_turn_result(results_queue, branch_ids, len(prefix), stop_event)
 
@@ -279,18 +282,29 @@ def _resolve_turn(
 def _resolve_combat(
     job_queue, results_queue, main_worker_index: int, cfg: FacilityConfig, recorder: CompactRecorder,
     session: Sts2Session, decision, character: str, seed: str, main_id: str, combat_index: int, stop_event,
+    checkpoint_path: str | None,
 ):
-    """Drives _resolve_turn turn-by-turn until the combat actually ends."""
+    """Drives _resolve_turn turn-by-turn until the combat actually ends.
+
+    checkpoint_path is the native save the main line took right before the select_map_node
+    action that entered this combat (see main_worker_loop) -- None if no checkpoint was
+    available (e.g. this run's very first combat). combat_start_index is that entry action's
+    position in session.action_log, captured once here: session.action_log already has the
+    entry action as its last element the moment this is called, and every turn-branch spawned
+    for this combat replays from the same fixed point regardless of which session object later
+    comes to represent the main line's turn-by-turn state (see _resolve_turn's new_session)."""
     act = decision.context.act
     floor = decision.context.floor
     combat_hp_before, combat_max_hp = decision.player.hp, decision.player.max_hp
+    combat_start_index = len(session.action_log) - 1
     turn_index = 0
     while True:
         turn_index += 1
         session, decision, turn_outcome = _resolve_turn(
             job_queue, results_queue, main_worker_index, cfg, recorder, session,
-            character, seed, main_id, floor, combat_index, turn_index,
+            character, seed, main_id, act, floor, combat_index, turn_index,
             combat_hp_before, combat_max_hp, stop_event,
+            checkpoint_path, combat_start_index,
         )
         if turn_outcome == "continue":
             continue
@@ -312,10 +326,20 @@ def _resolve_combat(
 
 def main_worker_loop(
     cfg: FacilityConfig, job_queue: mp.Queue, results_queue: mp.Queue, main_worker_index: int,
-    stop_event, trial_counter=None,
+    stop_event, trial_counter=None, resume: dict | None = None,
 ) -> None:
     """job_queue is shared with every other main worker, but results_queue is this worker's own private queue, created and owned by
-    Facility, one per main worker. It must not be shared."""
+    Facility, one per main worker. It must not be shared.
+
+    resume: if given, this worker's FIRST trial (only) reconstructs an in-progress run instead
+    of starting fresh -- for recovering a trial that was progressing normally (e.g. had already
+    won several combats) when the facility was killed before it reached game_over and got a
+    chance to write its own output. Keys: character, seed, main_id, combat_index (how many
+    combats are already resolved -- the next one encountered is numbered combat_index+1, same
+    convention the fresh-start path uses), actions (the full action log up to the resume point,
+    same shape a branch/trial JSON's own "actions" field already has -- e.g. lift it straight
+    from a "won"/"continue" branch file's "actions"). See resume_trial.py for the CLI that
+    builds this dict from such a file and drives a whole one-worker Facility with it."""
     # Each main worker is its own process; reseed explicitly so concurrent workers started via
     # fork (which would otherwise inherit identical RNG state) don't all draw the same
     # character/seed. spawn (macOS default) doesn't need this, but it's cheap insurance.
@@ -329,9 +353,15 @@ def main_worker_loop(
                     break
                 trial_counter.value += 1
 
-        character = random.choice(cfg.characters)
-        seed = _random_seed()
-        main_id = f"{character}_{seed}"
+        this_trial_resume, resume = resume, None  # consumed at most once, on the first trial
+        if this_trial_resume is not None:
+            character = this_trial_resume["character"]
+            seed = this_trial_resume["seed"]
+            main_id = this_trial_resume.get("main_id") or f"{character}_{seed}"
+        else:
+            character = random.choice(cfg.characters)
+            seed = _random_seed()
+            main_id = f"{character}_{seed}"
 
         recorder = CompactRecorder({
             "character": character, "seed": seed, "ascension": cfg.ascension,
@@ -339,10 +369,21 @@ def main_worker_loop(
         })
         session = Sts2Session(logger=recorder)
         outcome = None
+        combat_checkpoint_path = None
+        # One file per combat (not reused/overwritten across the trial) -- see the checkpoint-
+        # taking comment below for why reuse is unsafe. Deleted once this trial concludes.
+        checkpoint_dir = os.path.join(cfg.raw_dir, "checkpoints")
+        checkpoint_paths_this_trial: list[str] = []
         try:
             try:
-                decision = session.start(character, seed, cfg.ascension)
-                combat_index = 0
+                if this_trial_resume is not None:
+                    decision = session.open_from_checkpoint(
+                        character, seed, cfg.ascension, this_trial_resume["actions"]
+                    )
+                    combat_index = this_trial_resume["combat_index"]
+                else:
+                    decision = session.start(character, seed, cfg.ascension)
+                    combat_index = 0
 
                 while decision.decision != "game_over":
                     if decision.decision == "combat_play":
@@ -350,7 +391,9 @@ def main_worker_loop(
                         session, decision, combat_outcome = _resolve_combat(
                             job_queue, results_queue, main_worker_index, cfg, recorder, session,
                             decision, character, seed, main_id, combat_index, stop_event,
+                            combat_checkpoint_path,
                         )
+                        combat_checkpoint_path = None  # consumed -- not valid for the next combat
                         if combat_outcome is not None:
                             outcome = combat_outcome
                             break
@@ -359,7 +402,40 @@ def main_worker_loop(
                     name, kwargs, policy = choose_action(decision, session)
                     if policy is not None:
                         recorder.attach_policy(policy)
+                    if name == "select_map_node":
+                        # select_map_node is the only action that consumes RNG for encounter
+                        # selection, at room-entry time -- the checkpoint MUST be taken before
+                        # it, not after, or a branch reloading it and replaying this same action
+                        # would draw a different encounter (see checkpoint.py's docstring and
+                        # the whispering_earring_combat_checkpoint_branching memory). Whether
+                        # this node turns out to be a combat is only known after stepping into
+                        # it below; if it isn't, this save is simply never consumed (harmless --
+                        # cleaned up with the rest of this trial's checkpoints below).
+                        #
+                        # Filename is unique per (trial, prospective combat index), NOT reused
+                        # across the trial like an earlier version of this did: _wait_for_turn_
+                        # result gives up on straggler branch workers after a timeout (the shared
+                        # branch-worker pool can be oversubscribed -- training.sh runs 3 main
+                        # workers x up to 30 branches/turn against a 15-worker pool), so a
+                        # straggler can still be reading this file long after the main line has
+                        # moved on to a LATER select_map_node. A reused filename meant that
+                        # straggler would silently load a wrong, unrelated state and replay this
+                        # combat's entry action into it -- landing on whatever room that
+                        # coordinate happened to resolve to there instead of erroring, which is
+                        # exactly what produced the "unexpected decision" AssertionErrors in
+                        # data/raw (e.g. f15c07t01_b29 landing on event_choice). A unique filename
+                        # means a late straggler still loads the CORRECT state for its own combat
+                        # (its result is simply ignored as stale by _wait_for_turn_result if it's
+                        # that late -- same as today -- instead of corrupting the branch).
+                        checkpoint_path = os.path.join(
+                            checkpoint_dir, f"{main_id}_c{combat_index + 1:03d}.json"
+                        )
+                        os.makedirs(checkpoint_dir, exist_ok=True)
+                        session.save(checkpoint_path)
+                        checkpoint_paths_this_trial.append(checkpoint_path)
                     decision = session.step(name, **kwargs)
+                    if name == "select_map_node" and decision.decision == "combat_play":
+                        combat_checkpoint_path = checkpoint_path
 
                 if outcome is None:  # loop ended via game_over, not a combat lineage-ending loss
                     outcome = "won" if decision.victory else "lost"
@@ -372,6 +448,16 @@ def main_worker_loop(
                 recorder.log_error(f"save failed: {type(e).__name__}: {e}")
         finally:
             session.close()
+            # By the time a trial concludes, every combat it contained has already resolved (or
+            # given up on) all its own turn-branches -- any straggler still unprocessed at this
+            # point is far enough past _wait_for_turn_result's timeout that its result would be
+            # discarded as stale anyway, so it's safe to reclaim the disk here rather than let
+            # these accumulate for the life of the facility.
+            for path in checkpoint_paths_this_trial:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
         # main branch is dead -- loop restarts with a fresh seed unless the target
         # trial count is reached or stop_event is set, checked at the top of the while
 
@@ -396,7 +482,7 @@ def branch_worker_loop(
 
         recorder = CompactRecorder({
             "character": job.character, "seed": job.seed, "ascension": job.ascension,
-            "main_id": job.main_id, "floor": job.floor, "combat_index": job.combat_index,
+            "main_id": job.main_id, "act": job.act, "floor": job.floor, "combat_index": job.combat_index,
             "turn_index": job.turn_index, "branch_index": job.branch_index, "role": "branch",
             "prefix_len": len(job.actions),
         }, start_step=len(job.actions))
@@ -405,7 +491,26 @@ def branch_worker_loop(
         result = None
         try:
             try:
-                decision = session.open_from_checkpoint(job.character, job.seed, job.ascension, job.actions)
+                if job.checkpoint_path is not None:
+                    # Fast path: resume from the native save taken right before this combat's
+                    # room-entry action, replaying only this combat's own actions, instead of
+                    # replaying the entire run from StartRun (see checkpoint.py's docstring).
+                    # load_and_resume_combat has no memory of anything before the checkpoint --
+                    # action_log comes back as just [entry_action, *in_combat_actions], so the
+                    # pre-combat prefix is prepended here to keep session.action_log identical
+                    # in content to what open_from_checkpoint would have produced (this recorder
+                    # was built with start_step=len(job.actions), and _resolve_turn's caller-side
+                    # indexing all assumes that same full-history shape on the way out).
+                    entry_action = job.actions[job.combat_start_index]
+                    in_combat_actions = job.actions[job.combat_start_index + 1:]
+                    decision = session.load_and_resume_combat(
+                        job.checkpoint_path, entry_action, in_combat_actions
+                    )
+                    session.action_log = job.actions[:job.combat_start_index] + session.action_log
+                else:
+                    decision = session.open_from_checkpoint(
+                        job.character, job.seed, job.ascension, job.actions
+                    )
                 outcome = _play_turn_only(session, decision, job.combat_hp_before, job.combat_max_hp)
             except Exception as e:
                 recorder.log_error(f"{type(e).__name__}: {e}")
@@ -422,8 +527,9 @@ def branch_worker_loop(
 
 
 class Facility:
-    def __init__(self, cfg: FacilityConfig):
+    def __init__(self, cfg: FacilityConfig, resume: dict | None = None):
         self.cfg = cfg
+        self.resume = resume  # see main_worker_loop's docstring -- consumed by worker 0's first trial only
         self.job_queue: mp.Queue = mp.Queue()  # shared dispatch pool -- every main worker feeds it
         self.log_queue: mp.Queue = mp.Queue()  # every branch worker's relayed stderr -- see _tag_worker_stderr
         self.stop_event = mp.Event()
@@ -446,7 +552,8 @@ class Facility:
         for i, results_queue in enumerate(self.main_result_queues):
             p = mp.Process(
                 target=main_worker_loop,
-                args=(self.cfg, self.job_queue, results_queue, i, self.stop_event, self.trial_counter),
+                args=(self.cfg, self.job_queue, results_queue, i, self.stop_event, self.trial_counter,
+                      self.resume if i == 0 else None),
                 daemon=True,
             )
             p.start()
@@ -514,7 +621,28 @@ if __name__ == "__main__":
                          help="relay every branch worker's [SIM]/[INFO] line (card plays, RNG "
                               "rolls, etc.) instead of just per-turn/per-room milestones "
                               "(default: milestones only)")
+    parser.add_argument("--resume-branch-file", default=None,
+                         help="recover a trial that was progressing normally (had already won "
+                              "combats) when the facility died before writing its own output "
+                              "(e.g. killed mid-run). Pass the path to any surviving branch (or "
+                              "main-trial) JSON with a \"won\" or \"continue\" outcome from that "
+                              "trial's last resolved turn -- its own \"actions\" field already "
+                              "has the full history, and its character/seed/main_id/combat_index "
+                              "fields identify where to pick up. Worker 0's first trial resumes "
+                              "from it (character/seed forced, ignoring --characters); every "
+                              "other worker, and worker 0's later trials if --trials allows more "
+                              "than one, run normally.")
     args = parser.parse_args()
+
+    resume = None
+    if args.resume_branch_file:
+        import json
+        with open(args.resume_branch_file) as f:
+            _r = json.load(f)
+        resume = {
+            "character": _r["character"], "seed": _r["seed"], "main_id": _r["main_id"],
+            "combat_index": _r["combat_index"], "actions": _clean_actions(_r["actions"]),
+        }
 
     facility = Facility(FacilityConfig(
         characters=args.characters,
@@ -524,5 +652,5 @@ if __name__ == "__main__":
         n_main_trials=args.trials,
         raw_dir=args.raw_dir,
         verbose=args.verbose,
-    ))
+    ), resume=resume)
     facility.run()
