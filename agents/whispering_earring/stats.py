@@ -96,6 +96,10 @@ def _load_trials(raw_dir: Path) -> tuple[list[dict], int, int]:
             continue  # e.g. a file still being written when this ran mid-round
         role = data.get("role")
         if role == "main":
+            # No timestamp is recorded inside the trial JSON itself (recorder.py writes the
+            # file once, at trial end, with no wall-clock field) -- the file's mtime is the
+            # only "when was this played" signal available, so stash it for _seed_rows.
+            data["_file_mtime"] = path.stat().st_mtime
             main_trials.append(data)
         elif role == "branch":
             n_branch += 1
@@ -201,22 +205,26 @@ def _seed_rows(main_trials: list[dict]) -> list[dict]:
             "n_lost": sum(1 for c in combats if c["outcome"] == "lost"),
             "reached": reached,
             "outcome": trial.get("outcome", "unknown"),
+            "mtime": trial.get("_file_mtime"),
         })
     rows.sort(key=lambda r: (r["reached"] or (0, 0)), reverse=True)
     return rows
 
 
 def _print_seed_table(rows: list[dict], title: str) -> None:
-    print(f"\n-- {title}: per-seed -- one row per attempted run --")
+    print(f"\n-- {title}: per-seed -- one row per attempted run "
+          f"('Played' is the trial file's mtime, i.e. when it finished writing) --")
     if not rows:
         print("no main-line trials found.")
         return
     print(f"{'Seed':<20} {'Character':<10} {'Combats':>7} {'Won':>5} {'Lost':>5} "
-          f"{'Reached':>9} {'Outcome':>9}")
+          f"{'Reached':>9} {'Outcome':>9} {'Played':>19}")
     for r in rows:
         reached = f"{r['reached'][0]},{r['reached'][1]}" if r["reached"] else "n/a"
+        played = (datetime.fromtimestamp(r["mtime"]).strftime("%Y-%m-%d %H:%M:%S")
+                  if r["mtime"] else "n/a")
         print(f"{r['seed']:<20} {r['character']:<10} {r['n_combats']:>7} {r['n_won']:>5} "
-              f"{r['n_lost']:>5} {reached:>9} {r['outcome']:>9}")
+              f"{r['n_lost']:>5} {reached:>9} {r['outcome']:>9} {played:>19}")
 
 
 # ---------------------------------------------------------------------------
