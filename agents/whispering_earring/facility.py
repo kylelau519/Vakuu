@@ -4,6 +4,7 @@ import multiprocessing as mp
 import os
 import random
 import re
+import signal
 import sys
 import threading
 import time
@@ -703,6 +704,16 @@ class Facility:
 
     def run(self) -> None:
         self.start()
+        # SIGINT (Ctrl-C) already unwinds via KeyboardInterrupt below. Without this handler
+        # a plain `kill <pid>` (SIGTERM -- what most process managers/IDE stop buttons send)
+        # falls through to the default action and skips stop() entirely, leaving every daemon
+        # branch/main worker orphaned (reparented to pid 1) and idling on the job queue forever
+        # -- that's how these pile up across crashed/killed runs. SIGKILL still can't be caught,
+        # so this doesn't cover a hard `kill -9`.
+        def _on_sigterm(signum, frame):
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGTERM, _on_sigterm)
         try:
             if self.cfg.n_main_trials is None:
                 while True:
