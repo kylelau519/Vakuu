@@ -217,8 +217,16 @@ def _wait_for_turn_result(
         if branch_id not in pending:
             continue  # stale result from an already-resolved earlier turn
         pending.discard(branch_id)
-        if result is None or len(result.get("actions") or []) < prefix_len:
-            continue  # branch errored before saving, or its prefix replay itself failed
+        if (result is None or result.get("outcome") == "error"
+                or len(result.get("actions") or []) < prefix_len):
+            # branch errored before saving (or reported its own error outcome), or its prefix
+            # replay itself failed -- _turn_score_key only ranks "lost" as worse than everything
+            # else, so an unfiltered "error" branch would otherwise be adopted like a legitimate
+            # "won"/"continue" result, silently making this turn (and the main-line trial) fail
+            # without ever calling recorder.log_error on the main recorder (that only happens
+            # below when NO branch is usable at all) -- see the "why does outcome=='error' have
+            # no error message" investigation this fixes.
+            continue
         usable[branch_id] = result
         if result.get("outcome") == "won":
             return result
@@ -336,6 +344,31 @@ def _resolve_combat(
             # would think it worked. Must call session.step("skip_card_reward") (or
             # select_card_reward) first, THEN heal_and_enter_combat, whenever combat_outcome=="won".
             # (No such gotcha on a loss -- heal_and_enter_combat works immediately from game_over.)
+            if checkpoint_path is not None:
+                # `session` here was reconstructed by _resolve_turn's fast load_and_resume_combat
+                # path. That path is faithful for everything checked in-combat (hand/piles/hp/
+                # potions/enemies), including the terminal card_reward's own offer -- confirmed by
+                # direct comparison against continuous play. But it does NOT preserve whatever RNG
+                # cursor governs FUTURE map/encounter generation: a session rebuilt this way can
+                # land on a different room type than continuous play at the very next
+                # select_map_node, even though nothing observable up to that point differs
+                # (confirmed: a session that merely calls session.save() and keeps playing
+                # continuously matches continuous play exactly, so the desync is specific to
+                # session.load_save() into a fresh process, not to taking the checkpoint itself).
+                # Harmless while still inside the combat (nothing here reads map RNG), but this
+                # session is about to become the ongoing main-line session past the combat's end,
+                # driving every subsequent map/event/shop room -- so rebuild it once, safely, via
+                # a full StartRun replay (mechanically identical to continuous play) before handing
+                # it back. Only combat-internal turns pay the fast path's cost; the combat-ending
+                # turn pays open_from_checkpoint's cost once, same as it always did before this
+                # combat's fast-path resync was introduced.
+                full_action_log = list(session.action_log)
+                session.close()
+                safe_session = Sts2Session(logger=recorder)
+                decision = safe_session.open_from_checkpoint(
+                    character, seed, cfg.ascension, full_action_log
+                )
+                session = safe_session
             return session, decision, None
         return session, decision, turn_outcome  # "lost" or "error"
 
