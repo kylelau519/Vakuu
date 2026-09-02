@@ -36,7 +36,7 @@ from facility_common import (
 
 
 def _spawn_turn_branches(
-    job_queue, main_worker_index: int, cfg: FacilityConfig, main_id: str, act: int, floor: int,
+    job_queue, results_queue, cfg: FacilityConfig, main_id: str, act: int, floor: int,
     combat_index: int, turn_index: int, character: str, seed: str, actions_so_far: list[dict],
     combat_hp_before: int, combat_max_hp: int, checkpoint_path: str | None, combat_start_index: int,
     is_last_of_act: bool = False, boss_ids: frozenset[str] = frozenset(), boss_max_hp: int = 0,
@@ -51,7 +51,12 @@ def _spawn_turn_branches(
             actions=list(actions_so_far), checkpoint_path=checkpoint_path,
             combat_start_index=combat_start_index,
         )
-        job_queue.put((job, main_worker_index))
+        # The dispatched-to queue travels with the job itself (not looked up from a
+        # main-worker-index table) -- see branch_worker_loop's docstring. Here it's always the
+        # caller's own results_queue, but that queue is no longer necessarily "the issuing main
+        # worker's one shared queue" -- facility_choices_paradox.py's option-chains each pass
+        # their own private one through _resolve_turn/_resolve_combat.
+        job_queue.put((job, results_queue))
         branch_ids.append(job.branch_id)
     return branch_ids
 
@@ -127,7 +132,7 @@ def _resolve_turn(
     best-scoring result."""
     prefix = list(session.action_log)
     branch_ids = _spawn_turn_branches(
-        job_queue, main_worker_index, cfg, main_id, act, floor, combat_index, turn_index,
+        job_queue, results_queue, cfg, main_id, act, floor, combat_index, turn_index,
         character, seed, prefix, combat_hp_before, combat_max_hp,
         checkpoint_path, combat_start_index, is_last_of_act, boss_ids, boss_max_hp,
     )
