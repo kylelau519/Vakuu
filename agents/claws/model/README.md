@@ -89,7 +89,7 @@ more than one
 `begin_turn()`/`end_turn()`, backfilled onto just that turn's actions once it resolves) — so a
 turn that took damage to set up a good follow-up scores differently from one that didn't, instead
 of the whole combat being flattened to one scalar. The turn that actually ends a combat is scored
-by `whispering_earring/facility.py`'s `_combat_value`, graded on the *resulting* HP fraction of
+by `whispering_earring/facility_common.py`'s `_combat_value`, graded on the *resulting* HP fraction of
 max HP, not loss relative to that combat's own starting HP: at or above `_HEALTHY_HP_FRACTION`
 (0.5) the grade is just that fraction (`1.0` at full health, gently lower as it drops); below it
 the same formula continues at a steeper slope (`_LOW_HP_SLOPE`), so death (HP fraction `0`) falls

@@ -1,10 +1,12 @@
 # Model
 
 Design doc for training Choices Paradox the way [`claws/model`](../../claws/model/) trains Claws --
-self-play branch-and-score, not supervised learning on scraped human run data. **Not implemented
-yet** -- this is the spec being built against; see Phasing below for what ships first. Update this
-file as design decisions change, and strip the "not implemented" framing from each section as it
-lands.
+self-play branch-and-score, not supervised learning on scraped human run data. **Phase 0 and Phase
+1 are implemented** (`policy.py`'s purpose-threading refactor, and card_reward meta-branching via
+[`whispering_earring/facility_choices_paradox.py`](../../whispering_earring/facility_choices_paradox.py)
+-- validated end to end: a small trial run's `card_reward` decisions materialize and train
+successfully). Phase 2 (`card_select`) and Phase 3 (`shop`/`rest_site`/`event_choice`) are not --
+see Phasing below. Update this file as design decisions change.
 
 ## Why this exists
 
@@ -99,9 +101,11 @@ architectural pattern below is a direct copy of `ClawsNet.score()`'s shape.
 ## Architecture
 
 Same shape as [`claws/model/model.py`](../../claws/model/model.py)'s `ClawsNet`: typed-token
-transformer trunk -> per-option query readout -> shared `policy_mlp`/`value_mlp` heads. Smaller
-trunk than combat's (fewer layers/dim -- a card-reward/select decision's state is much smaller than
-a full combat state).
+transformer trunk -> per-option query readout -> shared `policy_mlp`/`value_mlp` heads, same
+`dim`/`n_layers`/`n_heads` defaults (`dim` specifically matches ClawsNet's so
+`ChoicesParadoxNet.warm_started_from`'s `id_emb` row-copy works without passing matching kwargs
+by hand) -- though a card-reward/select decision's token count is much smaller than a full combat
+state's, so the trunk does less real work per forward pass despite the identical shape.
 
 - **Token types**: `PLAYER`, `MODE`, `DECK_CARD`, `OFFER_CARD`, `RELIC`. `MODE` is a dedicated
   always-present pseudo-token, not a feature bit tacked onto `PLAYER` -- its embedding comes from a
@@ -189,55 +193,81 @@ same `policy_loss = -advantage * log_prob(action_index).clamp(min=-6.0)`, same
 `_normalize_advantages`, pointed at `ChoicesParadoxNet` instead. Genuinely reusable as-is at the
 loss-formula level; only the tokenizer/network underneath differs.
 
-## Facility-side changes (in `whispering_earring/`, not this package)
+## Facility-side changes (in `whispering_earring/`, not this package) -- IMPLEMENTED
 
-**Prerequisite refactor: `policy.py`'s `_pending_card_select_purpose` global has to go.** Today,
-`card_select`'s remove-vs-upgrade purpose is disambiguated by a module-level global set by
-`_choose_shop_action`/`_choose_rest_site_action` and read by `_choose_card_select_action` on the
-*next* call -- both setters only ever run on the main line's own pydantic session, so a
-`BufferDecision`-typed `card_select` (how branch workers see everything) always has `purpose=None`.
-This is latent and harmless today because branch workers never currently reach `shop`/`rest_site`.
-It stops being harmless the moment a meta-branch's own forward continuation spans multiple combats
-and routinely wanders through a shop or rest site inside a branch worker. Fix: widen
-`choose_action`/`_choose_generic_action`/`_choose_shop_action`/`_choose_rest_site_action`'s return
-contracts so purpose flows as an explicit value threaded by the caller into its next call, not a
-global. Small, mechanical, behavior-preserving for today's main-line path (verify via a fixed-seed
-trial diff before/after) -- but a load-bearing prerequisite for *any* horizon-spanning branch
-continuation, including a card-reward-only first phase.
+**`policy.py`'s `_pending_card_select_purpose` global is gone.** `card_select`'s remove-vs-upgrade
+purpose now flows as an explicit value threaded by the caller into `choose_action`'s next call
+(see that function's docstring), not a module global -- a load-bearing prerequisite for any
+horizon-spanning branch continuation, card-reward-only or not.
 
-**New `FacilityConfig` knobs**:
-- `meta_branches_per_trial: int | None = None` -- caps how many card_reward/card_select decisions
-  in a trial actually spawn branches; `None` branches every eligible decision (matching combat's own
-  always-branch default). This is the direct answer to wanting simulation cost under control per
-  iteration -- a decrementing per-trial counter, not a sampling scheme, since a fair sampling scheme
-  would need to know the total number of eligible decisions in advance, which isn't knowable without
-  already having played the run. Known bias (early-run rewards branched more than late-run ones),
-  not blocking for v1.
+**`whispering_earring/facility.py` became three files, not one patched file** -- see that
+package's own README for the split rationale: `facility_common.py` (worker-process orchestration,
+`FacilityConfig`, combat scoring, the generic `main_worker_loop`/`branch_worker_loop`),
+`facility_claws.py` (combat turn-branching, unchanged behavior), and
+`facility_choices_paradox.py` (this package's own facility, described below). `FacilityConfig`'s
+meta knobs live in the shared dataclass but default to *disabled* (`meta_branches_per_trial = 0`)
+so `facility_claws.py`'s CLI, which never touches them, is unaffected;
+`facility_choices_paradox.py`'s CLI is the one that flips `meta_branches_per_trial` to `None`
+(branch every eligible decision) by default:
+
+- `meta_branches_per_trial: int | None = 0` -- `0` disables meta-branching entirely (the shared
+  default); `None` branches every eligible decision (matching combat's own always-branch default,
+  and `facility_choices_paradox.py`'s own CLI default); a positive int caps how many card_reward
+  decisions per trial actually spawn branches -- a decrementing per-trial budget, not a sampling
+  scheme (a fair sampling scheme would need to know the total number of eligible decisions in
+  advance, which isn't knowable without already having played the run). Known bias (early-run
+  rewards branched more than late-run ones), not blocking for v1.
 - `meta_options_replicates: int = 3` -- `M`.
 - `meta_horizon_combats: int = 1` -- see Design above.
 - `meta_branch_timeout_s: float = 600.0` -- generous vs. combat's own 120s turn-branch timeout,
   since a meta-branch job is many combats long, not one turn.
 
-**`_resolve_meta_decision`** (mirrors `_resolve_turn`'s shape) spawns `num_options x M` jobs, waits
-via a new `_wait_for_meta_results` (averages each option's realized value across its usable
-replicates -- non-error, non-timeout; a *died* replicate is usable and contributes its floored
-`-1.0`, only a genuine engine error is dropped), and adopts the best-averaged option. The adoption
-step is just `session.step(name, **args)` on the live, never-torn-down main-line session -- no
-`load_and_resume_combat`/`open_from_checkpoint` reconstruction at all, unlike turn-branch adoption.
-This is the single biggest structural simplification versus combat branching, and it's correct
-*because* no replicate's own downstream play is ever grafted onto the main line -- every replicate's
-only job is producing a value estimate for the option it committed to. It also sidesteps
-`_resolve_combat`'s documented `load_save`-into-fresh-process RNG desync class entirely, by
-construction -- worth re-deriving explicitly before any future edit introduces `load_save`-based
-reconstruction into this adoption step.
+**`_resolve_meta_decision`** (in `facility_choices_paradox.py`, mirrors `_resolve_turn`'s shape)
+spawns `num_options x M` jobs, waits via `_wait_for_meta_results` (averages each option's realized
+value across its usable replicates -- non-error, non-timeout; a *died* replicate is usable and
+contributes its floored `-1.0`, only a genuine engine error is dropped), and adopts the
+best-averaged option. The adoption step is just `session.step(name, **args)` on the live,
+never-torn-down main-line session -- no `load_and_resume_combat`/`open_from_checkpoint`
+reconstruction at all, unlike turn-branch adoption. This is the single biggest structural
+simplification versus combat branching, and it's correct *because* no replicate's own downstream
+play is ever grafted onto the main line -- every replicate's only job is producing a value
+estimate for the option it committed to. It also sidesteps `_resolve_combat`'s documented
+`load_save`-into-fresh-process RNG desync class entirely, by construction -- worth re-deriving
+explicitly before any future edit introduces `load_save`-based reconstruction into this adoption
+step. It also attaches a (non-probabilistic, per-option-value) policy record and the adopted
+option's own averaged value onto the main line's own commit action, the same way combat's
+`_absorb_actions` attaches an adopted turn-branch's onto the main line -- without it,
+`materialize.py`'s `materialize_main_trial` silently finds zero main-line examples (only the
+explicit branch groups), which is exactly what happened until this was added.
 
-**`_play_meta_forward`** (runs inside `branch_worker_loop` for a `MetaBranchJob`): reconstructs via
-`Sts2BufferSession.open_from_checkpoint`, re-derives `legal_options_from_buffer` locally (must be a
-pure function of buffer state so `option_index` means the same thing the main line's own
-enumeration assigned it), applies the committed option, then drives forward unbranched -- reusing
-`_play_turn_only` per combat, purpose threaded per the refactor above -- until the horizon or a loss
-is reached, scores per the Design section's value formula, and saves via the same
-`recorder.save(...)` path `branch_worker_loop` already uses.
+**`_play_meta_forward`** (in `facility_choices_paradox.py`, runs inside `branch_worker_loop` for a
+`MetaBranchJob`): reconstructs via `Sts2BufferSession.open_from_checkpoint`, re-derives
+`legal_options_from_buffer` locally (must be a pure function of buffer state so `option_index`
+means the same thing the main line's own enumeration assigned it), applies the committed option,
+then drives forward unbranched -- reusing `facility_common._play_turn_only` per combat, purpose
+threaded per the refactor above -- until the horizon or a loss is reached. The value is only
+knowable after playing the whole walk forward, which doesn't fit `CompactRecorder.attach_value`'s
+"applies to the next logged action" semantics (the commit action is logged long before the walk
+resolves) -- `recorder.py` grew a small `mark_step()`/`set_value(step, value)` pair for exactly
+this: `mark_step()` right before stepping the commit action, `set_value()` once the walk's outcome
+is known, to backfill that one step retroactively. Saves via the same `recorder.save(...)` path
+`branch_worker_loop` already uses.
+
+**Unplanned but necessary: `policy.py`'s non-combat choosers didn't support `BufferDecision` at
+all**, except `card_select` (a turn-branch worker's own mid-turn Power Potion/Brand case, the only
+non-combat decision anything reached through the buffer protocol before this). `_play_meta_forward`
+routinely wanders through `map_select`/`card_reward`/`shop`/`rest_site`/`event_choice`/
+`bundle_select` after committing, and every one of those crashed
+(`AttributeError: 'BufferDecision' object has no attribute 'player'`) the first time an actual
+trial run exercised the horizon walk end to end. Fixed by adding buffer-protocol counterparts for
+each (`_choose_generic_action_from_buffer` and friends) -- `card_reward`/`shop`'s card picks reuse
+`choices_paradox`'s tier-based heuristic via a small `_BufferCard` wrapper satisfying its
+`_CardLike` protocol; the rest (map_select, bundle_select, event_choice) pick uniformly, and
+`rest_site` picks uniformly among enabled options since `buffer_layout.rest_options()` exposes no
+semantic option_id to prefer HEAL/SMITH by (see `policy.py`'s own docstrings for each). `map_select`
+specifically can't delegate to Golden Compass on the buffer side (no `session.get_map()`
+equivalent) -- it picks uniformly among the current map point's own children instead, read off
+`buffer_layout`'s per-point `current`/children fields.
 
 ## Open questions / accepted approximations
 
@@ -248,6 +278,11 @@ is reached, scores per the Design section's value formula, and saves via the sam
   replacement-level one. Watch for this specifically once trained output exists, not before.
 - No native-checkpoint fast path in v1 -- cost impact on late-run meta-decisions needs measuring,
   not assuming.
+- Boss-fight reward shaping is skipped inside a horizon walk's own combats: a branch worker only
+  ever sees `BufferDecision` (no `context.room_type`/`enemies`, unlike the main line -- see
+  `facility_claws._resolve_combat`'s docstring), so `_play_meta_forward` has no reliable way to
+  detect a boss fight and scores every combat inside the walk with the plain (non-boss) formula.
+  Revisit only if boss combats landing inside a horizon walk turn out to bias training.
 - `CardSelect.source_category`/`source_id` (populated by the engine per `RunSimulator.cs`'s
   `HeadlessCardSelector.PendingSourceCategory`/`PendingSourceId`) could replace the purpose-
   threading refactor with something structurally cleaner (purpose becomes self-contained on the
@@ -257,17 +292,22 @@ is reached, scores per the Design section's value formula, and saves via the sam
 
 ## Phasing
 
-1. **Phase 0** (prerequisite, ship and verify alone): the `policy.py` purpose-threading refactor.
-   Zero behavior change expected on the main line -- verify with a fixed-seed trial diff before
-   either meta-branching phase.
-2. **Phase 1**: card_reward-only meta-branching -- `MetaBranchJob`, the new `FacilityConfig` knobs,
-   `_resolve_meta_decision`/`_play_meta_forward`/`branch_worker_loop` dispatch, and this package's
-   `model.py`/`materialize.py`/`train.py` scoped to `card_reward`'s option shape (with `mode_emb`
-   already sized for 3 rows). `card_select` keeps resolving via the existing unbranched heuristic
-   for all of Phase 1. Validate end to end (small trial run -> materialize -> train smoke test)
-   before Phase 2.
-3. **Phase 2**: extend to `card_select`'s `remove`/`upgrade` purposes -- additive to Phase 1's
-   `model.py` (new option shape, reusing the `mode_emb` rows already provisioned), plus loosening
+1. **Phase 0 -- DONE**: the `policy.py` purpose-threading refactor. Zero behavior change on the
+   main line (unaffected by the buffer-side gap noted above, which only ever bit
+   `facility_choices_paradox.py`'s own horizon walk).
+2. **Phase 1 -- DONE**: card_reward-only meta-branching -- `MetaBranchJob`, the `FacilityConfig`
+   knobs, `_resolve_meta_decision`/`_play_meta_forward`/`branch_worker_loop` dispatch (all in
+   `whispering_earring/facility_choices_paradox.py`, not a patched `facility.py` -- see that
+   package's README), and this package's `model.py`/`materialize.py`/`train.py` scoped to
+   `card_reward`'s option shape (with `mode_emb` already sized for 3 rows). `card_select` keeps
+   resolving via the existing unbranched heuristic for all of Phase 1. Validated end to end (small
+   trial run -> materialize -> train smoke test).
+3. **Phase 2 -- not started**: extend to `card_select`'s `remove`/`upgrade` purposes -- additive to
+   Phase 1's `model.py` (new option shape, reusing the `mode_emb` rows already provisioned), plus
+   widening `META_ELIGIBLE_DECISIONS` (`facility_common.py`) and loosening
    `main_worker_loop`'s branch-eligibility gate.
 4. **Phase 3 (explicitly out of scope, not attempted)**: `shop`/`rest_site`/`event_choice`
-   branching -- blocked on the buffer-protocol gaps noted above.
+   branching as their own meta-decisions (distinct from the buffer-side *support* for driving
+   through them unbranched, which Phase 1 needed and added -- see above) -- still blocked on the
+   buffer-protocol semantic gaps noted above (no option_id-equivalent for rest_site, no
+   title/description/vars for event_choice).

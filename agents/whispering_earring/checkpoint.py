@@ -43,6 +43,40 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class MetaBranchJob:
+    """Job format for card_reward (and eventually card_select) meta-decision branching -- sibling
+    to BranchJob above, not an extension of it: BranchJob's combat-scoring fields
+    (is_last_of_act/boss_ids/combat_hp_before/...) are meaningless here, since a meta-branch's
+    divergence point is a card_reward decision between combats, not a combat turn. See
+    agents/choices_paradox/model/README.md's Data section for the full design and
+    facility_choices_paradox.py for what builds/consumes these.
+
+    actions is the replay prefix only -- NOT including the committed option's own action.
+    facility_choices_paradox._play_meta_forward re-derives this decision's legal options from the
+    replayed state and applies options[option_index] itself, the same way BranchJob's
+    checkpoint_path fast path re-derives state rather than being handed a pre-committed one.
+    There is no native-checkpoint fast path here (unlike BranchJob's checkpoint_path/
+    combat_start_index) -- every replicate reconstructs via a full open_from_checkpoint replay;
+    see the README's Data section for why (full-replay latency growing with run depth could
+    matter once meta-branches multiply that cost by num_options x M, but that's flagged for
+    empirical measurement before a v2 fast path is added, not assumed necessary yet)."""
+    main_id: str
+    decision_kind: str          # "card_reward" | "card_select_remove" | "card_select_upgrade"
+    divergence_index: int       # monotonic per-trial counter, mirrors combat_index
+    option_index: int           # which legal_options(...) entry this branch commits to
+    replicate_index: int        # which of the M replicates of that option this is
+    character: str
+    seed: str
+    ascension: int
+    actions: list[dict] = field(default_factory=list)   # full replay prefix
+    horizon_combats: int = 1
+
+    @property
+    def branch_id(self) -> str:
+        return f"{self.main_id}_m{self.divergence_index:03d}_o{self.option_index:02d}_r{self.replicate_index:02d}"
+
+
+@dataclass
 class BranchJob:
     main_id: str
     act: int
