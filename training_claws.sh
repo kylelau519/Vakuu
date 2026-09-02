@@ -21,6 +21,10 @@ while true; do
     # rm even runs, so -f can't save it, and the script has no set -e to catch the failure) --
     # find -delete never builds one giant argument list, so it can't hit that ceiling.
     find "$vakuu/agents/whispering_earring/data/raw/" -maxdepth 1 -name '*.json' -delete
+    # Native combat checkpoints, plain .json (see facility_common.py's checkpoint_path:
+    # "{main_id}_c{combat_index:03d}.json") -- wiped alongside the round's trial files since a
+    # checkpoint from a wiped round can never be resumed from again.
+    find "$vakuu/agents/whispering_earring/data/raw/checkpoints/" -maxdepth 1 -name '*.json' -delete
 
     echo "[2/6] Running facility_claws.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility_claws.py" \

@@ -33,7 +33,10 @@ while true; do
     # find -delete (not a shell-expanded *.json glob) -- see training_claws.sh's own comment on
     # this, same E2BIG concern once raw_choices/ holds many thousands of per-branch files.
     find "$raw_dir/" -maxdepth 1 -name '*.json' -delete
-    find "$raw_dir/checkpoints/" -maxdepth 1 -name '*.json.gz' -delete
+    # Native combat checkpoints, plain .json (see facility_common.py's checkpoint_path:
+    # "{main_id}_c{combat_index:03d}.json") -- not .gz. Wiped alongside the round's trial
+    # files above since a checkpoint from a wiped round can never be resumed from again.
+    find "$raw_dir/checkpoints/" -maxdepth 1 -name '*.json' -delete
 
     echo "[2/6] Running facility_choices_paradox.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility_choices_paradox.py" \
