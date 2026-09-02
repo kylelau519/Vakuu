@@ -429,7 +429,13 @@ class ChoicesParadoxNet(nn.Module):
             queries.append(q)
 
         logits = self.policy_mlp(torch.stack(queries)).squeeze(-1)
-        value = torch.tanh(self.value_mlp(h[batch.player_pos]).squeeze(-1))
+        # No tanh here (unlike ClawsNet's value head): facility_choices_paradox.py's option-chain
+        # value is a sum of _WIN_BONUS + _combat_value over every combat won along the whole
+        # chain, not a single bounded per-combat term -- it grows unboundedly with chain depth
+        # (observed training targets: ~4 to ~14+). A tanh-squashed head saturates at its +/-1
+        # ceiling against targets that large and stops learning; a linear head can actually track
+        # the accumulated-survival signal the value target is meant to carry.
+        value = self.value_mlp(h[batch.player_pos]).squeeze(-1)
         return logits, value
 
     def forward(

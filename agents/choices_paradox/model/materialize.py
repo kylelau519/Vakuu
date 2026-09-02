@@ -1,19 +1,27 @@
 """Turns whispering_earring meta-branch trial files (card_reward, and eventually card_select's
 remove/upgrade purposes -- see this package's README's Phasing section) into tokenized training
-examples. Near-structural copy of claws/model/materialize.py -- same shared-prefix grouping,
-same REINFORCE-baseline/advantage math -- pointed at this package's tokenizer/network instead.
+examples. Structural copy of claws/model/materialize.py's shared-prefix grouping, but the
+baseline this file subtracts to get `advantage` is deliberately NOT claws' own grand-mean --
+see _group_baseline's docstring.
 
 Every meta-branch spawned by whispering_earring's _resolve_meta_decision replays an identical
 shared prefix up to one card_reward/card_select decision, then commits to one of that decision's
 legal options and plays forward on its own. Unlike combat's turn-branching (branches_per_turn
 free-sampling, so the same action can be sampled by chance any number of times), meta-branching
 is a structured grid -- num_options x meta_options_replicates branches per divergence, uniform M
-per option -- but that structure needs no special handling here: treating each individual
-replicate as its own (state, action, value) example and computing advantage against the plain
-mean of ALL of a group's members (not a two-level per-option-then-cross-option average) gives the
-identical baseline when M is uniform across options (mean of equal-size groups' means == the
-grand mean), while still handing the training loop more distinct examples than pre-averaging
-would. So this file's grouping/baseline logic is _exactly_ claws' own, unmodified.
+per option.
+
+Baseline: a group's `skip_card_reward`/`skip_select` member's own realized value, not the mean of
+every member (claws' own grand-mean baseline, used for combat's turn-branches, would average a
+card's value together with its sibling cards' -- an opportunity-cost/regret framing: "was this the
+best of what happened to be offered," confounded by however strong the other offered cards
+happened to be in that one draft). Subtracting skip's value instead asks a different, and for this
+decision, more useful question: "is taking this card better than taking nothing," a per-card
+causal estimate that stays comparable across groups regardless of which other cards were offered
+alongside it -- letting the value head learn a card's actual usefulness with far fewer samples
+than averaging out the opportunity-cost noise across many differently-companioned drafts would
+need. Tradeoff: skip's value is one single noisy rollout rather than a 4-sample mean, so this
+baseline has higher variance than claws' grand-mean in exchange for removing that bias.
 
 Usage:
     conda activate sts2
@@ -79,15 +87,22 @@ class _Group:
     members: list[dict] = field(default_factory=list)
 
 
+_SKIP_ACTIONS = frozenset({"skip_card_reward", "skip_select"})
+
+
 def _group_baseline(group: _Group) -> float | None:
-    """REINFORCE baseline: plain mean of every member's realized `value` -- see this module's
-    docstring for why this needs no special per-option averaging even though members were
-    spawned option-by-option, not by free sampling. None if fewer than 2 distinct options were
-    observed (no comparison, no signal)."""
+    """Causal baseline: this group's own skip-option member's realized `value` -- see this
+    module's docstring for why skip (not the grand mean of every member, unlike claws' own
+    turn-branch baseline) is the right reference here. None if fewer than 2 distinct options were
+    observed (no comparison, no signal), or if skip's own chain errored/is missing (defensive --
+    skip_card_reward/skip_select should always be a legal option and thus always a member)."""
     subkeys = {_norm_action(m) for m in group.members}
     if len(subkeys) < 2:
         return None
-    return sum(m["value"] for m in group.members) / len(group.members)
+    for m in group.members:
+        if m["action"] in _SKIP_ACTIONS:
+            return m["value"]
+    return None
 
 
 def _read_trial(path: str) -> dict:
