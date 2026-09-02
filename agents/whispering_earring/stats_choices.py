@@ -150,20 +150,28 @@ def _init_choices_stats_worker() -> None:
     _stats_session = Sts2BufferSession()
 
 
-def _card_value_group_task(group) -> tuple[dict[str, list], int]:
+def _card_value_group_task(group) -> tuple[dict[str, list], dict[str, list], int]:
     """Replays one meta-branch group's shared prefix once, decodes the offered cards' names, then
-    tallies every sibling option's own realized value against the card it committed to. Returns
-    (name -> [n_evaluated, value_sum], 1-if-skipped-else-0)."""
+    tallies every sibling option's own realized value against the card it committed to -- both
+    raw and against this SAME group's own skip-option value (materialize.py's _group_baseline,
+    the same v_i - v0 causal baseline train.py's policy loss trains on -- see that module's
+    docstring for why skip, not the group mean, is the right reference). Returns (name ->
+    [n_evaluated, value_sum], name -> [n_evaluated, advantage_sum] (only for groups with a real
+    skip baseline), 1-if-skipped-else-0)."""
     assert _stats_session is not None
     counts: dict[str, list] = defaultdict(lambda: [0, 0.0])
+    adv_counts: dict[str, list] = defaultdict(lambda: [0, 0.0])
     try:
         decision = _stats_session.start(group.character, group.seed, group.ascension)
         for entry in group.prefix_actions:
             decision = _stats_session.step(entry["action"], **entry.get("args", {}))
     except Exception:
-        return {}, 1  # prefix replay failed -- skip this group, don't kill the round's stats
+        return {}, {}, 1  # prefix replay failed -- skip this group, don't kill the round's stats
     if decision.decision not in ("card_reward", "event_card_reward"):
-        return {}, 1
+        return {}, {}, 1
+
+    baseline = cp_materialize._group_baseline(group)  # None if skip's own chain errored/missing,
+    # or fewer than 2 distinct options were observed -- same guard materialize.py itself uses.
 
     options = cp_model.legal_options_from_buffer(decision, group.decision_kind)
     names = _decode_option_names(decision, options)
@@ -175,7 +183,11 @@ def _card_value_group_task(group) -> tuple[dict[str, list], int]:
             row = counts[name]
             row[0] += 1
             row[1] += member["value"]
-    return dict(counts), 0
+            if baseline is not None:
+                adv_row = adv_counts[name]
+                adv_row[0] += 1
+                adv_row[1] += member["value"] - baseline
+    return dict(counts), dict(adv_counts), 0
 
 
 def _card_adoption_trial_task(path: str) -> tuple[dict[str, int], int]:
@@ -207,10 +219,11 @@ def _card_adoption_trial_task(path: str) -> tuple[dict[str, int], int]:
     return dict(counts), 0
 
 
-def _card_pick_stats(raw_dir: Path, jobs: int) -> tuple[dict[str, list], int, int]:
-    """Returns (name -> [n_evaluated, value_sum, n_adopted], groups+trials skipped, groups+trials
-    total). Empty/zero if there's nothing to replay yet (e.g. round 1 before any branch has
-    finished)."""
+def _card_pick_stats(raw_dir: Path, jobs: int) -> tuple[dict[str, list], dict[str, list], int, int]:
+    """Returns (name -> [n_evaluated, value_sum, n_adopted], name -> [n_evaluated, advantage_sum]
+    (v_i - v0 vs. skip, only from groups with a real skip baseline), groups+trials skipped,
+    groups+trials total). Empty/zero if there's nothing to replay yet (e.g. round 1 before any
+    branch has finished)."""
     _import_choices_stats_deps()
     paths = [str(p) for p in raw_dir.glob("*.json")]
     try:
@@ -218,45 +231,55 @@ def _card_pick_stats(raw_dir: Path, jobs: int) -> tuple[dict[str, list], int, in
     except Exception as e:
         print(f"warning: card-stats grouping pass failed ({type(e).__name__}: {e}); "
               "skipping card stats for this round")
-        return {}, 0, 0
+        return {}, {}, 0, 0
 
     total: dict[str, list] = defaultdict(lambda: [0, 0.0, 0])
+    adv_total: dict[str, list] = defaultdict(lambda: [0, 0.0])
     skipped = 0
     n_units = len(groups) + len(main_paths)
     if n_units == 0:
-        return {}, 0, 0
+        return {}, {}, 0, 0
 
     with ProcessPoolExecutor(max_workers=jobs, initializer=_init_choices_stats_worker) as pool:
         value_futures = [pool.submit(_card_value_group_task, g) for g in groups.values()]
         adoption_futures = [pool.submit(_card_adoption_trial_task, p) for p in main_paths]
         for fut in as_completed(value_futures):
-            counts, skip = fut.result()
+            counts, adv_counts, skip = fut.result()
             skipped += skip
             for name, (n, val_sum) in counts.items():
                 row = total[name]
                 row[0] += n
                 row[1] += val_sum
+            for name, (n, adv_sum) in adv_counts.items():
+                adv_row = adv_total[name]
+                adv_row[0] += n
+                adv_row[1] += adv_sum
         for fut in as_completed(adoption_futures):
             counts, skip = fut.result()
             skipped += skip
             for name, n in counts.items():
                 total[name][2] += n
-    return dict(total), skipped, n_units
+    return dict(total), dict(adv_total), skipped, n_units
 
 
-def _print_card_value_table(total: dict[str, list], title: str) -> None:
-    print(f"\n-- {title}: card pick value, name-resolved -- 'n_evaluated'/'avg_value' from every "
-          f"option-chain that committed to this card, 'n_adopted' from how often the real trial "
-          f"actually took it --")
+def _print_card_value_table(total: dict[str, list], adv_total: dict[str, list], title: str) -> None:
+    print(f"\n-- {title}: card pick value, name-resolved -- 'avg_value' raw realized value from "
+          f"every option-chain that committed to this card; 'avg_vs_skip' = v_i - v0 against that "
+          f"same draft's own skip-option value (materialize.py's causal baseline -- see its "
+          f"docstring), the actual signal the policy trains on, positive means better than not "
+          f"picking anything; 'n_adopted' from how often the real trial actually took it --")
     if not total:
         print("no card value data found.")
         return
-    rows = [(name, n, val_sum / n if n else 0.0, n_adopted)
-            for name, (n, val_sum, n_adopted) in total.items()]
+    rows = []
+    for name, (n, val_sum, n_adopted) in total.items():
+        adv_n, adv_sum = adv_total.get(name, (0, 0.0))
+        vs_skip = f"{adv_sum / adv_n:+.3f}" if adv_n else "n/a"
+        rows.append((name, n, val_sum / n if n else 0.0, vs_skip, n_adopted))
     rows.sort(key=lambda r: -r[2])
-    print(f"{'card':<28} {'n_evaluated':>11} {'avg_value':>10} {'n_adopted':>10}")
-    for name, n, avg, n_adopted in rows:
-        print(f"{name:<28} {n:>11} {avg:>10.3f} {n_adopted:>10}")
+    print(f"{'card':<28} {'n_evaluated':>11} {'avg_value':>10} {'avg_vs_skip':>12} {'n_adopted':>10}")
+    for name, n, avg, vs_skip, n_adopted in rows:
+        print(f"{name:<28} {n:>11} {avg:>10.3f} {vs_skip:>12} {n_adopted:>10}")
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +292,6 @@ def _aggregate(records: list[dict]) -> dict:
     )
     reached_floors: list = []
     outcomes: dict[str, int] = defaultdict(int)
-    card_stats: dict[str, list] = defaultdict(lambda: [0, 0.0, 0])
     value_n = value_sum = value_sumsq = 0.0
     value_min = value_max = None
     n_main = n_branch = n_branch_errors = n_divergences = n_adopted_best = 0
@@ -285,11 +307,11 @@ def _aggregate(records: list[dict]) -> dict:
         reached_floors.extend(rec.get("reached_floors", []))
         for k, v in rec.get("outcomes", {}).items():
             outcomes[k] += v
-        for name, (n, val_sum, n_adopted) in rec.get("card_stats", {}).items():
-            row = card_stats[name]
-            row[0] += n
-            row[1] += val_sum
-            row[2] += n_adopted
+        # Deliberately NOT accumulating card_stats/card_adv_stats across rounds here -- unlike
+        # floor/outcome/adoption stats, a card's value is situational (deck/act/context-dependent),
+        # so pooling its evaluations across many different rounds/drafts doesn't mean anything.
+        # _print_card_value_table is only ever called with a single round's own card_total/
+        # card_adv_total (see main()'s "This round" call) -- never with cross-round data.
         vs = rec.get("adopted_value_summary") or {}
         value_n += vs.get("n", 0)
         value_sum += vs.get("sum", 0.0)
@@ -310,7 +332,6 @@ def _aggregate(records: list[dict]) -> dict:
         "per_floor": {k: dict(v) for k, v in per_floor.items()},
         "reached_floors": reached_floors,
         "outcomes": dict(outcomes),
-        "card_stats": dict(card_stats),
         "adopted_value_summary": {"n": value_n, "sum": value_sum, "sumsq": value_sumsq,
                                    "min": value_min, "max": value_max},
         "n_main_trials": n_main, "n_branch_trials": n_branch, "n_branch_errors": n_branch_errors,
@@ -386,7 +407,6 @@ def main() -> None:
               f"{cumulative['n_divergences']} "
               f"({_fmt_rate(cumulative['n_adopted_best'], cumulative['n_divergences'])})")
         _print_value_summary(cumulative["adopted_value_summary"], "Summary adopted value")
-        _print_card_value_table(cumulative["card_stats"], "Summary")
         if cumulative["n_branch_errors"]:
             print(f"Summary branch trial errors: {cumulative['n_branch_errors']}/"
                   f"{cumulative['n_branch_trials']}")
@@ -416,12 +436,13 @@ def main() -> None:
     _print_meta_decision_summary(meta_rows, "This round")
 
     card_total: dict[str, list] = {}
+    card_adv_total: dict[str, list] = {}
     skipped = n_units = 0
     if not args.no_card_stats:
         _import_choices_stats_deps()
         ensure_setup()
-        card_total, skipped, n_units = _card_pick_stats(raw_dir, args.jobs)
-        _print_card_value_table(card_total, "This round")
+        card_total, card_adv_total, skipped, n_units = _card_pick_stats(raw_dir, args.jobs)
+        _print_card_value_table(card_total, card_adv_total, "This round")
         if n_units:
             print(f"(replayed {n_units - skipped}/{n_units} group(s)/trial(s) for card "
                   f"identity; {skipped} skipped)")
@@ -449,6 +470,7 @@ def main() -> None:
         "n_adopted_best": sum(1 for r in meta_rows if r["adopted_is_best"]),
         "adopted_value_summary": _value_summary(adopted_values),
         "card_stats": card_total,
+        "card_adv_stats": card_adv_total,
         "card_groups_total": n_units,
         "card_groups_skipped": skipped,
     }
@@ -466,8 +488,6 @@ def main() -> None:
           f"{cumulative['n_divergences']} "
           f"({_fmt_rate(cumulative['n_adopted_best'], cumulative['n_divergences'])})")
     _print_value_summary(cumulative["adopted_value_summary"], "Summary adopted value")
-    if not args.no_card_stats:
-        _print_card_value_table(cumulative["card_stats"], "Summary")
     if cumulative["n_branch_errors"]:
         print(f"Summary branch trial errors: {cumulative['n_branch_errors']}/"
               f"{cumulative['n_branch_trials']}")
