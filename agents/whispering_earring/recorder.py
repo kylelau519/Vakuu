@@ -1,17 +1,5 @@
 """Compact per-trial recorder, passed to Sts2Session(logger=...).
 
-Unlike a full state-per-step trace, this keeps no state at all: full state at any decision
-point is always reconstructible later by replaying a trial's action log through a fresh
-session (see checkpoint.py / Sts2Session.open_from_checkpoint), so materializing training
-features is a deliberate, one-time offline step rather than something paid automatically,
-in full, for every trial and every MCTS branch as it's generated.
-
-The one thing replay *can't* recover after the fact is search statistics -- which actions
-an MCTS search considered and how many visits each got -- since that information only
-exists during the search itself. attach_policy() is the hook for recording it: call it
-right before session.step() with the visit distribution that produced the upcoming action,
-and it gets attached to that action's entry in the saved file.
-
 Value is scoped per turn, not per combat or per trial. facility.py brackets each individual
 turn with begin_turn()/end_turn(value) -- every turn (including the one that ends the
 combat) gets its own value, so a turn that took damage to set up a good follow-up isn't

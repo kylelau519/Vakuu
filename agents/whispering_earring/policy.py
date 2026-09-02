@@ -7,17 +7,6 @@ Returns (action_name, kwargs, policy) rather than a built command, so callers pa
 two straight into session.step(name, **kwargs) -- the session builds/validates the actual
 command via actions.action(), no need to duplicate that here. `
 
-policy is None for every decision type except combat_play: it's a placeholder for the
-per-option distribution an MCTS search would produce.
-
-Combat decisions sample from ClawsNet's own softmax (_choose_combat_action_claws), or pick
-uniformly at random if no checkpoint is loaded yet -- this is what gives branch-to-branch
-diversity for facility.py's turn-level branch-and-adopt scheme (see its _resolve_turn),
-which now supplies the sequencing-search role an in-loop MCTS search used to play. mcts.py
-still exists (PUCT search over ClawsNet as the (p, v) evaluator) but is no longer wired into
-this live generation path -- it was too expensive against this engine's replay-only
-checkpointing (every simulation replays a combat's full history) for what it bought.
-
 _choose_combat_action_claws mixes AlphaZero-style Dirichlet noise into that softmax before
 sampling (see _DIRICHLET_EPS/_DIRICHLET_ALPHA_SCALE below) rather than reintroducing search --
 without it, an option whose probability drifts near 0 is rarely/never one of

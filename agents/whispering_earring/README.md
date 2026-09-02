@@ -16,15 +16,6 @@ checkpoint's own softmax policy instead (still no search, just the raw network).
 softmax-sample/uniform-random diversity across a turn's parallel branches is what gives
 branch-and-adopt something to select between.
 
-`claws/model/mcts.py`'s PUCT search over `ClawsNet` still exists but is **not** wired into this
-live path -- it was too expensive here: every simulation's `Sts2Env.step()` replays a combat's
-*entire* action log from `StartRun` (no cheaper way to reach an arbitrary tree node, since
-sts2-cli has no combat-state snapshot/fork), so search cost grows with combat depth against a
-budget that was already tiny. Sequencing/order-sensitivity (does it matter whether you buff
-before attacking, block before or after a debuff) is instead captured by branching at *turn*
-granularity: several candidate turns are played out from the same checkpoint, and the winner is
-adopted, without needing an in-loop tree search at all.
-
 Each adopted turn is scored with a TD-bootstrapped value, not a flat per-combat constant (see
 `facility.py`'s `_play_turn_only` and `_combat_value`): a turn that doesn't end the combat gets
 `-(hp_lost_this_turn)/max_hp + V_net(state_after_turn)` (the current `ClawsNet`'s own value-head

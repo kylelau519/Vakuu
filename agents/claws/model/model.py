@@ -429,7 +429,7 @@ class ClawsNet(nn.Module):
         """Returns (options, logits [len(options)], value scalar) for one live decision. Accepts
         either shape decision can arrive in: a pydantic CombatPlay (the main self-play line,
         materialize.py's saved batches) or a buffer_env.BufferDecision (whispering_earring's
-        branch-worker/MCTS hot path -- see tokenize_from_buffer's docstring for why that path
+        branch-worker hot path -- see tokenize_from_buffer's docstring for why that path
         avoids the pydantic one)."""
         if isinstance(decision, BufferDecision):
             batch = tokenize_from_buffer(decision, self.gvocab)
