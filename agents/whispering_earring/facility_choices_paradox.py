@@ -1,6 +1,5 @@
 """Card-reward meta-decision branching, generating training data for `choices_paradox` (see
-agents/choices_paradox/model/README.md's Design section -- note the README's own Data section
-still describes the superseded Phase 1 scheme; update it alongside this file). Every eligible
+agents/choices_paradox/model/README.md's Design section). Every eligible
 card_reward decision along the main line branches into one chain per legal option, each played
 forward to natural death (a real loss, not a fixed horizon) using the SAME turn-branch-and-adopt
 combat quality the main line itself gets -- not a single noisy rollout. card_select's remove/
@@ -248,6 +247,19 @@ def _evaluate_option_chain(
         "divergence_index": divergence_index, "option_index": option_index,
         "prefix_len": len(prefix),
     }, start_step=len(prefix))
+    # Qualifies main_id for anything downstream of THIS chain's own combats -- specifically the
+    # BranchJob/branch_id namespace _resolve_combat's shared turn-branching machinery builds (see
+    # checkpoint.py's docstring: branch_id relies on combat_index being monotonic and never reset
+    # for the whole trial to stay collision-free, which was true in facility_claws.py's original
+    # single-main-line design). Each option-chain here resets its OWN local combat_index to 0 and
+    # multiple chains for the same divergence run concurrently (see this module's docstring) --
+    # with the bare main_id, two sibling chains both reaching their own combat_index=1 at the same
+    # act/floor (guaranteed right after a shared divergence) mint IDENTICAL branch_ids, and
+    # _run_branch_job's `f"{cfg.raw_dir}/{job.branch_id}.json"` write silently clobbers one
+    # chain's turn-branch data with another's. Mirrors the divergence_index/option_index already
+    # folded into this function's own select_map_node checkpoint names below and its final
+    # branch_id at the bottom of this function.
+    branch_main_id = f"{main_id}_m{divergence_index:03d}_o{option_index:02d}"
     session = Sts2Session(logger=recorder)
     checkpoint_dir = os.path.join(cfg.raw_dir, "checkpoints")
     checkpoint_paths: list[str] = []
@@ -275,7 +287,7 @@ def _evaluate_option_chain(
                     combat_index += 1
                     session, decision, combat_outcome = _resolve_combat(
                         job_queue, results_queue, main_worker_index, cfg, recorder, session,
-                        decision, character, seed, main_id, combat_index, stop_event,
+                        decision, character, seed, branch_main_id, combat_index, stop_event,
                         combat_checkpoint_path,
                     )
                     combat_checkpoint_path = None
@@ -298,8 +310,7 @@ def _evaluate_option_chain(
                     # same chain could still be reading an older file after this one moves on.
                     checkpoint_path = os.path.join(
                         checkpoint_dir,
-                        f"{main_id}_m{divergence_index:03d}_o{option_index:02d}"
-                        f"_c{combat_index + 1:03d}.json",
+                        f"{branch_main_id}_c{combat_index + 1:03d}.json",
                     )
                     os.makedirs(checkpoint_dir, exist_ok=True)
                     session.save(checkpoint_path)
@@ -320,8 +331,7 @@ def _evaluate_option_chain(
         if outcome != "error":
             recorder.set_value(commit_step, total_value)
         try:
-            branch_id = f"{main_id}_m{divergence_index:03d}_o{option_index:02d}"
-            recorder.save(f"{cfg.raw_dir}/{branch_id}.json", session.action_log, outcome=outcome)
+            recorder.save(f"{cfg.raw_dir}/{branch_main_id}.json", session.action_log, outcome=outcome)
         except Exception as e:
             recorder.log_error(f"save failed: {type(e).__name__}: {e}")
     finally:
