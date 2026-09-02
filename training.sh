@@ -48,7 +48,7 @@ while true; do
 
     echo "[5/5] Training model..."
     python "$vakuu/agents/claws/model/train.py" \
-        "$vakuu/agents/claws/model/dataset.pt" --epochs 40 \
+        "$vakuu/agents/claws/model/dataset.pt" --epochs 30 \
         --out "$vakuu/agents/claws/model/claws.pt" \
         --init "${CLAWS_CHECKPOINT:-}" 
 

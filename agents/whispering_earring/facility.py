@@ -214,9 +214,6 @@ def _play_turn_only(
             enemy_term = (enemy_hp_before_turn - enemy_hp_after_turn) / boss_max_hp
         hp_weight = _BOSS_HP_WEIGHT if is_last_of_act else 0.75
         turn_value = hp_weight * hp_term + _BOSS_ENEMY_WEIGHT * enemy_term + 1 * v_net
-        # hp_term and v_net are independently bounded but their sum isn't -- floor it so a live,
-        # still-recoverable turn can never score worse than an outright loss (-1.0, set above).
-        turn_value = max(turn_value, -1.0)
 
     session.logger.end_turn(turn_value)
     return outcome
