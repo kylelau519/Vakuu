@@ -15,14 +15,14 @@ while true; do
     # claws.pt, the next run of this same script picks it up automatically -- this is what
     # turns repeated runs into a self-play improvement loop.
 
-    echo "[1/5] Cleaning up old raw data..."
+    echo "[1/6] Cleaning up old raw data..."
     # A shell-expanded "*.json" here can blow past the OS's exec argument-length limit once
     # data/raw/ holds tens of thousands of per-branch files (E2BIG happens in the shell before
     # rm even runs, so -f can't save it, and the script has no set -e to catch the failure) --
     # find -delete never builds one giant argument list, so it can't hit that ceiling.
     find "$vakuu/agents/whispering_earring/data/raw/" -maxdepth 1 -name '*.json' -delete
 
-    echo "[2/5] Running facility.py (Data Generation)..."
+    echo "[2/6] Running facility.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility.py" \
         --trials 5 --branch-workers 15 --branches-per-turn 40 --main-workers 3 \
         --raw-dir "$vakuu/agents/whispering_earring/data/raw"
@@ -30,27 +30,40 @@ while true; do
     # seconds per combat now (branching happens once per turn, not once per whole combat) --
     # retune deliberately rather than assuming this number means what it used to.
 
-    echo "[3/5] Floor/combat stats for this round..."
+    echo "[3/6] Floor/combat stats for this round..."
+    # --no-card-stats: the card offer/pick table needs a replay pass per turn-branch group
+    # (torch + CLR bridge), expensive enough to slow down every round for a table nobody's
+    # watching live -- run stats.py by hand without this flag when you actually want it.
     python "$vakuu/agents/whispering_earring/stats.py" \
         --raw-dir "$vakuu/agents/whispering_earring/data/raw" \
-        --round "$ROUND"
+        --round "$ROUND" --no-card-stats
     # Cumulative stats persist to data/stats_history.jsonl (a sibling of data/raw, so it
     # survives the "Cleaning up old raw data" wipe above) -- that's what to check mid-run to
     # see whether the model is actually improving over the day, not just this round's numbers.
 
-    echo "[4/5] Materializing dataset..."
+    echo "[4/6] Materializing dataset..."
     # Pass the raw dir itself, not a shell-expanded "*.json" glob -- materialize.py globs
-    # internally now so this one argument can't hit the same E2BIG ceiling as step [1/5].
+    # internally now so this one argument can't hit the same E2BIG ceiling as step [1/6].
     python "$vakuu/agents/claws/model/materialize.py" \
         "$vakuu/agents/whispering_earring/data/raw/" \
         --out "$vakuu/agents/claws/model/dataset.pt" \
         --jobs 8
 
-    echo "[5/5] Training model..."
+    echo "[5/6] Training model..."
     python "$vakuu/agents/claws/model/train.py" \
         "$vakuu/agents/claws/model/dataset.pt" --epochs 30 \
         --out "$vakuu/agents/claws/model/claws.pt" \
-        --init "${CLAWS_CHECKPOINT:-}" 
+        --init "${CLAWS_CHECKPOINT:-}"
+
+    echo "[6/6] Backing up checkpoint..."
+    # Timestamped, never overwritten -- so a bad round (or a manual mistake in between runs of
+    # this script, see train.py's --init guards) can be recovered from by hand instead of losing
+    # every checkpoint before it. Not pruned here; keep an eye on backups/ disk usage over a long
+    # run and thin it out by hand if it grows too large.
+    backup_dir="$vakuu/agents/claws/model/backups"
+    mkdir -p "$backup_dir"
+    cp "$vakuu/agents/claws/model/claws.pt" \
+        "$backup_dir/claws_round${ROUND}_$(date +%Y%m%d_%H%M%S).pt"
 
     echo "==========================================="
     echo " Round $ROUND complete! Restarting in 3s..."
