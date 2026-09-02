@@ -22,8 +22,9 @@ saturates naturally at log_prob = 0.
 
 Usage:
     conda activate sts2
-    python train.py dataset.pt --epochs 5 --out claws.pt
-    python train.py dataset.pt --epochs 20 --out claws.pt --value-only  # force value-only
+    python train.py dataset.pt --epochs 5 --out claws.pt --init ""  # round 1, random init
+    python train.py dataset.pt --epochs 5 --out claws.pt --init claws.pt  # resume
+    python train.py dataset.pt --epochs 20 --out claws.pt --init claws.pt --value-only
 """
 from __future__ import annotations
 
@@ -121,12 +122,34 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--out", default="claws.pt")
-    parser.add_argument("--init", default="claws.pt", help="resume from an existing checkpoint")
+    parser.add_argument("--init", default=None,
+                         help="resume from an existing checkpoint, or pass \"\" to train from "
+                              "a random init. Required (even if empty) -- no implicit default, "
+                              "so a dropped/mis-pasted --init fails loudly instead of silently "
+                              "resolving \"claws.pt\" against whatever the shell's cwd happens "
+                              "to be and (if a stray checkpoint sits there) loading the wrong "
+                              "network without complaint.")
     parser.add_argument("--value-only", action="store_true",
                          help="force-skip policy cross-entropy everywhere, even on policy_real "
                               "examples -- normally only non-policy_real (noisy placeholder) "
                               "examples skip it automatically (see module docstring)")
     args = parser.parse_args()
+    if args.init is None:
+        raise SystemExit("--init is required -- pass a checkpoint path to resume from, or \"\" "
+                          "to intentionally train from a random init (e.g. round 1). There is "
+                          "no default: a mis-pasted command that drops this flag now fails here "
+                          "instead of silently loading whatever \"claws.pt\" happens to resolve "
+                          "to in the current directory.")
+    if not args.init and os.path.exists(args.out):
+        # "" is legitimate on a real round 1 (training.sh only ever passes "" when --out's
+        # checkpoint doesn't exist yet -- see its CLAWS_CHECKPOINT unset comment); an existing
+        # --out with an empty --init instead means CLAWS_CHECKPOINT was never exported (e.g. a
+        # manually-run command in a fresh shell) and this run is about to overwrite a trained
+        # checkpoint with one built from a random init. The flag alone can't tell those two
+        # apart -- this file check can.
+        raise SystemExit(f"--init is empty but --out ({args.out}) already exists -- refusing to "
+                          f"overwrite a trained checkpoint with a random init. If this really is "
+                          f"a fresh start, remove or rename the existing {args.out} first.")
 
     examples: list[dict] = []
     for path in args.datasets:
@@ -136,6 +159,9 @@ def main() -> None:
     net = ClawsNet(GlobalVocab(EntityVocab.load()))
     if args.init:
         net.load_state_dict(torch.load(args.init, weights_only=True))
+        print(f"resumed from {args.init}")
+    else:
+        print("--init \"\": training from a random init")
 
     if args.epochs > 0:
         if not examples:
