@@ -155,8 +155,11 @@ def materialize_group(
     decision = session.start(group.character, group.seed, group.ascension)
     for entry in group.prefix_actions:
         decision = session.step(entry["action"], **entry.get("args", {}))
-    if decision.decision not in ("card_reward", "card_select"):
-        return []  # defensive -- a meta-branch checkpoint should always land on one of these
+    if decision.decision not in ("card_reward", "event_card_reward", "card_select"):
+        return []  # defensive -- a meta-branch checkpoint should always land on one of these.
+        # event_card_reward is the blessing-triggered buffer-side variant of a "card_reward"
+        # decision_kind (STS2's JSON protocol unifies both under one "card_reward" literal, but
+        # the buffer protocol splits them -- see model.py's legal_options_from_buffer docstring).
 
     options = legal_options_from_buffer(decision, group.decision_kind)
     batch = tokenize_from_buffer(decision, group.decision_kind, gvocab)
@@ -200,7 +203,10 @@ def materialize_main_trial(
     examples: list[Example] = []
     decision = session.start(trial["character"], trial["seed"], trial.get("ascension", 0))
     for entry in trial["actions"]:
-        if decision.decision == "card_reward" and "policy" in entry:
+        if decision.decision in ("card_reward", "event_card_reward") and "policy" in entry:
+            # decision_kind passed down is always "card_reward" -- matches what _resolve_meta_decision
+            # recorded on the main line (mirroring the JSON protocol's own unified literal), even
+            # when this buffer-side replay shows the blessing-triggered "event_card_reward" kind.
             options = legal_options_from_buffer(decision, "card_reward")
             batch = tokenize_from_buffer(decision, "card_reward", gvocab)
             examples.append({

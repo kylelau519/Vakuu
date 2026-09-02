@@ -260,6 +260,12 @@ def _choose_generic_action_from_buffer(
     reuse; where one exists (card_reward, shop's card/potion picks), it's reused via the
     _BufferCard wrapper rather than duplicated as a second uniform-random implementation.
 
+    "card_reward"/"event_card_reward" are handled together: STS2's JSON protocol reports both the
+    ordinary post-combat reward and the blessing-triggered one (from_event=True) under the same
+    "card_reward" literal, but the buffer protocol splits them into two distinct decision kinds
+    with separate sections -- _choose_card_reward_from_buffer checks bl.decision_name(arr) itself
+    to pick the right one (see its own docstring).
+
     map_select can't delegate to Golden Compass here -- that needs session.get_map()'s
     pydantic-shaped map, not available off a buffer decision -- so it instead picks uniformly
     among the current map point's own children (buffer_layout's per-point `current`/children
@@ -276,7 +282,7 @@ def _choose_generic_action_from_buffer(
     if dec == "map_select":
         name, kwargs = _choose_map_action_from_buffer(arr)
         return name, kwargs, None
-    if dec == "card_reward":
+    if dec in ("card_reward", "event_card_reward"):
         name, kwargs = _choose_card_reward_from_buffer(arr)
         return name, kwargs, None
     if dec == "bundle_select":
@@ -312,8 +318,22 @@ def _choose_map_action_from_buffer(arr) -> tuple[str, dict]:
 
 
 def _choose_card_reward_from_buffer(arr) -> tuple[str, dict]:
-    cards = [_BufferCard(i, decode_token(bl.card_token(slot))) for i, slot in bl.reward_cards(arr)]
-    index = choices_paradox.choose_card_reward(cards, bl.can_skip_reward(arr), bl.player_deck_size(arr))
+    """Handles both buffer decision kinds a "card_reward" pydantic-side decision can actually be:
+    the ordinary post-combat CARD_REWARD section, or the blessing-triggered EVENT_CARD_REWARD one
+    -- STS2's JSON protocol unifies them under one "card_reward" literal (WriteEventCardReward),
+    but the buffer protocol keeps them as separate sections with no shared can_skip flag (the
+    event variant is unconditionally skippable -- see model.py's legal_options_from_buffer for the
+    same distinction)."""
+    if bl.decision_name(arr) == "event_card_reward":
+        cards = [
+            _BufferCard(i, decode_token(bl.card_token(slot)))
+            for i, slot in bl.event_card_reward_cards(arr)
+        ]
+        can_skip = True
+    else:
+        cards = [_BufferCard(i, decode_token(bl.card_token(slot))) for i, slot in bl.reward_cards(arr)]
+        can_skip = bl.can_skip_reward(arr)
+    index = choices_paradox.choose_card_reward(cards, can_skip, bl.player_deck_size(arr))
     if index is None:
         return "skip_card_reward", {}
     return "select_card_reward", {"card_index": index}

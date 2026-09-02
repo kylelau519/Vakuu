@@ -177,7 +177,14 @@ def tokenize_from_buffer(buf: BufferDecision, decision_kind: str, gvocab: Global
     """Buffer counterpart to tokenize() -- same token layout/feature math, read via
     buffer_layout's offset accessors. card_reward's offered cards come from bl.reward_cards();
     card_select's (either purpose) come from bl.select_cards() -- both yield (index, slot) pairs
-    of the same Card(11) shape as bl.deck_cards()/bl.hand_cards()."""
+    of the same Card(11) shape as bl.deck_cards()/bl.hand_cards().
+
+    A card_reward decision_kind can mean either buffer decision kind: STS2's JSON protocol
+    reports the blessing-triggered variant (from_event=True) under the same "card_reward" literal
+    as the ordinary post-combat one (RunSimulator.Writers.Json.cs's WriteEventCardReward), but the
+    buffer protocol keeps it as its own "event_card_reward" section (bl.event_card_reward_cards),
+    entirely separate from bl.reward_cards()'s CARD_REWARD section -- so decision_kind alone can't
+    tell them apart; buf.decision (this specific replayed state) must be checked too."""
     arr = buf.arr
     types: list[int] = []
     ids: list[int] = []
@@ -210,7 +217,13 @@ def tokenize_from_buffer(buf: BufferDecision, decision_kind: str, gvocab: Global
             [_log1p(slot[bl.CARD_COST]), float(bool(slot[bl.CARD_UPGRADED])), 0.0, 0.0],
         )
 
-    offer_iter = bl.reward_cards(arr) if decision_kind == "card_reward" else bl.select_cards(arr)
+    if decision_kind == "card_reward":
+        offer_iter = (
+            bl.event_card_reward_cards(arr) if buf.decision == "event_card_reward"
+            else bl.reward_cards(arr)
+        )
+    else:
+        offer_iter = bl.select_cards(arr)
     offer_pos: dict[int, int] = {}
     for idx, slot in offer_iter:
         entry = decode_token(bl.card_token(slot))
@@ -264,10 +277,22 @@ def legal_options(decision: CardReward | CardSelect, decision_kind: str) -> list
 
 
 def legal_options_from_buffer(buf: BufferDecision, decision_kind: str) -> list[tuple[str, dict]]:
-    """Buffer counterpart to legal_options() -- same enumeration, read off buf.arr."""
+    """Buffer counterpart to legal_options() -- same enumeration, read off buf.arr.
+
+    See tokenize_from_buffer's docstring on why decision_kind=="card_reward" alone can't tell the
+    ordinary post-combat reward apart from the blessing-triggered one -- buf.decision does."""
     arr = buf.arr
     if decision_kind == "card_reward":
-        options: list[tuple[str, dict]] = [
+        if buf.decision == "event_card_reward":
+            options: list[tuple[str, dict]] = [
+                ("select_card_reward", {"card_index": i}) for i, _ in bl.event_card_reward_cards(arr)
+            ]
+            # Always skippable -- WriteEventCardReward hardcodes can_skip=true on the JSON side
+            # unconditionally (an engine invariant, not per-instance state), and the buffer's own
+            # EVENT_CARD_REWARD section has no can_skip flag to read at all.
+            options.append(("skip_card_reward", {}))
+            return options
+        options = [
             ("select_card_reward", {"card_index": i}) for i, _ in bl.reward_cards(arr)
         ]
         if bl.can_skip_reward(arr):
