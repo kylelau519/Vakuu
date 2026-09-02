@@ -7,7 +7,15 @@ turn_index, branch_index) that gives every branch a collision-free id even acros
 floors/turns. combat_index alone (monotonic for the whole trial, never reset) already makes
 branch_id collision-free on its own -- act is included in the id purely for human readability,
 since floor resets to a low number at the start of every act (STS2's own per-act floor
-numbering), so "floor 17" by itself doesn't say which act it's in. turn_index is the finest unit here -- branches diverge for a single turn at a
+numbering), so "floor 17" by itself doesn't say which act it's in. This guarantee rests on
+main_id naming exactly one combat_index sequence: facility_claws.py's single main line satisfies
+that directly, but facility_choices_paradox.py's option-chains each keep their OWN locally-reset
+combat_index (see its _evaluate_option_chain), and several chains for the same divergence run
+concurrently -- so that module qualifies main_id per chain (branch_main_id =
+f"{main_id}_m{divergence_index:03d}_o{option_index:02d}") before ever calling into
+facility_claws._resolve_combat, rather than passing the bare trial main_id through. Skipping that
+qualification is exactly how two sibling option-chains mint identical branch_ids and silently
+clobber each other's turn-branch output file. turn_index is the finest unit here -- branches diverge for a single turn at a
 time, not a whole combat (see facility.py's _resolve_turn). combat_hp_before/combat_max_hp
 are constant across every turn of a combat and let a turn-branch that happens to end the
 combat score it with the same terminal formula facility.py uses everywhere else, even though
