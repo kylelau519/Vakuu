@@ -14,7 +14,7 @@ import argparse
 import json
 import os
 import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -86,42 +86,54 @@ def _group_baseline(group: _Group) -> float | None:
     return sum(m["value"] for m in group.members) / len(group.members)
 
 
+def _read_trial(path: str) -> dict:
+    return json.loads(Path(path).read_text())
+
+
 def _scan_trials(paths: list[str]) -> tuple[list[str], dict[tuple, _Group]]:
     """Single read pass over every trial file: classifies each as main-line (its bare path,
     for full replay via materialize_main_trial) or branch (grouped by the exact shared prefix
-    it replayed before diverging)."""
+    it replayed before diverging). The reads themselves run on a thread pool -- open+parse is
+    I/O-bound and `paths` can run into the thousands, so threading collapses most of that wall
+    time; the classification/grouping below stays single-threaded since it builds up the shared
+    `groups` dict and doesn't cost much next to the file reads."""
     main_paths: list[str] = []
     groups: dict[tuple, _Group] = {}
 
-    for path in paths:
-        trial = json.loads(Path(path).read_text())
-        if trial.get("role") != "branch":
-            if trial.get("error") is None:
-                main_paths.append(path)
-            continue
-        if trial.get("error") is not None:
-            continue
-
-        prefix_len = trial.get("prefix_len")
-        actions = trial.get("actions", [])
-        if prefix_len is None or len(actions) <= prefix_len:
-            continue
-        first = actions[prefix_len]
-        if "value" not in first:
-            continue  # turn never resolved (branch errored mid-turn) -- no realized outcome
-
-        prefix_actions = actions[:prefix_len]
-        prefix_key = (trial["main_id"], tuple(_norm_action(a) for a in prefix_actions))
-        group = groups.get(prefix_key)
-        if group is None:
-            group = _Group(
-                main_id=trial["main_id"], character=trial["character"], seed=trial["seed"],
-                ascension=trial.get("ascension", 0), prefix_actions=prefix_actions,
-            )
-            groups[prefix_key] = group
-        group.members.append(first)
+    with ThreadPoolExecutor(max_workers=min(32, (os.cpu_count() or 4) * 4)) as pool:
+        trials = pool.map(_read_trial, paths)
+        for path, trial in zip(paths, trials):
+            _scan_one(path, trial, main_paths, groups)
 
     return main_paths, groups
+
+
+def _scan_one(path: str, trial: dict, main_paths: list[str], groups: dict[tuple, _Group]) -> None:
+    if trial.get("role") != "branch":
+        if trial.get("error") is None:
+            main_paths.append(path)
+        return
+    if trial.get("error") is not None:
+        return
+
+    prefix_len = trial.get("prefix_len")
+    actions = trial.get("actions", [])
+    if prefix_len is None or len(actions) <= prefix_len:
+        return
+    first = actions[prefix_len]
+    if "value" not in first:
+        return  # turn never resolved (branch errored mid-turn) -- no realized outcome
+
+    prefix_actions = actions[:prefix_len]
+    prefix_key = (trial["main_id"], tuple(_norm_action(a) for a in prefix_actions))
+    group = groups.get(prefix_key)
+    if group is None:
+        group = _Group(
+            main_id=trial["main_id"], character=trial["character"], seed=trial["seed"],
+            ascension=trial.get("ascension", 0), prefix_actions=prefix_actions,
+        )
+        groups[prefix_key] = group
+    group.members.append(first)
 
 
 def materialize_group(

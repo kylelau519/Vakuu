@@ -50,7 +50,7 @@ import json
 import os
 import sys
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -79,41 +79,53 @@ def _import_card_stats_deps() -> None:
 # Loading this round's trial files
 # ---------------------------------------------------------------------------
 
-def _load_trials(raw_dir: Path) -> tuple[list[dict], int, int]:
-    """Single read pass. Main-role trials are kept in full (small in number, needed for
-    floor/outcome stats). Branch trials are only counted here -- _card_stats below re-reads
-    them anyway via materialize._scan_trials to build shared-prefix groups, so keeping a full
-    second in-memory copy here would just double memory for files that can run into the
-    thousands per round."""
+def _read_trial_file(path: Path) -> tuple[str | None, dict, float] | None:
+    """Stats + reads one trial file. Returns (role, data, mtime), or None for a file that
+    failed to parse (e.g. still being written mid-round)."""
+    try:
+        mtime = path.stat().st_mtime
+        with open(path) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+    return data.get("role"), data, mtime
+
+
+def _load_trials(raw_dir: Path) -> tuple[list[dict], int, int, float | None]:
+    """Single read pass, threaded since --raw-dir can hold thousands of small trial files and
+    open()+json.load() is I/O-bound -- a sequential pass otherwise spends most of its wall time
+    waiting on the filesystem rather than parsing. Main-role trials are kept in full (small in
+    number, needed for floor/outcome stats). Branch trials are only counted here -- _card_stats
+    below re-reads them anyway via materialize._scan_trials to build shared-prefix groups, so
+    keeping a full second in-memory copy here would just double memory for files that can run
+    into the thousands per round. Also returns this round's generation wall time (oldest-to-
+    newest mtime span across every file seen, main or branch), folded into this same pass so
+    the caller doesn't need a second glob+stat sweep over the same directory."""
+    paths = sorted(raw_dir.glob("*.json"))
     main_trials = []
     n_branch = 0
     n_branch_errors = 0
-    for path in sorted(raw_dir.glob("*.json")):
-        try:
-            with open(path) as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            continue  # e.g. a file still being written when this ran mid-round
-        role = data.get("role")
-        if role == "main":
-            # No timestamp is recorded inside the trial JSON itself (recorder.py writes the
-            # file once, at trial end, with no wall-clock field) -- the file's mtime is the
-            # only "when was this played" signal available, so stash it for _seed_rows.
-            data["_file_mtime"] = path.stat().st_mtime
-            main_trials.append(data)
-        elif role == "branch":
-            n_branch += 1
-            if data.get("error") is not None:
-                n_branch_errors += 1
-    return main_trials, n_branch, n_branch_errors
+    mtimes: list[float] = []
 
+    with ThreadPoolExecutor(max_workers=min(32, (os.cpu_count() or 4) * 4)) as pool:
+        for result in pool.map(_read_trial_file, paths):
+            if result is None:
+                continue  # e.g. a file still being written when this ran mid-round
+            role, data, mtime = result
+            mtimes.append(mtime)
+            if role == "main":
+                # No timestamp is recorded inside the trial JSON itself (recorder.py writes the
+                # file once, at trial end, with no wall-clock field) -- the file's mtime is the
+                # only "when was this played" signal available, so stash it for _seed_rows.
+                data["_file_mtime"] = mtime
+                main_trials.append(data)
+            elif role == "branch":
+                n_branch += 1
+                if data.get("error") is not None:
+                    n_branch_errors += 1
 
-def _mtime_span(raw_dir: Path) -> float | None:
-    """Rough generation wall-clock time for this round: span between the oldest and newest
-    trial file's mtime. Needs no changes to facility.py/recorder.py (neither stamps timing
-    today) -- the filesystem already knows when each file was written."""
-    mtimes = [p.stat().st_mtime for p in raw_dir.glob("*.json")]
-    return (max(mtimes) - min(mtimes)) if mtimes else None
+    gen_wall = (max(mtimes) - min(mtimes)) if mtimes else None
+    return main_trials, n_branch, n_branch_errors, gen_wall
 
 
 # ---------------------------------------------------------------------------
@@ -522,9 +534,8 @@ def main() -> None:
         _print_trend(history, limit=args.trend_limit)
         return
 
-    main_trials, n_branch, n_branch_errors = _load_trials(raw_dir)
+    main_trials, n_branch, n_branch_errors, gen_wall = _load_trials(raw_dir)
     floor = _floor_stats(main_trials)
-    gen_wall = _mtime_span(raw_dir)
 
     print(f"=== This round: {len(main_trials)} main-line, {n_branch} branch trial file(s) "
           f"in {raw_dir} ===")
