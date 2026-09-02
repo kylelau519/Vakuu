@@ -10,8 +10,8 @@ while true; do
 
     export CLAWS_CHECKPOINT="$vakuu/agents/claws/model/claws.pt"
     [ -f "$CLAWS_CHECKPOINT" ] || unset CLAWS_CHECKPOINT  # no checkpoint yet on the first run --
-    # facility.py's TD-bootstrap value term (_play_turn_only) falls back to 0.0 without one, a
-    # known limitation for round 1 only. Once this script's own train.py step below writes
+    # facility_common.py's TD-bootstrap value term (_play_turn_only) falls back to 0.0 without
+    # one, a known limitation for round 1 only. Once this script's own train.py step below writes
     # claws.pt, the next run of this same script picks it up automatically -- this is what
     # turns repeated runs into a self-play improvement loop.
 
@@ -22,8 +22,8 @@ while true; do
     # find -delete never builds one giant argument list, so it can't hit that ceiling.
     find "$vakuu/agents/whispering_earring/data/raw/" -maxdepth 1 -name '*.json' -delete
 
-    echo "[2/6] Running facility.py (Data Generation)..."
-    python "$vakuu/agents/whispering_earring/facility.py" \
+    echo "[2/6] Running facility_claws.py (Data Generation)..."
+    python "$vakuu/agents/whispering_earring/facility_claws.py" \
         --trials 5 --branch-workers 15 --branches-per-turn 40 --main-workers 3 \
         --raw-dir "$vakuu/agents/whispering_earring/data/raw"
     # branches_per_turn spends roughly branches_per_turn x turns-per-combat branch-worker-
@@ -63,7 +63,7 @@ while true; do
     backup_dir="$vakuu/agents/claws/model/backups"
     mkdir -p "$backup_dir"
     cp "$vakuu/agents/claws/model/claws.pt" \
-        "$backup_dir/claws_round${ROUND}_$(date +%Y%m%d_%H%M%S).pt"
+        "$backup_dir/claws_$(date +%Y%m%d_%H%M%S).pt"
 
     echo "==========================================="
     echo " Round $ROUND complete! Restarting in 3s..."
