@@ -176,7 +176,10 @@ def _play_turn_only(
     session.logger.begin_turn()
     ended_turn = False
     while decision.decision in ("combat_play", "card_select"):
-        name, kwargs, policy = choose_action(decision, session)
+        # purpose is never threaded here -- a mid-turn card_select (Power Potion, Brand, ...)
+        # never follows a shop/rest_site pick, so it's never "remove"/"upgrade" (see
+        # choose_action's docstring); the 4th return value is discarded for the same reason.
+        name, kwargs, policy, _ = choose_action(decision, session)
         if policy is not None:
             session.logger.attach_policy(policy)
         decision = session.step(name, **kwargs)
@@ -484,6 +487,7 @@ def main_worker_loop(
         session = Sts2Session(logger=recorder)
         outcome = None
         combat_checkpoint_path = None
+        pending_purpose = None  # threaded through choose_action -- see its docstring
         # One file per combat (not reused/overwritten across the trial) -- see the checkpoint-
         # taking comment below for why reuse is unsafe. Deleted once this trial concludes.
         checkpoint_dir = os.path.join(cfg.raw_dir, "checkpoints")
@@ -513,7 +517,9 @@ def main_worker_loop(
                             break
                         continue
 
-                    name, kwargs, policy = choose_action(decision, session)
+                    name, kwargs, policy, pending_purpose = choose_action(
+                        decision, session, pending_purpose
+                    )
                     if policy is not None:
                         recorder.attach_policy(policy)
                     if name == "select_map_node":

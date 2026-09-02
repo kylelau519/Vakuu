@@ -37,7 +37,7 @@ they branch on the decision type (`isinstance(decision, BufferDecision)`) to rea
 | File | Role |
 |---|---|
 | `facility.py` | Orchestrates main + branch workers; `Facility`/`FacilityConfig`; CLI entry point |
-| `policy.py` | `choose_action(decision, session)` -- combat is random, or ClawsNet-sampled if `CLAWS_CHECKPOINT` is set; meta decisions delegate out |
+| `policy.py` | `choose_action(decision, session, purpose=None)` -- combat is random, or ClawsNet-sampled if `CLAWS_CHECKPOINT` is set; meta decisions delegate out. `purpose`/the returned next-purpose thread `card_select`'s remove/upgrade disambiguation across calls -- see the function's docstring |
 | `recorder.py` | `CompactRecorder` -- per-trial JSON capture (action log, policy, per-turn value) |
 | `checkpoint.py` | `BranchJob` -- the replay-prefix format passed to branch workers via an in-memory queue |
 | `sts2_path.py` | Adds sts2-cli's `python/` to `sys.path`; import before anything from sts2-cli |

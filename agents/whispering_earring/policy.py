@@ -54,15 +54,21 @@ golden_compass = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(golden_compass)
 
 _REST_HEAL_HP_THRESHOLD = 35
-_pending_card_select_purpose: str | None = None
 
 def choose_action(
-    decision: Decision | BufferDecision, session: Sts2Session
-) -> tuple[str, dict, dict | None]:
+    decision: Decision | BufferDecision, session: Sts2Session, purpose: str | None = None
+) -> tuple[str, dict, dict | None, str | None]:
+    """purpose/the trailing return value thread whichever card_select "purpose" (remove/upgrade)
+    a preceding shop/rest_site pick just triggered -- see _choose_card_select_action's docstring
+    for why this can no longer be a module-level global. Callers that loop over a sequence of
+    decisions (main_worker_loop, _play_turn_only, any debug script driving a session end to end)
+    must pass back whatever purpose the previous call returned; a caller that only ever needs one
+    decision (never card_select) can ignore the returned purpose entirely."""
     if decision.decision == "combat_play":
-        return _choose_combat_action(decision, session)
-    name, kwargs = _choose_generic_action(decision, session)
-    return name, kwargs, None
+        name, args, policy = _choose_combat_action(decision, session)
+        return name, args, policy, None
+    name, kwargs, next_purpose = _choose_generic_action(decision, session, purpose)
+    return name, kwargs, None, next_purpose
 
 
 def _load_claws_net():
@@ -177,28 +183,37 @@ def _combat_options_from_buffer(arr) -> list[tuple[str, dict]]:
     return options
 
 
-def _choose_generic_action(decision: Decision, session: Sts2Session) -> tuple[str, dict]:
+def _choose_generic_action(
+    decision: Decision, session: Sts2Session, purpose: str | None
+) -> tuple[str, dict, str | None]:
     """Non-combat decisions: pick a uniformly random legal option, or the simplest safe
     default (leave/skip) where "random" isn't a meaningful choice yet. Good enough to
-    keep a run moving forward -- combat_play is what's actually being trained right now."""
+    keep a run moving forward -- combat_play is what's actually being trained right now.
+
+    Returns a third element, next_purpose: None for every decision type except shop/rest_site,
+    which can return "remove"/"upgrade" to be threaded into the caller's *next* choose_action
+    call (see that function's docstring) -- the only two actions that ever trigger a follow-up
+    card_select whose purpose isn't recoverable from CardSelect's own fields."""
     dec = decision.decision
 
     if dec == "map_select":
-        return _choose_map_action(decision, session)
+        name, kwargs = _choose_map_action(decision, session)
+        return name, kwargs, None
 
     if dec == "card_reward":
         index = choices_paradox.choose_card_reward(
             decision.cards, decision.can_skip, decision.player.deck_size or 0
         )
         if index is None:
-            return "skip_card_reward", {}
-        return "select_card_reward", {"card_index": index}
+            return "skip_card_reward", {}, None
+        return "select_card_reward", {"card_index": index}, None
 
     if dec == "bundle_select":
-        return "select_bundle", {"bundle_index": random.choice(decision.bundles).index}
+        return "select_bundle", {"bundle_index": random.choice(decision.bundles).index}, None
 
     if dec == "card_select":
-        return _choose_card_select_action(decision)
+        name, kwargs = _choose_card_select_action(decision, purpose)
+        return name, kwargs, None
 
     if dec == "shop":
         return _choose_shop_action(decision)
@@ -209,8 +224,8 @@ def _choose_generic_action(decision: Decision, session: Sts2Session) -> tuple[st
     if dec == "event_choice":
         unlocked = [o for o in decision.options if not o.is_locked]
         if not unlocked:
-            return "leave_room", {}
-        return "choose_option", {"option_index": random.choice(unlocked).index}
+            return "leave_room", {}, None
+        return "choose_option", {"option_index": random.choice(unlocked).index}, None
 
     raise ValueError(f"no policy for decision type {dec!r}")
 
@@ -228,21 +243,24 @@ def _choose_map_action(decision: Decision, session: Sts2Session) -> tuple[str, d
     return "select_map_node", {"col": pick.col, "row": pick.row}
 
 
-def _choose_card_select_action(decision: Decision | BufferDecision) -> tuple[str, dict]:
-    """Dispatches on _pending_card_select_purpose, set by whichever shop/rest_site action
-    just triggered this follow-up. Anything else (True Grit's exhaust-select, Wish's
-    deck-tutor-select, ...) falls back to a uniformly random legal pick -- CardSelect's shape
-    alone can't tell those apart from a remove/upgrade select, and no purpose was staged for
-    them.
+def _choose_card_select_action(
+    decision: Decision | BufferDecision, purpose: str | None
+) -> tuple[str, dict]:
+    """purpose comes from the caller (see choose_action's docstring) -- whichever shop/rest_site
+    action just triggered this follow-up, threaded explicitly rather than read off a module
+    global (a global couldn't be set by a shop/rest_site pick made in one process and read by a
+    card_select resolved in another, which matters once a meta-decision branch worker's own
+    forward continuation can wander through a shop/rest_site the same way the main line does).
+    Anything else (True Grit's exhaust-select, Wish's deck-tutor-select, ...) falls back to a
+    uniformly random legal pick -- CardSelect's shape alone can't tell those apart from a
+    remove/upgrade select, and no purpose is passed for them (purpose is None by default for any
+    caller that never resolves a shop/rest_site pick first, e.g. _play_turn_only's mid-combat
+    card_select branch -- Power Potion, Brand, ...).
 
-    A BufferDecision only ever reaches here from within _play_turn_only's loop (a mid-combat
-    card_select -- Power Potion, Brand, ...); shop/rest_site (the only actions that ever set
-    _pending_card_select_purpose) run on the main line's own pydantic-decision session, never a
-    buffer one, so purpose is always None on this path -- no need for a buffer-aware
-    choices_paradox.choose_removal_target/choose_upgrade_target call."""
-    global _pending_card_select_purpose
-    purpose, _pending_card_select_purpose = _pending_card_select_purpose, None
-
+    A BufferDecision reaching here still can't use a resolved purpose even if one were threaded
+    in -- choices_paradox.choose_removal_target/choose_upgrade_target take pydantic Card objects,
+    not buffer slots -- so it always falls through to the uniform-random buffer branch below
+    regardless of purpose."""
     if isinstance(decision, BufferDecision):
         arr = decision.arr
         indices = [i for i, _ in bl.select_cards(arr)]
@@ -268,36 +286,32 @@ def _choose_card_select_action(decision: Decision | BufferDecision) -> tuple[str
     return "select_cards", {"indices": [c.index for c in picks]}
 
 
-def _choose_shop_action(decision: Decision) -> tuple[str, dict]:
-    global _pending_card_select_purpose
+def _choose_shop_action(decision: Decision) -> tuple[str, dict, str | None]:
     gold = decision.player.gold
 
     if decision.card_removal_cost is not None and decision.card_removal_cost <= gold:
-        _pending_card_select_purpose = "remove"
-        return "remove_card", {}
+        return "remove_card", {}, "remove"
 
     if len(decision.player.potions) < decision.player.max_potions:
         affordable_potions = [p for p in decision.potions if p.is_stocked and p.cost <= gold]
         if affordable_potions:
-            return "buy_potion", {"potion_index": random.choice(affordable_potions).index}
+            return "buy_potion", {"potion_index": random.choice(affordable_potions).index}, None
 
     affordable_cards = [c for c in decision.cards if c.is_stocked and c.cost <= gold]
     if affordable_cards:
         index = choices_paradox.choose_shop_card(affordable_cards, decision.player.deck_size or 0)
         if index is not None:
-            return "buy_card", {"card_index": index}
+            return "buy_card", {"card_index": index}, None
 
-    return "leave_room", {}
+    return "leave_room", {}, None
 
 
-def _choose_rest_site_action(decision: Decision) -> tuple[str, dict]:
-    global _pending_card_select_purpose
+def _choose_rest_site_action(decision: Decision) -> tuple[str, dict, str | None]:
     enabled = {o.option_id: o for o in decision.options if o.is_enabled}
     if not enabled:
-        return "leave_room", {}
+        return "leave_room", {}, None
 
     preferred = "HEAL" if decision.player.hp < _REST_HEAL_HP_THRESHOLD else "SMITH"
     option = enabled[preferred] if preferred in enabled else random.choice(list(enabled.values()))
-    if option.option_id == "SMITH":
-        _pending_card_select_purpose = "upgrade"
-    return "choose_option", {"option_index": option.index}
+    purpose = "upgrade" if option.option_id == "SMITH" else None
+    return "choose_option", {"option_index": option.index}, purpose
