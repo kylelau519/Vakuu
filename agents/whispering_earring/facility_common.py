@@ -383,6 +383,18 @@ def main_worker_loop(
     convention the fresh-start path uses), actions (the full action log up to the resume point,
     same shape a branch/trial JSON's own "actions" field already has -- e.g. lift it straight
     from a "won"/"continue" branch file's "actions")."""
+    # New process group, with this worker as its leader -- Facility.stop()'s force-kill path
+    # (see its own comment) uses os.killpg on this group instead of killing just this one PID.
+    # Needed because combat_resolver (facility_claws._resolve_combat/_resolve_turn) shells out to
+    # a real `dotnet run` OS subprocess (Sts2Session) and re-spawns a fresh one every combat turn
+    # -- confirmed by hand that one of these can sit around for DAYS, fully orphaned (ppid 1) and
+    # never reaped, once its owning Python process dies without running Sts2Session.close() (its
+    # own terminate()+wait()). SIGKILL can't be caught, so a wedged worker killed via p.kill()
+    # never gets the chance to run that cleanup -- exactly the case Facility.stop()'s force-kill
+    # exists for. Must happen before anything below can spawn a child (dotnet or otherwise): a
+    # process can only change its OWN group before it has any children of its own to leave behind
+    # in the old one.
+    os.setpgid(0, 0)
     # Each main worker is its own process; reseed explicitly so concurrent workers started via
     # fork (which would otherwise inherit identical RNG state) don't all draw the same
     # character/seed. spawn (macOS default) doesn't need this, but it's cheap insurance.
@@ -559,6 +571,11 @@ def branch_worker_loop(
     facility_choices_paradox.py registers both (reusing facility_claws's BranchJob handler as-is,
     since its own main line still plays combat turn-branched exactly like facility_claws.py's
     does)."""
+    # See main_worker_loop's matching call for why -- _run_branch_job only ever uses
+    # Sts2BufferSession (in-process, no subprocess) today, so there's no live `dotnet run` child
+    # to orphan here YET, but this keeps Facility.stop()'s force-kill uniform (os.killpg on
+    # main_procs AND branch_procs alike) rather than silently correct only for one of the two.
+    os.setpgid(0, 0)
     _tag_worker_stderr("branch", worker_index, log_queue, cfg.verbose)
     while True:
         try:
@@ -679,13 +696,29 @@ class Facility:
         # daemon=True process stays in multiprocessing's active_children(), and Python's own
         # atexit exit_function then does an UNTIMED p.join() on it at interpreter shutdown --
         # confirmed by hand to hang the entire facility forever, well past this method returning.
-        # kill() (SIGKILL) is unconditional at the OS level -- unlike SIGTERM/stop_event, nothing
-        # a wedged process is doing (native or otherwise) can defer it -- so the join() right
-        # after is bounded in practice even though it carries no explicit timeout of its own.
+        # SIGKILL is unconditional at the OS level -- unlike SIGTERM/stop_event, nothing a wedged
+        # process is doing (native or otherwise) can defer it -- so the join() right after is
+        # bounded in practice even though it carries no explicit timeout of its own.
+        #
+        # os.killpg, not p.kill() -- a plain p.kill() only signals this ONE pid. A main worker
+        # wedged mid-combat can be holding a live `dotnet run` Sts2Session subprocess (see
+        # main_worker_loop's os.setpgid comment); SIGKILLing just the Python parent orphans that
+        # child (reparented to pid 1) instead of taking it down too, since SIGKILL gives it no
+        # chance to run Sts2Session.close()'s own terminate()+wait(). Confirmed by hand: exactly
+        # one of these orphans survived for 11+ days, invisible to training_choices.sh's own
+        # `pkill -f multiprocessing.spawn` cleanup (that pattern only ever matches the Python
+        # side). Each worker made itself its own process group leader at startup for exactly this
+        # -- os.killpg(pid, SIGKILL) with the worker's own pid IS its group id, and takes out the
+        # worker plus every subprocess it ever spawned in one shot. ProcessLookupError means it
+        # (and, transitively, anything in its group) already exited between is_alive() and here --
+        # falls back to p.kill() purely so the join() below still has a well-defined target.
         for p in self.main_procs + self.branch_procs:
             if p.is_alive():
-                print(f"{p.name} didn't stop within {timeout}s -- killing it (SIGKILL)")
-                p.kill()
+                print(f"{p.name} didn't stop within {timeout}s -- killing its process group (SIGKILL)")
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    p.kill()
                 p.join()
         # Every branch process (the only producers) has exited by now -- safe to shut the single
         # terminal-writer thread down.

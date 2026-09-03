@@ -54,6 +54,15 @@ while true; do
 
     # Deliberately kill all the python multiprocessing to avoid zombie processes
     pkill -9 -f "multiprocessing.spawn"
+    # Belt-and-suspenders for the same problem facility_common.py's Facility.stop() now handles
+    # at the source (each worker is its own process group, killed via os.killpg so its `dotnet
+    # run` Sts2Session children die with it): catches anything from a round that predates that
+    # fix, or any other way a worker's dotnet child could survive its parent. Confirmed by hand
+    # that these can orphan (ppid 1) and sit there for DAYS otherwise -- the line above only ever
+    # matches the Python side, never this. Scoped to this project's own dotnet invocation
+    # specifically (not a bare "dotnet"), so it can't catch unrelated dotnet processes (e.g. an
+    # IDE's own background tooling).
+    pkill -9 -f "sts2-cli/src/Sts2Headless"
 
     echo "==========================================="
     echo " Round $ROUND complete! Restarting in 3s..."
