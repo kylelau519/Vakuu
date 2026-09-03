@@ -1,27 +1,13 @@
 """Turns whispering_earring meta-branch trial files (card_reward, and eventually card_select's
-remove/upgrade purposes -- see this package's README's Phasing section) into tokenized training
-examples. Structural copy of claws/model/materialize.py's shared-prefix grouping, but the
-baseline this file subtracts to get `advantage` is deliberately NOT claws' own grand-mean --
-see _group_baseline's docstring.
+remove/upgrade purposes into tokenized training examples. 
+Structural copy of claws/model/materialize.py's shared-prefix grouping, but the
+baseline this file is NOT claws' own grand-mean.
 
 Every meta-branch spawned by whispering_earring's _resolve_meta_decision replays an identical
 shared prefix up to one card_reward/card_select decision, then commits to one of that decision's
-legal options and plays forward on its own. Unlike combat's turn-branching (branches_per_turn
-free-sampling, so the same action can be sampled by chance any number of times), meta-branching
-is a structured grid -- num_options x meta_options_replicates branches per divergence, uniform M
-per option.
+legal options and plays forward on its own.
 
-Baseline: a group's `skip_card_reward`/`skip_select` member's own realized value, not the mean of
-every member (claws' own grand-mean baseline, used for combat's turn-branches, would average a
-card's value together with its sibling cards' -- an opportunity-cost/regret framing: "was this the
-best of what happened to be offered," confounded by however strong the other offered cards
-happened to be in that one draft). Subtracting skip's value instead asks a different, and for this
-decision, more useful question: "is taking this card better than taking nothing," a per-card
-causal estimate that stays comparable across groups regardless of which other cards were offered
-alongside it -- letting the value head learn a card's actual usefulness with far fewer samples
-than averaging out the opportunity-cost noise across many differently-companioned drafts would
-need. Tradeoff: skip's value is one single noisy rollout rather than a 4-sample mean, so this
-baseline has higher variance than claws' grand-mean in exchange for removing that bias.
+Baseline: a group's `skip_card_reward`/`skip_select` member's own realized value,
 
 Usage:
     conda activate sts2
@@ -76,8 +62,7 @@ def _norm_action(entry: dict) -> tuple[str, tuple]:
 @dataclass
 class _Group:
     """Everything materialize_group() needs for one (main_id, decision_kind, shared-prefix)
-    group of sibling meta-branch trials. `members` holds each sibling's own first-novel-action
-    entry (`{action, args, value}`) directly, same as claws' own _Group."""
+    group of sibling meta-branch trials."""
     main_id: str
     character: str
     seed: str
@@ -91,11 +76,7 @@ _SKIP_ACTIONS = frozenset({"skip_card_reward", "skip_select"})
 
 
 def _group_baseline(group: _Group) -> float | None:
-    """Causal baseline: this group's own skip-option member's realized `value` -- see this
-    module's docstring for why skip (not the grand mean of every member, unlike claws' own
-    turn-branch baseline) is the right reference here. None if fewer than 2 distinct options were
-    observed (no comparison, no signal), or if skip's own chain errored/is missing (defensive --
-    skip_card_reward/skip_select should always be a legal option and thus always a member)."""
+    """Causal baseline: this group's own skip-option member's realized `value`."""
     subkeys = {_norm_action(m) for m in group.members}
     if len(subkeys) < 2:
         return None
@@ -204,13 +185,7 @@ def materialize_group(
 def materialize_main_trial(
     path: str, gvocab: GlobalVocab, session: Sts2BufferSession
 ) -> list[Example]:
-    """Full ordinary replay of one main-line trial, pulling out any card_reward decision the
-    main line resolved via _resolve_meta_decision (recorded with its own policy/value the same
-    way combat_play's adopted turn-branch winner is). card_select is skipped even if present --
-    Phase 1 never attaches a policy/value there (see this package's README's Phasing section),
-    so `"policy" in entry` is never true for a card_select action yet; this stays correct
-    without change once Phase 2 starts attaching one, since the decision.decision check below
-    would need widening at that point anyway to know which purpose it was."""
+    """Full ordinary replay of one main-line trial."""
     trial = json.loads(Path(path).read_text())
     if trial.get("error") is not None:
         return []

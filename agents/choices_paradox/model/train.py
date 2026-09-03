@@ -115,12 +115,9 @@ def main() -> None:
     parser.add_argument("--out", default="choices_paradox.pt")
     parser.add_argument("--init", default=None,
                          help="resume from an existing checkpoint, or pass \"\" to train from a "
-                              "random (or --warm-start-from-seeded) init. Required -- no "
-                              "implicit default, same reasoning as claws/model/train.py's.")
+                              "random. Required no implicit default")
     parser.add_argument("--warm-start-from", default=None,
-                         help="only used with --init \"\": path to a claws.pt checkpoint to seed "
-                              "this net's card-identity embeddings from (see model.py's "
-                              "ChoicesParadoxNet.warm_started_from). Omit for a plain random init.")
+                         help="only used with --init \"\": path to a claws.pt checkpoint to seed ")
     parser.add_argument("--value-only", action="store_true",
                          help="force-skip policy loss everywhere, even on policy_real examples")
     args = parser.parse_args()

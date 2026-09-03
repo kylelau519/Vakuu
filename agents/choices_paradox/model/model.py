@@ -1,23 +1,6 @@
 """ChoicesParadoxNet: typed-token transformer -> policy/value heads, for card_reward and (once
 Phase 2 lands) card_select's remove/upgrade purposes. Mirrors claws/model/model.py's
-tokenizer -> transformer -> per-option-query -> shared-head shape (see this package's
-README.md's Architecture section for why the pattern is copied but the weights aren't shared).
-
-Phase 1 scope: only `decision_kind == "card_reward"` is exercised end to end
-(whispering_earring/facility_choices_paradox.py only ever branches card_reward decisions so far).
-`card_select_remove`/`card_select_upgrade` are
-already wired through tokenize/legal_options/score below -- mode_emb is sized for all three from
-the start precisely so Phase 2 doesn't need an embedding-table resize -- but nothing yet drives a
-CardSelect decision through here.
-
-Deliberately out of scope for v0, same spirit as claws/model/model.py's own scope note:
-- Act/floor progress. CardReward/CardSelect carry no RunContext (only CombatPlay does -- see
-  sts2-cli's models.py), so "how much of the act is left" isn't available here without
-  facility_choices_paradox.py explicitly threading it through MetaBranchJob, the way BranchJob threads
-  is_last_of_act/boss_ids for combat's own boss-fight shaping. Left out until shown to matter.
-
-Run directly (`python model.py`, `sts2` conda env) for a smoke test against a real captured
-card_reward decision.
+tokenizer -> transformer -> per-option-query -> shared-head shape 
 """
 from __future__ import annotations
 
@@ -67,12 +50,7 @@ def _log1p(x: float | int | None) -> float:
 
 
 class GlobalVocab:
-    """Same shape as claws/model/model.py's GlobalVocab, duplicated rather than cross-imported
-    -- see this package's README's "Separate network" section for why the two model packages
-    stay decoupled. Both load the same committed EntityVocab (common/vocab_ids.json), so a given
-    card's global id is identical in both nets -- what makes warm-starting id_emb (see
-    ChoicesParadoxNet.warm_started_from) a plain row copy rather than a remapping."""
-
+    """Same shape as claws/model/model.py's GlobalVocab, duplicated rather than cross-imported """
     def __init__(self, vocab: EntityVocab):
         self.vocab = vocab
         self._offset: dict[str, int] = {}
@@ -177,14 +155,7 @@ def tokenize_from_buffer(buf: BufferDecision, decision_kind: str, gvocab: Global
     """Buffer counterpart to tokenize() -- same token layout/feature math, read via
     buffer_layout's offset accessors. card_reward's offered cards come from bl.reward_cards();
     card_select's (either purpose) come from bl.select_cards() -- both yield (index, slot) pairs
-    of the same Card(11) shape as bl.deck_cards()/bl.hand_cards().
-
-    A card_reward decision_kind can mean either buffer decision kind: STS2's JSON protocol
-    reports the blessing-triggered variant (from_event=True) under the same "card_reward" literal
-    as the ordinary post-combat one (RunSimulator.Writers.Json.cs's WriteEventCardReward), but the
-    buffer protocol keeps it as its own "event_card_reward" section (bl.event_card_reward_cards),
-    entirely separate from bl.reward_cards()'s CARD_REWARD section -- so decision_kind alone can't
-    tell them apart; buf.decision (this specific replayed state) must be checked too."""
+    of the same Card(11) shape as bl.deck_cards()/bl.hand_cards(). """
     arr = buf.arr
     types: list[int] = []
     ids: list[int] = []
@@ -256,12 +227,6 @@ def tokenize_from_buffer(buf: BufferDecision, decision_kind: str, gvocab: Global
 
 
 def legal_options(decision: CardReward | CardSelect, decision_kind: str) -> list[tuple[str, dict]]:
-    """Every (action, args) the policy head scores. card_reward: one per offered card, plus skip
-    if allowed. card_select (either purpose): both purposes are min_select=max_select=1 per
-    choices_paradox/policy.py's existing choose_removal_target/choose_upgrade_target convention,
-    so one option per offered card, plus skip if min_select allows 0 -- multi-select (>1) isn't
-    handled here, consistent with this package's README noting combinatorial subset enumeration
-    as an unresolved design question, not attempted for v1/v2."""
     if decision_kind == "card_reward":
         options: list[tuple[str, dict]] = [
             ("select_card_reward", {"card_index": c.index}) for c in decision.cards
@@ -277,10 +242,7 @@ def legal_options(decision: CardReward | CardSelect, decision_kind: str) -> list
 
 
 def legal_options_from_buffer(buf: BufferDecision, decision_kind: str) -> list[tuple[str, dict]]:
-    """Buffer counterpart to legal_options() -- same enumeration, read off buf.arr.
-
-    See tokenize_from_buffer's docstring on why decision_kind=="card_reward" alone can't tell the
-    ordinary post-combat reward apart from the blessing-triggered one -- buf.decision does."""
+    """Buffer counterpart to legal_options() -- same enumeration, read off buf.arr. """
     arr = buf.arr
     if decision_kind == "card_reward":
         if buf.decision == "event_card_reward":
@@ -341,15 +303,7 @@ class ChoicesParadoxNet(nn.Module):
     @classmethod
     def warm_started_from(cls, claws_checkpoint_path: str | None, **kwargs) -> "ChoicesParadoxNet":
         """Copies ClawsNet's own trained card-identity embedding rows into a freshly
-        initialized net -- a one-time copy at construction, not a live shared tensor (see this
-        package's README's "Separate network" section for why: training this net needs Claws
-        pinned to a frozen checkpoint for the round, which a shared live tensor would break).
-        Falls back to a plain random init if claws_checkpoint_path is falsy or doesn't exist yet
-        (e.g. round 1, before Claws has anything trained -- warm-starting from noise buys
-        nothing). Silently skips the copy (same fallback) if the checkpoint's id_emb doesn't
-        cover this net's card id range, rather than raising -- a vocab_ids.json size mismatch
-        here is a training-data problem to notice via a smaller-than-expected warm start, not a
-        crash."""
+        initialized net."""
         net = cls(GlobalVocab(EntityVocab.load()), **kwargs)
         if not claws_checkpoint_path or not os.path.exists(claws_checkpoint_path):
             return net
@@ -429,20 +383,15 @@ class ChoicesParadoxNet(nn.Module):
             queries.append(q)
 
         logits = self.policy_mlp(torch.stack(queries)).squeeze(-1)
-        # No tanh here (unlike ClawsNet's value head): facility_choices_paradox.py's option-chain
+        # No tanh here: facility_choices_paradox.py's option-chain
         # value is a sum of _WIN_BONUS + _combat_value over every combat won along the whole
-        # chain, not a single bounded per-combat term -- it grows unboundedly with chain depth
-        # (observed training targets: ~4 to ~14+). A tanh-squashed head saturates at its +/-1
-        # ceiling against targets that large and stops learning; a linear head can actually track
-        # the accumulated-survival signal the value target is meant to carry.
+        # chain,(observed training targets: ~4 to ~14+).
         value = self.value_mlp(h[batch.player_pos]).squeeze(-1)
         return logits, value
 
     def forward(
         self, decision: CardReward | CardSelect | BufferDecision, decision_kind: str
     ) -> tuple[list[tuple[str, dict]], torch.Tensor, torch.Tensor]:
-        """Returns (options, logits [len(options)], value scalar) for one live decision. Accepts
-        either shape decision can arrive in, same convention as ClawsNet.forward."""
         if isinstance(decision, BufferDecision):
             batch = tokenize_from_buffer(decision, decision_kind, self.gvocab)
             options = legal_options_from_buffer(decision, decision_kind)
