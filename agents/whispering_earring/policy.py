@@ -1,21 +1,20 @@
-"""Non-combat (meta) decisions delegate to the Choices Paradox placeholder policy (agents/choices_paradox/policy.py), which
-scores cards off Baalorlord's STS2 tier lists instead of picking blindly
-Map_select likewise delegates to Golden Compass (agents/golden_compass/
+"""Non-combat (meta) decisions delegate to the Choices Paradox placeholder policy (agents/
+choices_paradox/policy.py), which scores cards off Baalorlord's STS2 tier lists instead of
+picking blindly. map_select likewise delegates to Golden Compass (agents/golden_compass/
 policy.py), which value-to-go DPs the full map instead of picking a reachable node blindly.
 
-Returns (action_name, kwargs, policy) rather than a built command, so callers pass the first
-two straight into session.step(name, **kwargs) -- the session builds/validates the actual
-command via actions.action(), no need to duplicate that here. `
+Returns (action_name, kwargs, policy) rather than a built command, so callers pass the first two
+straight into session.step(name, **kwargs) -- the session builds/validates the actual command via
+actions.action(), no need to duplicate that here.
 
 _choose_combat_action_claws mixes AlphaZero-style Dirichlet noise into that softmax before
 sampling (see _DIRICHLET_EPS/_DIRICHLET_ALPHA_SCALE below) rather than reintroducing search --
-without it, an option whose probability drifts near 0 is rarely/never one of
-branches_per_turn's on-policy samples, so it never appears in new training data and its
-probability estimate can never correct itself. Confirmed empirically (debug_card_bias.py) on
-an overnight training.sh run: over a dozen legal Ironclad cards sat at exactly 0.0 average
-probability across hundreds of sightings despite being playable. training.sh loops forever
-with --init resuming the previous round's checkpoint, so this lockout compounds round over
-round instead of resetting.
+without it, an option whose probability drifts near 0 is rarely/never one of branches_per_turn's
+on-policy samples, so it never appears in new training data and its probability estimate can
+never correct itself. Confirmed empirically (debug_card_bias.py) on an overnight training.sh run:
+over a dozen legal Ironclad cards sat at exactly 0.0 average probability across hundreds of
+sightings despite being playable, and training.sh's forever-loop (--init resuming the previous
+round's checkpoint) would have compounded that lockout round over round.
 """
 from __future__ import annotations
 
@@ -251,31 +250,20 @@ def _choose_generic_action_from_buffer(
     decision: BufferDecision, purpose: str | None
 ) -> tuple[str, dict, str | None]:
     """Buffer counterpart to _choose_generic_action. Reached only by a meta-branch's horizon walk
-    (facility_choices_paradox._evaluate_option_chain) -- the first caller ever to drive anything
-    but combat_play/mid-turn card_select through the buffer protocol; a turn-branch worker's own
-    job always ends the instant its one combat turn resolves, so it never reaches any of these.
+    (facility_choices_paradox._evaluate_option_chain) -- a turn-branch worker's own job always
+    ends the instant its one combat turn resolves, so it never reaches any of these. Same "uniform
+    random / simplest safe default" philosophy as the pydantic path; where a smart heuristic
+    already exists (card_reward, shop's card/potion picks), it's reused via the _BufferCard
+    wrapper rather than duplicated.
 
-    Same "uniform random / simplest safe default, good enough to keep a run moving" philosophy as
-    _choose_generic_action's own pydantic path for anything without an existing smart heuristic to
-    reuse; where one exists (card_reward, shop's card/potion picks), it's reused via the
-    _BufferCard wrapper rather than duplicated as a second uniform-random implementation.
-
-    "card_reward"/"event_card_reward" are handled together: STS2's JSON protocol reports both the
-    ordinary post-combat reward and the blessing-triggered one (from_event=True) under the same
-    "card_reward" literal, but the buffer protocol splits them into two distinct decision kinds
-    with separate sections -- _choose_card_reward_from_buffer checks bl.decision_name(arr) itself
-    to pick the right one (see its own docstring).
-
-    map_select can't delegate to Golden Compass here -- that needs session.get_map()'s
-    pydantic-shaped map, not available off a buffer decision -- so it instead picks uniformly
-    among the current map point's own children (buffer_layout's per-point `current`/children
-    fields encode the same reachable-next-point graph get_map() exposes). rest_site can't
-    distinguish HEAL/SMITH/etc. by option_id the way the pydantic path does (buffer_layout's
-    rest_options() exposes only (present, is_enabled) per slot, no semantic label), so it picks
-    uniformly among enabled options and never threads a purpose -- if that pick happens to be an
-    upgrade option, the resulting card_select just falls back to its own uniform-random pick (see
-    _choose_card_select_action's purpose=None fallback), same as it already does for any select
-    purpose has no live source for."""
+    "card_reward"/"event_card_reward" are handled together here since the buffer protocol splits
+    what the JSON protocol reports as one "card_reward" literal into two distinct decision kinds
+    (see _choose_card_reward_from_buffer's docstring). map_select can't delegate to Golden Compass
+    (that needs session.get_map()'s pydantic-shaped map) so it picks uniformly among the current
+    map point's own children instead. rest_site can't distinguish HEAL/SMITH/etc. by option_id
+    (buffer_layout's rest_options() has no semantic label), so it picks uniformly and never
+    threads a purpose -- an upgrade pick just falls back to card_select's own uniform-random
+    choice (see _choose_card_select_action's purpose=None fallback)."""
     dec = decision.decision
     arr = decision.arr
 
@@ -372,7 +360,7 @@ def _choose_rest_site_action_from_buffer(arr) -> tuple[str, dict, str | None]:
 
 
 def _choose_map_action(decision: Decision, session: Sts2Session) -> tuple[str, dict]:
-    """Delegates to Golden Compass's value-to-go DP over the full act map """
+    """Delegates to Golden Compass's value-to-go DP over the full act map."""
     hp_frac = decision.player.hp / decision.player.max_hp if decision.player.max_hp else 1.0
     target = golden_compass.choose_next_node(session.get_map(), hp_frac=hp_frac)
     if target is not None:
@@ -388,20 +376,16 @@ def _choose_card_select_action(
     decision: Decision | BufferDecision, purpose: str | None
 ) -> tuple[str, dict]:
     """purpose comes from the caller (see choose_action's docstring) -- whichever shop/rest_site
-    action just triggered this follow-up, threaded explicitly rather than read off a module
-    global (a global couldn't be set by a shop/rest_site pick made in one process and read by a
-    card_select resolved in another, which matters once a meta-decision branch worker's own
-    forward continuation can wander through a shop/rest_site the same way the main line does).
-    Anything else (True Grit's exhaust-select, Wish's deck-tutor-select, ...) falls back to a
-    uniformly random legal pick -- CardSelect's shape alone can't tell those apart from a
-    remove/upgrade select, and no purpose is passed for them (purpose is None by default for any
-    caller that never resolves a shop/rest_site pick first, e.g. _play_turn_only's mid-combat
-    card_select branch -- Power Potion, Brand, ...).
+    action just triggered this follow-up, threaded explicitly rather than read off a module global
+    (a global couldn't be set by a shop/rest_site pick in one process and read by a card_select
+    resolved in another, which matters once a meta-branch worker's own continuation can wander
+    through a shop/rest_site too). Anything else (True Grit's exhaust-select, Wish's deck-tutor-
+    select, ...) falls back to a uniformly random legal pick -- CardSelect's shape alone can't
+    tell those apart from a remove/upgrade select, and no purpose is passed for them.
 
-    A BufferDecision reaching here still can't use a resolved purpose even if one were threaded
-    in -- choices_paradox.choose_removal_target/choose_upgrade_target take pydantic Card objects,
-    not buffer slots -- so it always falls through to the uniform-random buffer branch below
-    regardless of purpose."""
+    A BufferDecision reaching here always falls through to the uniform-random buffer branch below
+    regardless of purpose -- choices_paradox.choose_removal_target/choose_upgrade_target take
+    pydantic Card objects, not buffer slots."""
     if isinstance(decision, BufferDecision):
         arr = decision.arr
         indices = [i for i, _ in bl.select_cards(arr)]

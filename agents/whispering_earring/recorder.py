@@ -1,18 +1,17 @@
 """Compact per-trial recorder, passed to Sts2Session(logger=...).
 
-Value is scoped per turn, not per combat or per trial. facility.py brackets each individual
-turn with begin_turn()/end_turn(value) -- every turn (including the one that ends the
-combat) gets its own value, so a turn that took damage to set up a good follow-up isn't
+Value is scoped per turn, not per combat or per trial. facility_common.py brackets each
+individual turn with begin_turn()/end_turn(value) -- every turn (including the one that ends
+the combat) gets its own value, so a turn that took damage to set up a good follow-up isn't
 flattened to the same scalar as every other turn in that combat. For a turn that ends the
 combat, value is the combat's own terminal HP-loss outcome (README.md's Value head: "HP loss
-is used as the metric"); for a turn that doesn't, it's a TD-bootstrapped estimate (this
-turn's HP delta plus the value network's own estimate of the resulting state) -- see
-facility.py's _play_turn_only for both formulas. end_turn() backfills every step recorded
-since the matching begin_turn() -- the value can only be known once the turn resolves, so
-it's applied retroactively to the range, not per-action like attach_policy(). Branch trials
-adopted by a main line already carry their own per-turn value in their saved file;
-facility.py's _absorb_actions replays those through attach_value() (an immediate, per-action
-counterpart to attach_policy()) rather than recomputing it.
+is used as the metric"); for a turn that doesn't, it's a TD-bootstrapped estimate -- see
+facility_common.py's _play_turn_only for both formulas. end_turn() backfills every step
+recorded since the matching begin_turn() -- the value can only be known once the turn
+resolves, so it's applied retroactively to the range, not per-action like attach_policy().
+Branch trials adopted by a main line already carry their own per-turn value in their saved
+file; facility_claws.py's _absorb_actions replays those through attach_value() (an immediate,
+per-action counterpart to attach_policy()) rather than recomputing it.
 """
 from __future__ import annotations
 
