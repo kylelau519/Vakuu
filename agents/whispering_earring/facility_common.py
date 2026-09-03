@@ -347,16 +347,91 @@ def _clean_actions(actions: list[dict]) -> list[dict]:
 # meta-branchable. Phase 2 widens this to card_select's remove/upgrade purposes.
 META_ELIGIBLE_DECISIONS = frozenset({"card_reward"})
 
+# Bounded wait, once per trial at trial-end, for facility_choices_paradox.py's still-outstanding
+# MetaOptionJobs to report back before their trial's checkpoints get deleted -- see
+# _drain_meta_results_blocking and main_worker_loop's finally block. Deliberately much shorter
+# than combat's own 120s _wait_for_turn_result timeout: this only delays this one worker starting
+# its NEXT trial (the mainline's own decisions were never blocked on it), not live play.
+_META_DRAIN_TIMEOUT = 30.0
+
+
+def _apply_meta_result(
+    meta_id: str, value: float | None, pending_meta_jobs: dict, checkpoint_refcount: dict,
+    recorder: CompactRecorder,
+) -> None:
+    """Shared by _drain_meta_results_nowait/_blocking: applies one MetaOptionJob result -- attaches
+    the adopted option's value onto the main trial's own recorder (if this was the adopted option
+    and it didn't error), and decrements checkpoint_refcount, deleting a checkpoint file once
+    nothing dispatched against it is still outstanding."""
+    entry = pending_meta_jobs.pop(meta_id, None)
+    if entry is None:
+        return  # stale -- not among this trial's currently-tracked jobs (already applied, or from
+        # a trial that's since moved on)
+    checkpoint_path, is_adopted, commit_step = entry
+    if is_adopted and value is not None:
+        recorder.set_value(commit_step, value)
+    if checkpoint_path is None:
+        return  # this divergence's jobs reconstructed via full replay, not a checkpoint -- nothing to refcount
+    remaining = checkpoint_refcount.get(checkpoint_path)
+    if remaining is None:
+        return
+    remaining -= 1
+    if remaining <= 0:
+        checkpoint_refcount.pop(checkpoint_path, None)
+        try:
+            os.remove(checkpoint_path)
+        except OSError:
+            pass
+    else:
+        checkpoint_refcount[checkpoint_path] = remaining
+
+
+def _drain_meta_results_nowait(
+    meta_results_queue, pending_meta_jobs: dict, checkpoint_refcount: dict, recorder: CompactRecorder,
+) -> None:
+    """Non-blocking: applies whatever MetaOptionJob results are already sitting on
+    meta_results_queue. Cheap (returns immediately once the queue is empty) -- called after every
+    meta decision so most completions get picked up naturally as the trial keeps playing many more
+    decisions/floors afterward, well before trial end. See _drain_meta_results_blocking for the
+    bounded trial-end counterpart that catches whatever this didn't."""
+    while True:
+        try:
+            meta_id, value = meta_results_queue.get_nowait()
+        except Empty:
+            return
+        _apply_meta_result(meta_id, value, pending_meta_jobs, checkpoint_refcount, recorder)
+
+
+def _drain_meta_results_blocking(
+    meta_results_queue, pending_meta_jobs: dict, checkpoint_refcount: dict, recorder: CompactRecorder,
+    timeout: float,
+) -> None:
+    """Bounded wait, at trial end, for whatever's still in pending_meta_jobs -- gives the adopted
+    option's value and any still-referenced checkpoints a fair chance to resolve before the trial's
+    checkpoint cleanup runs. Whatever doesn't resolve within `timeout` is abandoned: its checkpoint
+    gets deleted anyway by the existing checkpoint_paths_this_trial sweep, and a job that reads it
+    late gets a clean, already-handled error (see _run_meta_option_job's try/except) -- same
+    straggler tolerance as combat's own _wait_for_turn_result, just scoped to trial-end instead of
+    per-decision."""
+    deadline = time.time() + timeout
+    while pending_meta_jobs and time.time() < deadline:
+        try:
+            meta_id, value = meta_results_queue.get(timeout=1.0)
+        except Empty:
+            continue
+        _apply_meta_result(meta_id, value, pending_meta_jobs, checkpoint_refcount, recorder)
+
 
 def main_worker_loop(
     cfg: FacilityConfig, job_queue: mp.Queue, job_queue_priority: mp.Queue, log_queue: mp.Queue,
     results_queue, main_worker_index: int, stop_event, trial_counter=None,
-    resume: dict | None = None, manager_address=None, manager_authkey: bytes | None = None, *,
+    resume: dict | None = None, manager_address=None, manager_authkey: bytes | None = None,
+    meta_results_queue=None, *,
     combat_resolver: Callable, meta_resolver: Callable | None = None,
 ) -> None:
     """job_queue/job_queue_priority/log_queue are shared with every other main worker;
-    results_queue is this worker's own private queue, created and owned by Facility, and must not
-    be shared.
+    results_queue and meta_results_queue are this worker's own private queues, created and owned
+    by Facility, and must not be shared.
 
     job_queue_priority exists so this worker's OWN combat turn-branches are never stuck behind
     facility_choices_paradox.py's meta-chain jobs (which land on the plain job_queue and can vastly
@@ -364,17 +439,29 @@ def main_worker_loop(
     Called below with job_queue_priority whenever it's the main line driving its own combat
     directly; job_queue is what gets threaded into meta_resolver.
 
+    meta_results_queue is SEPARATE from results_queue (not reused) so that a MetaOptionJob's result
+    can never be silently dropped by combat's own _wait_for_turn_result, which discards anything
+    whose id isn't in ITS current pending set ("stale result from an earlier turn") -- safe for
+    combat alone, but a meta result arriving on a shared queue while a LATER, unrelated combat's
+    wait-loop is running would be lost the same way. meta_resolver dispatches its jobs
+    asynchronously (doesn't wait on them itself, see its own docstring), so this worker tracks
+    completions itself afterward via pending_meta_jobs/checkpoint_refcount below, applied through
+    _drain_meta_results_nowait/_drain_meta_results_blocking.
+
     combat_resolver(job_queue, results_queue, main_worker_index, cfg, recorder, session, decision,
     character, seed, main_id, combat_index, stop_event, checkpoint_path) -> (session, decision,
     outcome) drives one combat to resolution -- both concrete facilities pass
     facility_claws._resolve_combat.
 
-    meta_resolver(job_queue, results_queue, main_worker_index, cfg, recorder, session, decision,
-    character, seed, main_id, decision_kind, divergence_index, stop_event, queue_manager,
-    last_combat_checkpoint_path, last_combat_entry_index) -> decision, called whenever
-    decision.decision is in META_ELIGIBLE_DECISIONS and this trial's meta-branch budget
-    (cfg.meta_branches_per_trial, decremented below) allows it. None (facility_claws.py's case)
-    means meta-eligible decisions just fall through to the ordinary choose_action() path below.
+    meta_resolver(job_queue, results_queue, meta_results_queue, main_worker_index, cfg, recorder,
+    session, decision, character, seed, main_id, decision_kind, divergence_index, stop_event,
+    queue_manager, last_combat_checkpoint_path, last_combat_entry_index) -> (decision,
+    pending_meta_jobs), called whenever decision.decision is in META_ELIGIBLE_DECISIONS and this
+    trial's meta-branch budget (cfg.meta_branches_per_trial, decremented below) allows it.
+    pending_meta_jobs is a list of (meta_id, checkpoint_path, is_adopted, commit_step) tuples for
+    whatever jobs meta_resolver just dispatched onto job_queue -- merged into this worker's own
+    pending_meta_jobs/checkpoint_refcount dicts below. None (facility_claws.py's case) means
+    meta-eligible decisions just fall through to the ordinary choose_action() path below.
 
     last_combat_checkpoint_path/last_combat_entry_index: the native checkpoint (and that combat's
     entry action's position in action_log) for whichever combat was entered most recently -- e.g.
@@ -464,6 +551,13 @@ def main_worker_loop(
         # taking comment below for why reuse is unsafe. Deleted once this trial concludes.
         checkpoint_dir = os.path.join(cfg.raw_dir, "checkpoints")
         checkpoint_paths_this_trial: list[str] = []
+        # meta_id -> (checkpoint_path, is_adopted, commit_step) for every MetaOptionJob dispatched
+        # this trial that hasn't reported back yet; checkpoint_path -> how many still-outstanding
+        # jobs need it. Both populated by meta_resolver's returned pending_meta_jobs, drained by
+        # _drain_meta_results_nowait/_blocking (see main_worker_loop's docstring). Unused (stay
+        # empty) whenever meta_resolver is None.
+        pending_meta_jobs: dict[str, tuple[str | None, bool, int]] = {}
+        checkpoint_refcount: dict[str, int] = {}
         try:
             try:
                 if this_trial_resume is not None:
@@ -498,11 +592,21 @@ def main_worker_loop(
                         divergence_index += 1
                         if meta_budget is not None:
                             meta_budget -= 1
-                        decision = meta_resolver(
-                            job_queue, results_queue, main_worker_index, cfg, recorder, session,
-                            decision, character, seed, main_id, decision.decision,
-                            divergence_index, stop_event, queue_manager,
+                        decision, new_pending = meta_resolver(
+                            job_queue, results_queue, meta_results_queue, main_worker_index, cfg,
+                            recorder, session, decision, character, seed, main_id,
+                            decision.decision, divergence_index, stop_event, queue_manager,
                             last_combat_checkpoint_path, last_combat_entry_index,
+                        )
+                        for meta_id, ckpt_path, is_adopted, commit_step in new_pending:
+                            pending_meta_jobs[meta_id] = (ckpt_path, is_adopted, commit_step)
+                            if ckpt_path is not None:
+                                checkpoint_refcount[ckpt_path] = checkpoint_refcount.get(ckpt_path, 0) + 1
+                        # Cheap -- returns immediately once meta_results_queue is empty. Catches
+                        # most completions naturally as the trial keeps playing; see
+                        # main_worker_loop's docstring and the finally block's bounded counterpart.
+                        _drain_meta_results_nowait(
+                            meta_results_queue, pending_meta_jobs, checkpoint_refcount, recorder
                         )
                         continue
 
@@ -541,17 +645,31 @@ def main_worker_loop(
             except Exception as e:
                 recorder.log_error(f"{type(e).__name__}: {e}")
                 outcome = "error"
+            # Bounded wait for this trial's still-outstanding MetaOptionJobs (empty/no-op whenever
+            # meta_resolver is None) -- must run BEFORE recorder.save() below, since that's the
+            # only chance for a late-arriving adopted-option value to land via recorder.set_value.
+            # Whatever doesn't resolve within _META_DRAIN_TIMEOUT is abandoned here; its checkpoint
+            # still gets deleted below regardless (see that comment).
+            _drain_meta_results_blocking(
+                meta_results_queue, pending_meta_jobs, checkpoint_refcount, recorder,
+                timeout=_META_DRAIN_TIMEOUT,
+            )
             try:
                 recorder.save(f"{cfg.raw_dir}/{main_id}.json", session.action_log, outcome=outcome)
             except Exception as e:
                 recorder.log_error(f"save failed: {type(e).__name__}: {e}")
         finally:
             session.close()
-            # By the time a trial concludes, every combat/meta-decision it contained has already
-            # resolved (or given up on) all its own branches -- any straggler still unprocessed
-            # at this point is far enough past its own wait-for-results timeout that its result
-            # would be discarded as stale anyway, so it's safe to reclaim the disk here rather
-            # than let these accumulate for the life of the facility.
+            # By the time a trial concludes, every combat branch it contained has already resolved
+            # (or given up on) -- combat's own _wait_for_turn_result blocks the main line
+            # synchronously, so nothing there can straggle past this point. Meta-decision branches
+            # are different: MetaOptionJobs are dispatched asynchronously and NOT waited on inline
+            # (see facility_choices_paradox.py's docstring), so the bounded drain above is what
+            # gives them a fair chance first -- anything still outstanding after that timeout is
+            # accepted as a straggler: its checkpoint is deleted here same as everything else, and
+            # a job that reads it late gets a clean, already-handled error rather than corrupting
+            # anything (see _run_meta_option_job's try/except). Safe to reclaim the disk
+            # unconditionally here rather than let these accumulate for the life of the facility.
             for path in checkpoint_paths_this_trial:
                 try:
                     os.remove(path)
@@ -572,7 +690,7 @@ def branch_worker_loop(
 
     handlers: job type -> handler(cfg, job, results_queue). Dispatches purely on type(job), so a
     single shared pool can serve BranchJob (combat-turn branching, facility_claws.py) and
-    MetaBranchJob (card_reward branching, facility_choices_paradox.py) side by side.
+    MetaOptionJob (card_reward branching, facility_choices_paradox.py) side by side.
     facility_claws.py registers only BranchJob's handler; facility_choices_paradox.py registers
     both (reusing facility_claws's BranchJob handler as-is, since its own main line still plays
     combat turn-branched exactly like facility_claws.py's does)."""
@@ -621,6 +739,9 @@ class Facility:
         self.trial_counter = mp.Value("i", 0) if cfg.n_main_trials is not None else None
         self.main_procs: list[mp.Process] = []
         self.main_result_queues: list = []
+        # Per-main-worker MetaOptionJob results -- see start()'s comment for why this is separate
+        # from main_result_queues.
+        self.main_meta_result_queues: list = []
         self.branch_procs: list[mp.Process] = []
         self.log_thread: threading.Thread | None = None
         self.live: _LiveStatus | None = None  # built in start() -- see _LiveStatus
@@ -668,13 +789,22 @@ class Facility:
         manager_address = self.manager.address
         manager_authkey = bytes(self.manager._authkey)
         self.main_result_queues.extend(self.manager.Queue() for _ in range(self.cfg.n_main_workers))
+        # Separate from main_result_queues -- see main_worker_loop's docstring on why
+        # facility_choices_paradox.py's asynchronously-dispatched MetaOptionJob results must not
+        # share a queue with combat's own synchronous turn-branch results. Created unconditionally
+        # for every facility (not just choices_paradox's) for simplicity; facility_claws.py's own
+        # main_worker_loop never populates pending_meta_jobs, so it's just never read there.
+        self.main_meta_result_queues.extend(
+            self.manager.Queue() for _ in range(self.cfg.n_main_workers)
+        )
 
         for i, results_queue in enumerate(self.main_result_queues):
             p = mp.Process(
                 target=self.main_worker_fn,
                 args=(self.cfg, self.job_queue, self.job_queue_priority, self.log_queue,
                       results_queue, i, self.stop_event, self.trial_counter,
-                      self.resume if i == 0 else None, manager_address, manager_authkey),
+                      self.resume if i == 0 else None, manager_address, manager_authkey,
+                      self.main_meta_result_queues[i]),
                 daemon=True,
             )
             p.start()

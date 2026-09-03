@@ -63,3 +63,38 @@ class BranchJob:
             f"{self.main_id}_a{self.act:02d}f{self.floor:02d}c{self.combat_index:02d}"
             f"t{self.turn_index:02d}_b{self.branch_index:02d}"
         )
+
+
+@dataclass
+class MetaOptionJob:
+    """One card_reward option's full evaluation chain (facility_choices_paradox.py), dispatched to
+    the shared branch-worker pool instead of run in-process on the main worker. Unlike BranchJob
+    (one combat turn), this is the WHOLE chain -- reconstructed once via load_and_resume_combat
+    (or the full-replay fallback), then played unbranched to natural death entirely inside the
+    handler, on its own Sts2BufferSession/CoreCLR in its own OS process. See
+    facility_choices_paradox.py's module docstring for why running whole chains as separate
+    processes doesn't reintroduce the per-turn subprocess cost or CLR thread-safety hazard that
+    an earlier, different pool-based design was reverted for.
+
+    prefix is the full action history since run start (same role as BranchJob.actions) --
+    last_combat_checkpoint_path/last_combat_entry_index are the fast-path reconstruction inputs,
+    an index into prefix. commit_name/commit_args is the option this chain commits to before
+    playing onward; walk_seed is the common-random-numbers seed shared by every sibling option of
+    this same divergence (see _run_meta_option_job's docstring)."""
+    main_id: str
+    character: str
+    seed: str
+    ascension: int
+    decision_kind: str
+    divergence_index: int
+    option_index: int
+    prefix: list[dict]
+    last_combat_checkpoint_path: str | None
+    last_combat_entry_index: int | None
+    commit_name: str
+    commit_args: dict
+    walk_seed: int
+
+    @property
+    def meta_id(self) -> str:
+        return f"{self.main_id}_m{self.divergence_index:03d}_o{self.option_index:02d}"

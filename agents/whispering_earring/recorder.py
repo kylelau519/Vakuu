@@ -39,9 +39,11 @@ class CompactRecorder:
         needs to score one specific already-taken-or-about-to-be-taken action only once the
         surrounding play has fully resolved (see set_value), when neither attach_value()'s
         next-call semantics nor end_turn()'s whole-range backfill fit: e.g.
-        facility_choices_paradox._evaluate_option_chain, which commits to a card_reward option,
-        then plays many further turns/combats forward before it knows what that one commit was
-        worth."""
+        facility_choices_paradox._run_meta_option_job, which commits to a card_reward option, then
+        plays many further turns/combats forward before it knows what that one commit was worth --
+        and, on the MAIN line's own recorder, _resolve_meta_decision's own commit_step, whose value
+        isn't known until the adopted option's own job reports back asynchronously (see
+        main_worker_loop's pending_meta_jobs)."""
         return self._step
 
     def set_value(self, step: int, value: float) -> None:
