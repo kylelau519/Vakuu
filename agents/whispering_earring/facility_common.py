@@ -412,6 +412,7 @@ def main_worker_loop(
     convention the fresh-start path uses), actions (the full action log up to the resume point,
     same shape a branch/trial JSON's own "actions" field already has -- e.g. lift it straight
     from a "won"/"continue" branch file's "actions")."""
+    _tag_worker_stderr("main", main_worker_index, log_queue, cfg.verbose)
     # New process group, with this worker as its leader -- Facility.stop()'s force-kill path
     # (see its own comment) uses os.killpg on this group instead of killing just this one PID.
     # Needed because combat_resolver (facility_claws._resolve_combat/_resolve_turn) shells out to

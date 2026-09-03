@@ -24,7 +24,7 @@ while true; do
     echo "[2/6] Running facility_choices_paradox.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility_choices_paradox.py" \
         --trials 3 --branch-workers 10 --main-workers 3 \
-        --branches-per-turn 4 \
+        --branches-per-turn 4 --meta-branches-per-trial 6\
         --raw-dir "$raw_dir"
 
     echo "[3/6] Meta-decision stats for this round..."
