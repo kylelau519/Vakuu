@@ -35,6 +35,20 @@ class CompactRecorder:
     def attach_policy(self, policy: dict) -> None:
         self._pending_policy = policy
 
+    def mark_step(self) -> int:
+        """Returns the step index the *next* log_action() call will land on -- for a caller that
+        needs to score one specific already-taken-or-about-to-be-taken action only once the
+        surrounding play has fully resolved (see set_value), when neither attach_value()'s
+        next-call semantics nor end_turn()'s whole-range backfill fit: e.g.
+        facility_choices_paradox._play_meta_forward, which commits to a card_reward option, then
+        plays many further turns/combats forward before it knows what that one commit was
+        worth."""
+        return self._step
+
+    def set_value(self, step: int, value: float) -> None:
+        """Retroactively assigns `value` to a specific already-logged step -- see mark_step()."""
+        self._values[step] = value
+
     def attach_value(self, value: float) -> None:
         """Immediate counterpart to attach_policy(): assigns `value` to the *next* logged
         step. For replaying an adopted branch's already-scored actions (see facility.py's

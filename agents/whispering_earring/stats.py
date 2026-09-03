@@ -17,7 +17,7 @@ improving, or flat, at 3am?), every invocation:
 Terminology (one main-line trial == one "seed" == one attempted STS2 run):
 
 - "combat": one resolved encounter (regular fight, elite, or boss) within a seed's run --
-  see facility.py's _resolve_combat, called once per encounter as the seed's main line steps
+  see facility_claws.py's _resolve_combat, called once per encounter as the seed's main line steps
   through the map. Not a whole run, and not a single turn within a fight.
 - "floor": the map floor (within an act) the game was on when that combat happened
   (decision.context.floor at the time -- floors don't repeat within a run, they only
@@ -29,7 +29,7 @@ Terminology (one main-line trial == one "seed" == one attempted STS2 run):
 
 Two kinds of per-round data feed this:
 
-- Floor/outcome stats: (act, floor, outcome) is recorded live by facility.py's _resolve_combat
+- Floor/outcome stats: (act, floor, outcome) is recorded live by facility_claws.py's _resolve_combat
   via CompactRecorder.record_combat() -- see recorder.py -- so no replay is needed for these;
   only main-line (role == "main") files carry a "combats" list and a final "outcome".
 - Card offer/pick stats (which card got offered vs. actually played, and at what average

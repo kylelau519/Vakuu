@@ -1,8 +1,8 @@
 """Turns whispering_earring trial files into tokenized training examples 
 
 Every branch spawned by whispering_earring's turn-level branch-and-adopt (see
-../../whispering_earring/facility.py) replays an identical shared prefix before diverging on its
-own first action. 
+../../whispering_earring/facility_claws.py) replays an identical shared prefix before diverging on
+its own first action.
 
 Usage:
     conda activate sts2
@@ -113,6 +113,10 @@ def _scan_one(path: str, trial: dict, main_paths: list[str], groups: dict[tuple,
         if trial.get("error") is None:
             main_paths.append(path)
         return
+    if trial.get("branch_kind") == "meta":
+        return  # choices_paradox's own MetaBranchJob file (different prefix/action shape --
+        # see agents/choices_paradox/model/materialize.py, which is what actually reads these);
+        # only relevant if this ever points at a raw-dir shared with facility_choices_paradox.py
     if trial.get("error") is not None:
         return
 

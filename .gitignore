@@ -264,3 +264,4 @@ agents/whispering_earring/data/*/*
 # macOS
 .DS_Store
 agents/whispering_earring/data/stats_history.jsonl
+agents/whispering_earring/data/stats_history_choices.jsonl

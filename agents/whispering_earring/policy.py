@@ -23,13 +23,14 @@ import importlib.util
 import os
 import random
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the import below)
 from env import Sts2Session
 from models import CombatPlay, Decision
 import buffer_layout as bl
-from buffer_env import BufferDecision
+from buffer_env import BufferDecision, decode_token
 
 _CLAWS_CHECKPOINT = os.environ.get("CLAWS_CHECKPOINT")
 _claws_net = None  # lazy-loaded once per worker process, on first combat decision -- see below
@@ -54,15 +55,30 @@ golden_compass = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(golden_compass)
 
 _REST_HEAL_HP_THRESHOLD = 35
-_pending_card_select_purpose: str | None = None
+
+
+@dataclass
+class _BufferCard:
+    """Satisfies choices_paradox.policy's _CardLike Protocol (.index/.id) off a buffer Card(11)
+    slot -- lets the buffer-side card_reward/shop choosers below reuse the same tier-based
+    picker the pydantic path uses, instead of a separate uniform-random duplicate."""
+    index: int
+    id: str | None
 
 def choose_action(
-    decision: Decision | BufferDecision, session: Sts2Session
-) -> tuple[str, dict, dict | None]:
+    decision: Decision | BufferDecision, session: Sts2Session, purpose: str | None = None
+) -> tuple[str, dict, dict | None, str | None]:
+    """purpose/the trailing return value thread whichever card_select "purpose" (remove/upgrade)
+    a preceding shop/rest_site pick just triggered -- see _choose_card_select_action's docstring
+    for why this can no longer be a module-level global. Callers that loop over a sequence of
+    decisions (main_worker_loop, _play_turn_only, any debug script driving a session end to end)
+    must pass back whatever purpose the previous call returned; a caller that only ever needs one
+    decision (never card_select) can ignore the returned purpose entirely."""
     if decision.decision == "combat_play":
-        return _choose_combat_action(decision, session)
-    name, kwargs = _choose_generic_action(decision, session)
-    return name, kwargs, None
+        name, args, policy = _choose_combat_action(decision, session)
+        return name, args, policy, None
+    name, kwargs, next_purpose = _choose_generic_action(decision, session, purpose)
+    return name, kwargs, None, next_purpose
 
 
 def _load_claws_net():
@@ -177,28 +193,44 @@ def _combat_options_from_buffer(arr) -> list[tuple[str, dict]]:
     return options
 
 
-def _choose_generic_action(decision: Decision, session: Sts2Session) -> tuple[str, dict]:
+def _choose_generic_action(
+    decision: Decision, session: Sts2Session, purpose: str | None
+) -> tuple[str, dict, str | None]:
     """Non-combat decisions: pick a uniformly random legal option, or the simplest safe
     default (leave/skip) where "random" isn't a meaningful choice yet. Good enough to
-    keep a run moving forward -- combat_play is what's actually being trained right now."""
+    keep a run moving forward -- combat_play is what's actually being trained right now.
+
+    Returns a third element, next_purpose: None for every decision type except shop/rest_site,
+    which can return "remove"/"upgrade" to be threaded into the caller's *next* choose_action
+    call (see that function's docstring) -- the only two actions that ever trigger a follow-up
+    card_select whose purpose isn't recoverable from CardSelect's own fields.
+
+    A BufferDecision reaching here is delegated to _choose_generic_action_from_buffer entirely --
+    see that function's docstring for why every branch below except card_select assumes a
+    pydantic Decision's attribute tree (.player, .cards, .choices, ...) directly."""
+    if isinstance(decision, BufferDecision):
+        return _choose_generic_action_from_buffer(decision, purpose)
+
     dec = decision.decision
 
     if dec == "map_select":
-        return _choose_map_action(decision, session)
+        name, kwargs = _choose_map_action(decision, session)
+        return name, kwargs, None
 
     if dec == "card_reward":
         index = choices_paradox.choose_card_reward(
             decision.cards, decision.can_skip, decision.player.deck_size or 0
         )
         if index is None:
-            return "skip_card_reward", {}
-        return "select_card_reward", {"card_index": index}
+            return "skip_card_reward", {}, None
+        return "select_card_reward", {"card_index": index}, None
 
     if dec == "bundle_select":
-        return "select_bundle", {"bundle_index": random.choice(decision.bundles).index}
+        return "select_bundle", {"bundle_index": random.choice(decision.bundles).index}, None
 
     if dec == "card_select":
-        return _choose_card_select_action(decision)
+        name, kwargs = _choose_card_select_action(decision, purpose)
+        return name, kwargs, None
 
     if dec == "shop":
         return _choose_shop_action(decision)
@@ -209,10 +241,134 @@ def _choose_generic_action(decision: Decision, session: Sts2Session) -> tuple[st
     if dec == "event_choice":
         unlocked = [o for o in decision.options if not o.is_locked]
         if not unlocked:
-            return "leave_room", {}
-        return "choose_option", {"option_index": random.choice(unlocked).index}
+            return "leave_room", {}, None
+        return "choose_option", {"option_index": random.choice(unlocked).index}, None
 
     raise ValueError(f"no policy for decision type {dec!r}")
+
+
+def _choose_generic_action_from_buffer(
+    decision: BufferDecision, purpose: str | None
+) -> tuple[str, dict, str | None]:
+    """Buffer counterpart to _choose_generic_action. Reached only by a meta-branch's horizon walk
+    (facility_choices_paradox._play_meta_forward) -- the first caller ever to drive anything but
+    combat_play/mid-turn card_select through the buffer protocol; a turn-branch worker's own job
+    always ends the instant its one combat turn resolves, so it never reaches any of these.
+
+    Same "uniform random / simplest safe default, good enough to keep a run moving" philosophy as
+    _choose_generic_action's own pydantic path for anything without an existing smart heuristic to
+    reuse; where one exists (card_reward, shop's card/potion picks), it's reused via the
+    _BufferCard wrapper rather than duplicated as a second uniform-random implementation.
+
+    "card_reward"/"event_card_reward" are handled together: STS2's JSON protocol reports both the
+    ordinary post-combat reward and the blessing-triggered one (from_event=True) under the same
+    "card_reward" literal, but the buffer protocol splits them into two distinct decision kinds
+    with separate sections -- _choose_card_reward_from_buffer checks bl.decision_name(arr) itself
+    to pick the right one (see its own docstring).
+
+    map_select can't delegate to Golden Compass here -- that needs session.get_map()'s
+    pydantic-shaped map, not available off a buffer decision -- so it instead picks uniformly
+    among the current map point's own children (buffer_layout's per-point `current`/children
+    fields encode the same reachable-next-point graph get_map() exposes). rest_site can't
+    distinguish HEAL/SMITH/etc. by option_id the way the pydantic path does (buffer_layout's
+    rest_options() exposes only (present, is_enabled) per slot, no semantic label), so it picks
+    uniformly among enabled options and never threads a purpose -- if that pick happens to be an
+    upgrade option, the resulting card_select just falls back to its own uniform-random pick (see
+    _choose_card_select_action's purpose=None fallback), same as it already does for any select
+    purpose has no live source for."""
+    dec = decision.decision
+    arr = decision.arr
+
+    if dec == "map_select":
+        name, kwargs = _choose_map_action_from_buffer(arr)
+        return name, kwargs, None
+    if dec in ("card_reward", "event_card_reward"):
+        name, kwargs = _choose_card_reward_from_buffer(arr)
+        return name, kwargs, None
+    if dec == "bundle_select":
+        return "select_bundle", {"bundle_index": random.choice([b for b, _ in bl.bundles(arr)])}, None
+    if dec == "card_select":
+        name, kwargs = _choose_card_select_action(decision, purpose)
+        return name, kwargs, None
+    if dec == "shop":
+        return _choose_shop_action_from_buffer(arr)
+    if dec == "rest_site":
+        return _choose_rest_site_action_from_buffer(arr)
+    if dec == "event_choice":
+        unlocked = [i for i, is_locked in bl.event_options(arr) if not is_locked]
+        if not unlocked:
+            return "leave_room", {}, None
+        return "choose_option", {"option_index": random.choice(unlocked)}, None
+
+    raise ValueError(f"no buffer-side policy for decision type {dec!r}")
+
+
+def _choose_map_action_from_buffer(arr) -> tuple[str, dict]:
+    current_children = None
+    for _row, _col, slot in bl.map_points(arr):
+        if int(slot[2]) == 1:  # MAP_POINT_SIZE layout: type, visited, current, then children
+            current_children = list(bl.map_point_children(slot))
+            break
+    if current_children is None:
+        # No point is marked current yet -- the very first move of the act, offered from every
+        # row-0 point (map_points() yields (row, col, slot) for every real point on the grid).
+        current_children = [(col, row) for row, col, _slot in bl.map_points(arr) if row == 0]
+    col, row = random.choice(current_children)
+    return "select_map_node", {"col": col, "row": row}
+
+
+def _choose_card_reward_from_buffer(arr) -> tuple[str, dict]:
+    """Handles both buffer decision kinds a "card_reward" pydantic-side decision can actually be:
+    the ordinary post-combat CARD_REWARD section, or the blessing-triggered EVENT_CARD_REWARD one
+    -- STS2's JSON protocol unifies them under one "card_reward" literal (WriteEventCardReward),
+    but the buffer protocol keeps them as separate sections with no shared can_skip flag (the
+    event variant is unconditionally skippable -- see model.py's legal_options_from_buffer for the
+    same distinction)."""
+    if bl.decision_name(arr) == "event_card_reward":
+        cards = [
+            _BufferCard(i, decode_token(bl.card_token(slot)))
+            for i, slot in bl.event_card_reward_cards(arr)
+        ]
+        can_skip = True
+    else:
+        cards = [_BufferCard(i, decode_token(bl.card_token(slot))) for i, slot in bl.reward_cards(arr)]
+        can_skip = bl.can_skip_reward(arr)
+    index = choices_paradox.choose_card_reward(cards, can_skip, bl.player_deck_size(arr))
+    if index is None:
+        return "skip_card_reward", {}
+    return "select_card_reward", {"card_index": index}
+
+
+def _choose_shop_action_from_buffer(arr) -> tuple[str, dict, str | None]:
+    gold = bl.player_gold(arr)
+
+    removal_cost = bl.shop_removal_cost(arr)
+    if removal_cost != -1 and removal_cost <= gold:
+        return "remove_card", {}, "remove"
+
+    if len(list(bl.player_potions(arr))) < bl.player_max_potions(arr):
+        affordable_potions = [i for i, slot in bl.shop_potions(arr) if bool(slot[2]) and slot[1] <= gold]
+        if affordable_potions:
+            return "buy_potion", {"potion_index": random.choice(affordable_potions)}, None
+
+    cards = [
+        _BufferCard(i, decode_token(bl.card_token(slot)))
+        for i, slot in bl.shop_cards(arr)
+        if bool(slot[bl.CARD_SIZE + 1]) and slot[bl.CARD_SIZE] <= gold  # is_stocked, cost
+    ]
+    if cards:
+        index = choices_paradox.choose_shop_card(cards, bl.player_deck_size(arr))
+        if index is not None:
+            return "buy_card", {"card_index": index}, None
+
+    return "leave_room", {}, None
+
+
+def _choose_rest_site_action_from_buffer(arr) -> tuple[str, dict, str | None]:
+    enabled = [i for i, slot in bl.rest_options(arr) if int(slot[1]) == 1]
+    if not enabled:
+        return "leave_room", {}, None
+    return "choose_option", {"option_index": random.choice(enabled)}, None
 
 
 def _choose_map_action(decision: Decision, session: Sts2Session) -> tuple[str, dict]:
@@ -228,21 +384,24 @@ def _choose_map_action(decision: Decision, session: Sts2Session) -> tuple[str, d
     return "select_map_node", {"col": pick.col, "row": pick.row}
 
 
-def _choose_card_select_action(decision: Decision | BufferDecision) -> tuple[str, dict]:
-    """Dispatches on _pending_card_select_purpose, set by whichever shop/rest_site action
-    just triggered this follow-up. Anything else (True Grit's exhaust-select, Wish's
-    deck-tutor-select, ...) falls back to a uniformly random legal pick -- CardSelect's shape
-    alone can't tell those apart from a remove/upgrade select, and no purpose was staged for
-    them.
+def _choose_card_select_action(
+    decision: Decision | BufferDecision, purpose: str | None
+) -> tuple[str, dict]:
+    """purpose comes from the caller (see choose_action's docstring) -- whichever shop/rest_site
+    action just triggered this follow-up, threaded explicitly rather than read off a module
+    global (a global couldn't be set by a shop/rest_site pick made in one process and read by a
+    card_select resolved in another, which matters once a meta-decision branch worker's own
+    forward continuation can wander through a shop/rest_site the same way the main line does).
+    Anything else (True Grit's exhaust-select, Wish's deck-tutor-select, ...) falls back to a
+    uniformly random legal pick -- CardSelect's shape alone can't tell those apart from a
+    remove/upgrade select, and no purpose is passed for them (purpose is None by default for any
+    caller that never resolves a shop/rest_site pick first, e.g. _play_turn_only's mid-combat
+    card_select branch -- Power Potion, Brand, ...).
 
-    A BufferDecision only ever reaches here from within _play_turn_only's loop (a mid-combat
-    card_select -- Power Potion, Brand, ...); shop/rest_site (the only actions that ever set
-    _pending_card_select_purpose) run on the main line's own pydantic-decision session, never a
-    buffer one, so purpose is always None on this path -- no need for a buffer-aware
-    choices_paradox.choose_removal_target/choose_upgrade_target call."""
-    global _pending_card_select_purpose
-    purpose, _pending_card_select_purpose = _pending_card_select_purpose, None
-
+    A BufferDecision reaching here still can't use a resolved purpose even if one were threaded
+    in -- choices_paradox.choose_removal_target/choose_upgrade_target take pydantic Card objects,
+    not buffer slots -- so it always falls through to the uniform-random buffer branch below
+    regardless of purpose."""
     if isinstance(decision, BufferDecision):
         arr = decision.arr
         indices = [i for i, _ in bl.select_cards(arr)]
@@ -268,36 +427,32 @@ def _choose_card_select_action(decision: Decision | BufferDecision) -> tuple[str
     return "select_cards", {"indices": [c.index for c in picks]}
 
 
-def _choose_shop_action(decision: Decision) -> tuple[str, dict]:
-    global _pending_card_select_purpose
+def _choose_shop_action(decision: Decision) -> tuple[str, dict, str | None]:
     gold = decision.player.gold
 
     if decision.card_removal_cost is not None and decision.card_removal_cost <= gold:
-        _pending_card_select_purpose = "remove"
-        return "remove_card", {}
+        return "remove_card", {}, "remove"
 
     if len(decision.player.potions) < decision.player.max_potions:
         affordable_potions = [p for p in decision.potions if p.is_stocked and p.cost <= gold]
         if affordable_potions:
-            return "buy_potion", {"potion_index": random.choice(affordable_potions).index}
+            return "buy_potion", {"potion_index": random.choice(affordable_potions).index}, None
 
     affordable_cards = [c for c in decision.cards if c.is_stocked and c.cost <= gold]
     if affordable_cards:
         index = choices_paradox.choose_shop_card(affordable_cards, decision.player.deck_size or 0)
         if index is not None:
-            return "buy_card", {"card_index": index}
+            return "buy_card", {"card_index": index}, None
 
-    return "leave_room", {}
+    return "leave_room", {}, None
 
 
-def _choose_rest_site_action(decision: Decision) -> tuple[str, dict]:
-    global _pending_card_select_purpose
+def _choose_rest_site_action(decision: Decision) -> tuple[str, dict, str | None]:
     enabled = {o.option_id: o for o in decision.options if o.is_enabled}
     if not enabled:
-        return "leave_room", {}
+        return "leave_room", {}, None
 
     preferred = "HEAL" if decision.player.hp < _REST_HEAL_HP_THRESHOLD else "SMITH"
     option = enabled[preferred] if preferred in enabled else random.choice(list(enabled.values()))
-    if option.option_id == "SMITH":
-        _pending_card_select_purpose = "upgrade"
-    return "choose_option", {"option_index": option.index}
+    purpose = "upgrade" if option.option_id == "SMITH" else None
+    return "choose_option", {"option_index": option.index}, purpose
