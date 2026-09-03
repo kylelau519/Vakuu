@@ -81,6 +81,19 @@ _MILESTONE_RE = re.compile(
     r"Bundle selection pending|has won against encounter|has lost"
 )
 
+# CoreCLR's own unhandled-exception/fatal-error dump -- these were being silently dropped by
+# _MILESTONE_RE in non-verbose mode (the default), so a CLR crash (confirmed happening for real:
+# ~/Library/Logs/DiagnosticReports/ has repeated python3.14/dotnet SIGABRT crashes on this exact
+# thread name, "sts2-clr-call" -- see buffer_env.py's _ClrWorker) produced zero visible output,
+# just a worker that silently died or wedged. Once a line matches this, relay() below switches
+# that stream to always-relay for the rest of its life (see relay()'s crash_seen) -- the header
+# line matched here is always followed by an unpredictable-length managed stack trace that won't
+# itself match _MILESTONE_RE, and losing that trace is exactly the gap this exists to close.
+_CRASH_RE = re.compile(
+    r"Unhandled [Ee]xception|Fatal error\.|Process terminating|Stack overflow\.|"
+    r"Assertion failed|Segmentation fault|SIGABRT|SIGSEGV"
+)
+
 
 def _tag_worker_stderr(label: str, worker_index: int, log_queue: mp.Queue, verbose: bool) -> None:
     """Sts2BufferSession loads Sts2Headless's CLR in-process (clr_bridge.load_clr), and its
@@ -91,23 +104,34 @@ def _tag_worker_stderr(label: str, worker_index: int, log_queue: mp.Queue, verbo
     os.close(write_fd)
 
     def relay() -> None:
+        crash_seen = False  # sticky once _CRASH_RE fires -- see _CRASH_RE's own comment
         with os.fdopen(read_fd) as pipe_reader:
             for line in pipe_reader:
                 clean = _CONTROL_SEQUENCE_RE.sub("", line)
-                if verbose or _MILESTONE_RE.search(clean):
+                if not crash_seen and _CRASH_RE.search(clean):
+                    crash_seen = True
+                if verbose or crash_seen or _MILESTONE_RE.search(clean):
                     log_queue.put((label, worker_index, clean))
 
     threading.Thread(target=relay, daemon=True, name=f"stderr-relay-{label}-{worker_index}").start()
 
 
-def _log_writer_loop(log_queue: mp.Queue) -> None:
+def _log_writer_loop(log_queue: mp.Queue, on_activity: Callable[[], None] | None = None) -> None:
     """Runs in a single background thread in the parent (Facility) process -- the only writer to
-    the real terminal for every branch worker's relayed stderr."""
+    the real terminal for every branch worker's relayed stderr.
+
+    on_activity: called on every real (non-sentinel) line -- Facility.run()'s stall watchdog uses
+    this as its liveness signal (see FacilityConfig.stall_timeout_s's docstring for why a relayed
+    log line, not raw CPU usage, is the right proxy: a worker wedged inside a native CLR call can
+    still show up as "alive" and even busy-looping in the OS's eyes without ever making Python-
+    visible progress again)."""
     while True:
         item = log_queue.get()
         if item is None:
             return
         label, worker_index, line = item
+        if on_activity is not None:
+            on_activity()
         color = _WORKER_TAG_COLORS[worker_index % len(_WORKER_TAG_COLORS)]
         tag = f"\x1b[{color}m[{label} {worker_index}]\x1b[0m"
         sys.stderr.write(f"{tag} {line}")
@@ -161,6 +185,17 @@ class FacilityConfig:
     n_main_trials: int | None = None  # stop after this many main-line trials *total*; None = forever
     raw_dir: str = "data/raw"
     verbose: bool = False  # relay every branch worker's [SIM]/[INFO] line, not just milestones
+    # Facility.run()'s watchdog: if no relayed log line (see _tag_worker_stderr) has landed for
+    # longer than this while a main worker is still alive, it's treated as wedged rather than
+    # legitimately busy and killed rather than waited on forever -- added after catching a live
+    # CoreCLR crash (Sts2BufferSession's in-process CLR, via buffer_env.py's _ClrWorker) that got
+    # stuck mid-abort instead of terminating the process: a plain p.join() with no timeout (what
+    # this replaced) then hangs the WHOLE facility forever, since Python's own atexit
+    # multiprocessing cleanup does an equally untimed join on the same wedged child once run()
+    # gives up. 1800s (30 min) is deliberately generous -- a legitimate option-chain natural-death
+    # walk (facility_choices_paradox.py) still produces a milestone line at least once per combat/
+    # room, so this only fires when NOTHING has advanced in half an hour, not for a merely slow one.
+    stall_timeout_s: float = 1800.0
 
     # Meta-decision (card_reward, eventually card_select) branching -- see
     # agents/choices_paradox/model/README.md's Design section. Shared here (not split into a
@@ -563,12 +598,23 @@ class Facility:
         self.branch_procs: list[mp.Process] = []
         self.log_thread: threading.Thread | None = None
         self.manager = None  # multiprocessing.managers.SyncManager, created in start()
+        # Updated from _log_writer_loop's thread on every relayed log line -- run()'s stall
+        # watchdog reads it from the main thread. Plain float, not a Lock-guarded one: the writer
+        # thread only ever does whole-object assignment (time.monotonic() computed first, then
+        # stored), which is atomic under the GIL, and the watchdog only ever reads it -- no
+        # read-modify-write on either side, so there's nothing for a lock to protect here.
+        self._last_activity = time.monotonic()
+
+    def _mark_activity(self) -> None:
+        self._last_activity = time.monotonic()
 
     def start(self) -> None:
         ensure_setup()  # once, here -- not per-session, which would repeat the same checks
+        self._last_activity = time.monotonic()  # don't count ensure_setup()'s own time against it
 
         self.log_thread = threading.Thread(
-            target=_log_writer_loop, args=(self.log_queue,), daemon=True, name="branch-log-writer",
+            target=_log_writer_loop, args=(self.log_queue, self._mark_activity), daemon=True,
+            name="branch-log-writer",
         )
         self.log_thread.start()
 
@@ -626,6 +672,21 @@ class Facility:
             p.join(timeout)
         for p in self.branch_procs:
             p.join(timeout)
+        # A process that's still alive here didn't respond to stop_event within `timeout` -- most
+        # likely wedged inside a native CLR call that never returns (confirmed live: a CoreCLR
+        # crash's own abort sequence can itself hang instead of terminating the process -- see
+        # FacilityConfig.stall_timeout_s's docstring). Previously this fell through unkilled: the
+        # daemon=True process stays in multiprocessing's active_children(), and Python's own
+        # atexit exit_function then does an UNTIMED p.join() on it at interpreter shutdown --
+        # confirmed by hand to hang the entire facility forever, well past this method returning.
+        # kill() (SIGKILL) is unconditional at the OS level -- unlike SIGTERM/stop_event, nothing
+        # a wedged process is doing (native or otherwise) can defer it -- so the join() right
+        # after is bounded in practice even though it carries no explicit timeout of its own.
+        for p in self.main_procs + self.branch_procs:
+            if p.is_alive():
+                print(f"{p.name} didn't stop within {timeout}s -- killing it (SIGKILL)")
+                p.kill()
+                p.join()
         # Every branch process (the only producers) has exited by now -- safe to shut the single
         # terminal-writer thread down.
         self.log_queue.put(None)
@@ -654,8 +715,26 @@ class Facility:
                 while True:
                     time.sleep(60)
             else:
-                for p in self.main_procs:
-                    p.join()
+                # NOT a plain `for p in self.main_procs: p.join()` -- that used to block forever
+                # if a main worker wedged (see stop()'s comment), since nothing here would ever
+                # get the chance to notice and kill it. Polls instead, and treats "no relayed log
+                # line for stall_timeout_s while a worker is still alive" as wedged rather than
+                # legitimately busy (see FacilityConfig.stall_timeout_s's docstring for why that's
+                # a safe proxy and how the threshold was picked) -- falls through to stop() below
+                # either way, which is what actually kills a worker that trips this.
+                while any(p.is_alive() for p in self.main_procs):
+                    for p in self.main_procs:
+                        p.join(timeout=5)
+                    stalled_for = time.monotonic() - self._last_activity
+                    if stalled_for > self.cfg.stall_timeout_s and any(
+                        p.is_alive() for p in self.main_procs
+                    ):
+                        print(
+                            f"No worker activity for {stalled_for:.0f}s (> "
+                            f"{self.cfg.stall_timeout_s:.0f}s) -- treating the remaining main "
+                            f"worker(s) as wedged and abandoning them (see stop() for the kill)."
+                        )
+                        break
                 print(f"Main workers finished {self.cfg.n_main_trials} trial(s) total -- "
                       f"draining remaining branch queue...")
         except KeyboardInterrupt:
