@@ -31,6 +31,17 @@ not part of the go/no-go decision.
 Usage:
     python debug_verify_session_reuse.py [--character Ironclad] [--seed SEED] [--ascension 0]
         [--rooms-past-combat 2]
+
+RESOLVED: all three variants matched continuous play on every seed tried, including the
+REUSE-NO-REPAIR one this script expected to mismatch -- root-caused afterward to sts2-cli's
+RunSimulator.SaveLoad.cs commit 3f47140 ("BugFix: enhance load_save method to preserve
+UnknownMapPoint odds during mid-act resume"), already merged and active in this checkout's
+sts2-cli. load_save's EnterAct call was unconditionally resetting the "?"-node pity-timer odds
+to base even though RunState.FromSerializable had just correctly restored them, which is exactly
+the desync this script's REUSE-NO-REPAIR variant should have reproduced if it still existed.
+_resolve_combat's post-win full-replay repair has since been removed as a result (see its git
+history) -- this script's own "no repair" finding, not just the upstream fix, is the empirical
+half of that confirmation.
 """
 from __future__ import annotations
 

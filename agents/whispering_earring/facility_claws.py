@@ -154,18 +154,16 @@ def _resolve_turn(
         # (close() + Sts2Session(logger=recorder), one dotnet subprocess fork/exec + CoreCLR
         # cold start PER TURN). Confirmed safe by debug_verify_session_reuse.py (4 seeds, up to 4
         # rooms past combat, zero divergence): the map-RNG-desync class of bug this respawn used
-        # to look like it might be guarding against (see _resolve_combat's post-win
-        # "safe_session" comment) is a property of what load_save()/SaveCheckpoint itself does
-        # and doesn't restore, not of whether the process calling it is fresh -- reusing one live
-        # session across repeated load_save() calls reproduces continuous play identically to
-        # respawning a fresh one every time. (That same script's "no repair" variant also matched
-        # continuous play on every seed tried, suggesting _resolve_combat's own post-win full
-        # replay below may no longer be necessary at all -- not acted on here, since that's a
-        # separate, higher-stakes claim than this one and deserves its own dedicated
-        # verification before removing an existing safety net.) load_and_resume_combat has no
-        # memory of anything before the checkpoint, so the pre-combat prefix is spliced back onto
-        # action_log afterward to keep the main line's own history complete for the trial's final
-        # output JSON.
+        # to look like it might be guarding against was never about process freshness at all --
+        # it was load_save's own EnterAct call unconditionally resetting Odds.UnknownMapPoint (the
+        # "?"-node pity-timer odds) to base, since fixed upstream in sts2-cli (RunSimulator.
+        # SaveLoad.cs, commit 3f47140 -- see _resolve_combat's own post-win comment below, where
+        # the repair this used to require now no longer exists, for the full story). Reusing one
+        # live session across repeated load_save() calls reproduces
+        # continuous play identically to respawning a fresh one every time either way.
+        # load_and_resume_combat has no memory of anything before the checkpoint, so the
+        # pre-combat prefix is spliced back onto action_log afterward to keep the main line's own
+        # history complete for the trial's final output JSON.
         entry_action = cleaned[combat_start_index]
         in_combat_actions = cleaned[combat_start_index + 1:]
         new_decision = session.load_and_resume_combat(
@@ -197,7 +195,8 @@ def _resolve_combat(
     already has the entry action as its last element the moment this is called, and every
     turn-branch spawned for this combat replays from the same fixed point regardless of which
     session object later comes to represent the main line's turn-by-turn state (see
-    _resolve_turn's new_session). is_last_of_act is decided once here, from context.room_type --
+    _resolve_turn's own resync, in place on this same session for the checkpoint_path fast path).
+    is_last_of_act is decided once here, from context.room_type --
     a live per-room field read fresh by the engine every decision (unlike the buffer protocol's
     boss1_token/boss2_token, which are per-act constants and stay set through every combat of the
     act, boss or not) -- and carried for the whole combat via BranchJob.is_last_of_act (see
@@ -229,31 +228,23 @@ def _resolve_combat(
             # facility_common._bypass_card_reward for why that's already been discarded on every
             # branch that reported "won" (each branch's own reward pick is thrown away; only the
             # main line's adopted actions matter, and it makes its own pick below).
-            if checkpoint_path is not None:
-                # `session` here was reconstructed by _resolve_turn's fast load_and_resume_combat
-                # path. That path is faithful for everything checked in-combat (hand/piles/hp/
-                # potions/enemies), including the terminal card_reward's own offer -- confirmed by
-                # direct comparison against continuous play. But it does NOT preserve whatever RNG
-                # cursor governs FUTURE map/encounter generation: a session rebuilt this way can
-                # land on a different room type than continuous play at the very next
-                # select_map_node, even though nothing observable up to that point differs
-                # (confirmed: a session that merely calls session.save() and keeps playing
-                # continuously matches continuous play exactly, so the desync is specific to
-                # session.load_save() into a fresh process, not to taking the checkpoint itself).
-                # Harmless while still inside the combat (nothing here reads map RNG), but this
-                # session is about to become the ongoing main-line session past the combat's end,
-                # driving every subsequent map/event/shop room -- so rebuild it once, safely, via
-                # a full StartRun replay (mechanically identical to continuous play) before handing
-                # it back. Only combat-internal turns pay the fast path's cost; the combat-ending
-                # turn pays open_from_checkpoint's cost once, same as it always did before this
-                # combat's fast-path resync was introduced.
-                full_action_log = list(session.action_log)
-                session.close()
-                safe_session = Sts2Session(logger=recorder)
-                decision = safe_session.open_from_checkpoint(
-                    character, seed, cfg.ascension, full_action_log
-                )
-                session = safe_session
+            #
+            # No post-win rebuild here anymore. This used to close `session` (reconstructed by
+            # _resolve_turn's fast load_and_resume_combat path) and replay the WHOLE trial from
+            # StartRun in a fresh session before handing it back, to guard against a map-RNG
+            # desync: load_save's EnterAct call unconditionally reset Odds.UnknownMapPoint (the
+            # "?"-node pity-timer odds) to base, even though RunState.FromSerializable had just
+            # correctly restored the real accumulated odds a few lines earlier -- so a session
+            # rebuilt via load_save could resolve a later Unknown map point to a DIFFERENT room
+            # type (confirmed: Monster was the outcome most likely to flip) than continuous play
+            # would have, even though nothing observable up to that point differed. Fixed upstream
+            # in sts2-cli (RunSimulator.SaveLoad.cs, commit 3f47140, "BugFix: enhance load_save
+            # method to preserve UnknownMapPoint odds during mid-act resume" -- confirmed an
+            # ancestor of this checkout's HEAD) by snapshotting Odds.UnknownMapPoint before
+            # EnterAct and restoring it after, the same pattern SaveLoad.cs already used for
+            # visited-coords/floor. Also confirmed empirically, independent of reading that fix:
+            # debug_verify_session_reuse.py's "no repair" variant matched continuous play exactly
+            # on every seed tried, including at encounter-bearing rooms past the win.
             return session, decision, None
         return session, decision, turn_outcome  # "lost" or "error"
 
