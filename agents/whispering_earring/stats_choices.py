@@ -282,6 +282,23 @@ def _print_card_value_table(total: dict[str, list], adv_total: dict[str, list], 
         print(f"{name:<28} {n:>11} {avg:>10.3f} {vs_skip:>12} {n_adopted:>10}")
 
 
+def _print_card_coverage_table(coverage: dict[str, list], n_rounds_total: int, title: str) -> None:
+    """Cross-round -- unlike _print_card_value_table, this is safe to accumulate across rounds
+    since it's just presence counts, not a situational value (see _aggregate's comment)."""
+    print(f"\n-- {title}: card pool coverage across {n_rounds_total} round(s) -- how many rounds "
+          f"each card has actually been evaluated in at least once, so you know how much of the "
+          f"pool self-play has covered (NOT an averaged value -- that's situational, see 'This "
+          f"round' card table for this round's own) --")
+    if not coverage:
+        print("no card coverage data found.")
+        return
+    rows = sorted(coverage.items(), key=lambda kv: (-kv[1][0], -kv[1][1]))
+    print(f"{len(rows)} distinct card(s) seen across {n_rounds_total} round(s)")
+    print(f"{'card':<28} {'n_rounds':>9} {'n_evaluated_total':>18}")
+    for name, (n_rounds, n_total) in rows:
+        print(f"{name:<28} {n_rounds:>9} {n_total:>18}")
+
+
 # ---------------------------------------------------------------------------
 # History log: append-only JSONL, one line per stats_choices.py invocation
 # ---------------------------------------------------------------------------
@@ -292,6 +309,7 @@ def _aggregate(records: list[dict]) -> dict:
     )
     reached_floors: list = []
     outcomes: dict[str, int] = defaultdict(int)
+    card_coverage: dict[str, list] = defaultdict(lambda: [0, 0])  # [n_rounds, n_evaluated_total]
     value_n = value_sum = value_sumsq = 0.0
     value_min = value_max = None
     n_main = n_branch = n_branch_errors = n_divergences = n_adopted_best = 0
@@ -307,11 +325,19 @@ def _aggregate(records: list[dict]) -> dict:
         reached_floors.extend(rec.get("reached_floors", []))
         for k, v in rec.get("outcomes", {}).items():
             outcomes[k] += v
-        # Deliberately NOT accumulating card_stats/card_adv_stats across rounds here -- unlike
-        # floor/outcome/adoption stats, a card's value is situational (deck/act/context-dependent),
-        # so pooling its evaluations across many different rounds/drafts doesn't mean anything.
-        # _print_card_value_table is only ever called with a single round's own card_total/
-        # card_adv_total (see main()'s "This round" call) -- never with cross-round data.
+        # Deliberately NOT accumulating card_stats/card_adv_stats VALUES across rounds here --
+        # unlike floor/outcome/adoption stats, a card's value is situational (deck/act/context-
+        # dependent), so averaging its evaluations across many different rounds/drafts doesn't
+        # mean anything (_print_card_value_table is only ever called with a single round's own
+        # card_total/card_adv_total -- see main()'s "This round" call). Presence is fine to
+        # accumulate though -- "how many rounds has this card even been evaluated in" is a plain
+        # count, not a situational value, and is what tells you how much of the card pool
+        # self-play has actually covered.
+        for name in rec.get("card_stats", {}):
+            n, _val_sum, _n_adopted = rec["card_stats"][name]
+            row = card_coverage[name]
+            row[0] += 1
+            row[1] += n
         vs = rec.get("adopted_value_summary") or {}
         value_n += vs.get("n", 0)
         value_sum += vs.get("sum", 0.0)
@@ -332,6 +358,7 @@ def _aggregate(records: list[dict]) -> dict:
         "per_floor": {k: dict(v) for k, v in per_floor.items()},
         "reached_floors": reached_floors,
         "outcomes": dict(outcomes),
+        "card_coverage": dict(card_coverage),
         "adopted_value_summary": {"n": value_n, "sum": value_sum, "sumsq": value_sumsq,
                                    "min": value_min, "max": value_max},
         "n_main_trials": n_main, "n_branch_trials": n_branch, "n_branch_errors": n_branch_errors,
@@ -407,6 +434,7 @@ def main() -> None:
               f"{cumulative['n_divergences']} "
               f"({_fmt_rate(cumulative['n_adopted_best'], cumulative['n_divergences'])})")
         _print_value_summary(cumulative["adopted_value_summary"], "Summary adopted value")
+        _print_card_coverage_table(cumulative["card_coverage"], cumulative["n_rounds"], "Summary")
         if cumulative["n_branch_errors"]:
             print(f"Summary branch trial errors: {cumulative['n_branch_errors']}/"
                   f"{cumulative['n_branch_trials']}")
@@ -488,6 +516,7 @@ def main() -> None:
           f"{cumulative['n_divergences']} "
           f"({_fmt_rate(cumulative['n_adopted_best'], cumulative['n_divergences'])})")
     _print_value_summary(cumulative["adopted_value_summary"], "Summary adopted value")
+    _print_card_coverage_table(cumulative["card_coverage"], cumulative["n_rounds"], "Summary")
     if cumulative["n_branch_errors"]:
         print(f"Summary branch trial errors: {cumulative['n_branch_errors']}/"
               f"{cumulative['n_branch_trials']}")
