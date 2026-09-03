@@ -21,6 +21,7 @@ import multiprocessing as mp
 import os
 import re
 import random
+import shutil
 import signal
 import sys
 import threading
@@ -105,12 +106,74 @@ def _tag_worker_stderr(label: str, worker_index: int, log_queue: mp.Queue, verbo
                 if not crash_seen and _CRASH_RE.search(clean):
                     crash_seen = True
                 if verbose or crash_seen or _MILESTONE_RE.search(clean):
-                    log_queue.put((label, worker_index, clean))
+                    log_queue.put((label, worker_index, clean, crash_seen))
 
     threading.Thread(target=relay, daemon=True, name=f"stderr-relay-{label}-{worker_index}").start()
 
 
-def _log_writer_loop(log_queue: mp.Queue, on_activity: Callable[[], None] | None = None) -> None:
+def _tag(label: str, worker_index: int) -> str:
+    color = _WORKER_TAG_COLORS[worker_index % len(_WORKER_TAG_COLORS)]
+    return f"\x1b[{color}m[{label} {worker_index}]\x1b[0m"
+
+
+class _LiveStatus:
+    """Fixed one-line-per-worker status board for _log_writer_loop, in place of the old scrolling
+    relay -- each worker gets a permanent row, redrawn in place, instead of milestone lines
+    scrolling out of view faster than they can be read.
+
+    `labels` fixes the row order up front (every worker Facility is about to spawn, known before
+    any of them can log anything) so a row never needs to be created mid-run. Falls back to plain
+    scrolling (`scroll()`, used for every subsequent line once triggered) the first time a crash
+    is relayed, or immediately if stderr isn't a real terminal: a multi-line stack trace collapsed
+    into one row would lose everything but its last line, and the fixed rows' cursor-position math
+    only holds if nothing else scrolls the terminal in between updates -- both irreversible for the
+    life of this object rather than something to patch around mid-display."""
+
+    def __init__(self, labels: list[tuple[str, int]]):
+        self.rows = {key: i for i, key in enumerate(labels)}
+        self.n = len(labels)
+        self.active = sys.stderr.isatty() and self.n > 0
+        # update() runs on _log_writer_loop's own thread; scroll() is also called directly from
+        # Facility.run()/stop() on the main thread (see their call sites) while that thread may
+        # still be alive -- guards both against interleaving mid-escape-sequence.
+        self._lock = threading.Lock()
+        if self.active:
+            for label, idx in labels:
+                sys.stderr.write(f"{_tag(label, idx)} (waiting...)\n")
+            sys.stderr.flush()
+
+    def update(self, label: str, worker_index: int, line: str) -> None:
+        key = (label, worker_index)
+        if not self.active or key not in self.rows:
+            self.scroll(f"{_tag(label, worker_index)} {line}")
+            return
+        with self._lock:
+            up = self.n - self.rows[key]  # rows numbered top-down; cursor idles just below row n-1
+            width = shutil.get_terminal_size(fallback=(120, 24)).columns
+            avail = max(10, width - len(f"[{label} {worker_index}] ") - 1)
+            msg = line.rstrip("\n")
+            if len(msg) > avail:
+                msg = msg[: avail - 1] + "…"
+            # \x1b[{up}A/B: move up/down `up` rows without touching the terminal's scrollback --
+            # \r + \x1b[2K then clears and rewrites just that row before returning to where every
+            # scrolling write (this class's own `scroll()` included) expects the cursor to be.
+            sys.stderr.write(f"\x1b[{up}A\r\x1b[2K{_tag(label, worker_index)} {msg}\x1b[{up}B\r")
+            sys.stderr.flush()
+
+    def scroll(self, text: str) -> None:
+        """Permanent fallback to plain scrolling output -- crash dumps (multi-line, must not be
+        collapsed into one row) and Facility's own status prints (stall/shutdown notices, which
+        would otherwise land below the fixed rows and desync their cursor-position math) both go
+        through this instead of a bare print()."""
+        with self._lock:
+            self.active = False
+            sys.stderr.write(text if text.endswith("\n") else f"{text}\n")
+            sys.stderr.flush()
+
+
+def _log_writer_loop(
+    log_queue: mp.Queue, live: _LiveStatus, on_activity: Callable[[], None] | None = None
+) -> None:
     """Runs in a single background thread in the parent (Facility) process -- the only writer to
     the real terminal for every branch worker's relayed stderr.
 
@@ -121,13 +184,13 @@ def _log_writer_loop(log_queue: mp.Queue, on_activity: Callable[[], None] | None
         item = log_queue.get()
         if item is None:
             return
-        label, worker_index, line = item
+        label, worker_index, line, is_crash = item
         if on_activity is not None:
             on_activity()
-        color = _WORKER_TAG_COLORS[worker_index % len(_WORKER_TAG_COLORS)]
-        tag = f"\x1b[{color}m[{label} {worker_index}]\x1b[0m"
-        sys.stderr.write(f"{tag} {line}")
-        sys.stderr.flush()
+        if is_crash:
+            live.scroll(f"{_tag(label, worker_index)} {line.rstrip()}")
+        else:
+            live.update(label, worker_index, line)
 
 
 @dataclass
@@ -560,6 +623,7 @@ class Facility:
         self.main_result_queues: list = []
         self.branch_procs: list[mp.Process] = []
         self.log_thread: threading.Thread | None = None
+        self.live: _LiveStatus | None = None  # built in start() -- see _LiveStatus
         self.manager = None  # multiprocessing.managers.SyncManager, created in start()
         # Updated from _log_writer_loop's thread on every relayed log line -- run()'s stall
         # watchdog reads it from the main thread. Plain float, not Lock-guarded: each side only
@@ -573,9 +637,15 @@ class Facility:
         ensure_setup()  # once, here -- not per-session, which would repeat the same checks
         self._last_activity = time.monotonic()  # don't count ensure_setup()'s own time against it
 
+        # Row order fixed up front -- every worker Facility is about to spawn is already known
+        # here, before any of them can log anything, so _LiveStatus never needs to add a row
+        # mid-run.
+        labels = [("main", i) for i in range(self.cfg.n_main_workers)]
+        labels += [("branch", i) for i in range(self.cfg.n_branch_workers)]
+        self.live = _LiveStatus(labels)
         self.log_thread = threading.Thread(
-            target=_log_writer_loop, args=(self.log_queue, self._mark_activity), daemon=True,
-            name="branch-log-writer",
+            target=_log_writer_loop, args=(self.log_queue, self.live, self._mark_activity),
+            daemon=True, name="branch-log-writer",
         )
         self.log_thread.start()
 
@@ -643,7 +713,12 @@ class Facility:
         # p.kill() purely so the join() below still has a well-defined target.
         for p in self.main_procs + self.branch_procs:
             if p.is_alive():
-                print(f"{p.name} didn't stop within {timeout}s -- killing its process group (SIGKILL)")
+                # self.live.scroll(), not print() -- log_thread (writing self.live) is still alive
+                # here (joined below), and a bare print() to stdout could still visually land
+                # inside the live board's rows on the same terminal even though it's a separate fd.
+                self.live.scroll(
+                    f"{p.name} didn't stop within {timeout}s -- killing its process group (SIGKILL)"
+                )
                 try:
                     os.killpg(p.pid, signal.SIGKILL)
                 except ProcessLookupError:
@@ -685,16 +760,19 @@ class Facility:
                     if stalled_for > self.cfg.stall_timeout_s and any(
                         p.is_alive() for p in self.main_procs
                     ):
-                        print(
+                        # self.live.scroll(), not print() -- see stop()'s matching comment.
+                        self.live.scroll(
                             f"No worker activity for {stalled_for:.0f}s (> "
                             f"{self.cfg.stall_timeout_s:.0f}s) -- treating the remaining main "
                             f"worker(s) as wedged and abandoning them (see stop() for the kill)."
                         )
                         break
-                print(f"Main workers finished {self.cfg.n_main_trials} trial(s) total -- "
-                      f"draining remaining branch queue...")
+                self.live.scroll(
+                    f"Main workers finished {self.cfg.n_main_trials} trial(s) total -- "
+                    f"draining remaining branch queue..."
+                )
         except KeyboardInterrupt:
-            print("\nStopping facility (waiting for in-flight trials to finish)...")
+            self.live.scroll("Stopping facility (waiting for in-flight trials to finish)...")
         finally:
             self.stop()
 
