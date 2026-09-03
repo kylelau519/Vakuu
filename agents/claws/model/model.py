@@ -1,8 +1,6 @@
 """The network described in README.md -- tokenizer -> typed-token
 transformer -> policy/value heads. Exists to prove the shapes described in the README actually
-compose (a `CombatPlay` decision in, a policy over legal options + a scalar value out), not as a
-trained or tuned model. Run directly (`python model.py`, `sts2` conda env) for a smoke test against
-a real captured decision from schema/tests/fixtures/ironclad_run_01.jsonl.
+compose.
 
 """
 from __future__ import annotations
@@ -282,8 +280,6 @@ def tokenize_from_buffer(buf: BufferDecision, gvocab: GlobalVocab) -> TokenBatch
 
 
 def legal_options(decision: CombatPlay) -> list[tuple[str, dict]]:
-    """Every (action, args) the policy head scores -- one entry per legal target, unlike
-    whispering_earring/policy.py's single-random-target placeholder (see module docstring)."""
     options: list[tuple[str, dict]] = [("end_turn", {})]
 
     for card in decision.hand:
@@ -306,9 +302,7 @@ def legal_options(decision: CombatPlay) -> list[tuple[str, dict]]:
 
 
 def legal_options_from_buffer(buf: BufferDecision) -> list[tuple[str, dict]]:
-    """Buffer counterpart to legal_options() -- same enumeration, read off buf.arr. Needs
-    hand_target_type() (see buffer_layout.py) to tell AnyEnemy cards (fan out per enemy target)
-    apart from AllEnemies/Self/None cards (single no-target option)."""
+    """Buffer counterpart to legal_options() """
     arr = buf.arr
     options: list[tuple[str, dict]] = [("end_turn", {})]
     en = bl.energy(arr)
@@ -399,9 +393,7 @@ class ClawsNet(nn.Module):
         self, batch: TokenBatch, options: list[tuple[str, dict]]
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Shared by forward() (live decision) and a training loop reading materialize.py's
-        saved batches -- both need the same option-query + head logic, just from a differently
-        sourced TokenBatch. Returns (logits [len(options)], value scalar); logits unnormalized,
-        softmax them for a distribution comparable to a trial file's `policy` list."""
+        saved batches """
         h = self.encode(batch)
         queries = []
         for action, args in options:
@@ -426,11 +418,6 @@ class ClawsNet(nn.Module):
     def forward(
         self, decision: CombatPlay | BufferDecision
     ) -> tuple[list[tuple[str, dict]], torch.Tensor, torch.Tensor]:
-        """Returns (options, logits [len(options)], value scalar) for one live decision. Accepts
-        either shape decision can arrive in: a pydantic CombatPlay (the main self-play line,
-        materialize.py's saved batches) or a buffer_env.BufferDecision (whispering_earring's
-        branch-worker hot path -- see tokenize_from_buffer's docstring for why that path
-        avoids the pydantic one)."""
         if isinstance(decision, BufferDecision):
             batch = tokenize_from_buffer(decision, self.gvocab)
             options = legal_options_from_buffer(decision)

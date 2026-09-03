@@ -124,11 +124,7 @@ def main() -> None:
     parser.add_argument("--out", default="claws.pt")
     parser.add_argument("--init", default=None,
                          help="resume from an existing checkpoint, or pass \"\" to train from "
-                              "a random init. Required (even if empty) -- no implicit default, "
-                              "so a dropped/mis-pasted --init fails loudly instead of silently "
-                              "resolving \"claws.pt\" against whatever the shell's cwd happens "
-                              "to be and (if a stray checkpoint sits there) loading the wrong "
-                              "network without complaint.")
+                              "a random init. Required no implicit default. ")
     parser.add_argument("--value-only", action="store_true",
                          help="force-skip policy cross-entropy everywhere, even on policy_real "
                               "examples -- normally only non-policy_real (noisy placeholder) "
@@ -141,12 +137,6 @@ def main() -> None:
                           "instead of silently loading whatever \"claws.pt\" happens to resolve "
                           "to in the current directory.")
     if not args.init and os.path.exists(args.out):
-        # "" is legitimate on a real round 1 (training.sh only ever passes "" when --out's
-        # checkpoint doesn't exist yet -- see its CLAWS_CHECKPOINT unset comment); an existing
-        # --out with an empty --init instead means CLAWS_CHECKPOINT was never exported (e.g. a
-        # manually-run command in a fresh shell) and this run is about to overwrite a trained
-        # checkpoint with one built from a random init. The flag alone can't tell those two
-        # apart -- this file check can.
         raise SystemExit(f"--init is empty but --out ({args.out}) already exists -- refusing to "
                           f"overwrite a trained checkpoint with a random init. If this really is "
                           f"a fresh start, remove or rename the existing {args.out} first.")

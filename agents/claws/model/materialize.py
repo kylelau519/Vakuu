@@ -63,8 +63,7 @@ class _Group:
     """Everything materialize_group() needs for one (main_id, shared-prefix) group of sibling
     branch trials, captured in _scan_trials's single read pass so no branch file ever needs to
     be opened a second time. `members` holds each sibling's own first-novel-action entry
-    (`{action, args, value}`) directly -- not the sibling's path -- since that's the only thing
-    about a sibling this module still needs once the group's shared prefix has been replayed."""
+    (`{action, args, value}`) directly."""
     main_id: str
     character: str
     seed: str
@@ -74,12 +73,7 @@ class _Group:
 
 
 def _group_baseline(group: _Group) -> float | None:
-    """The REINFORCE baseline for this group's turn-start decision: the plain mean of every
-    sibling's own realized `value` (expected outcome under the branch-sampling distribution as
-    it actually played out), not a mean of per-action averages -- a heavily-sampled action pulls
-    the baseline toward itself exactly as much as it was actually favored by that sampling. None
-    if fewer than 2 distinct first actions were observed (a single observed option is no
-    comparison, not a real signal)."""
+    """The REINFORCE baseline for this group's turn-start decision:"""
     subkeys = {_norm_action(m) for m in group.members}
     if len(subkeys) < 2:
         return None
@@ -91,12 +85,8 @@ def _read_trial(path: str) -> dict:
 
 
 def _scan_trials(paths: list[str]) -> tuple[list[str], dict[tuple, _Group]]:
-    """Single read pass over every trial file: classifies each as main-line (its bare path,
-    for full replay via materialize_main_trial) or branch (grouped by the exact shared prefix
-    it replayed before diverging). The reads themselves run on a thread pool -- open+parse is
-    I/O-bound and `paths` can run into the thousands, so threading collapses most of that wall
-    time; the classification/grouping below stays single-threaded since it builds up the shared
-    `groups` dict and doesn't cost much next to the file reads."""
+    """Single read pass over every trial file: classifies each as main-line or branch (grouped by the exact shared prefix
+    it replayed before diverging). The reads themselves run on a thread pool."""
     main_paths: list[str] = []
     groups: dict[tuple, _Group] = {}
 
@@ -145,7 +135,7 @@ def materialize_group(
 ) -> list[Example]:
     """Replays this group's shared prefix exactly once, tokenizes the resulting turn-start
     decision once, and emits one policy_real example per sibling directly from its own recorded
-    first action + value -- see this module's docstring for why no per-sibling replay is needed."""
+    first action + value """
     baseline = _group_baseline(group)
     if baseline is None:
         return []
@@ -185,8 +175,7 @@ def materialize_main_trial(
     path: str, gvocab: GlobalVocab, session: Sts2BufferSession
 ) -> list[Example]:
     """Full ordinary replay of one main-line trial -- unaffected by the branch-group shortcut
-    above, since main-line trials are few relative to branch files and never carry a
-    policy_real signal (see this module's docstring)."""
+    above"""
     trial = json.loads(Path(path).read_text())
     if trial.get("error") is not None:
         return []  # aborted trial -- no value signal, per ../README.md's Data section
