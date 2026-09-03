@@ -343,9 +343,9 @@ class TransformerBlock(nn.Module):
             nn.Linear(dim, dim * ffn_mult), nn.GELU(), nn.Linear(dim * ffn_mult, dim)
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, key_padding_mask: torch.Tensor | None = None) -> torch.Tensor:
         h = self.ln1(x)
-        attn_out, _ = self.attn(h, h, h, need_weights=False)
+        attn_out, _ = self.attn(h, h, h, key_padding_mask=key_padding_mask, need_weights=False)
         x = x + attn_out
         x = x + self.ffn(self.ln2(x))
         return x
@@ -388,6 +388,29 @@ class ClawsNet(nn.Module):
         for block in self.blocks:
             x = block(x)
         return self.final_ln(x).squeeze(0)
+
+    def encode_batched(
+        self, type_ids: torch.Tensor, global_ids: torch.Tensor, features: torch.Tensor,
+        pad_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Batched, padded counterpart to encode() -- for training only (see train.py's
+        _collate/_batch_step); live decisions still go through the single-example encode()
+        above via forward(). type_ids/global_ids: [B, N] long, features: [B, N, FEATURE_DIM]
+        float, pad_mask: [B, N] bool, True marking a padded position -- passed straight through
+        as MultiheadAttention's key_padding_mask so padded rows are never attended to. Returns
+        [B, N, dim]; padded rows' own outputs are never read (every real position index recorded
+        by tokenize_from_buffer is < that example's own token count) so their content doesn't
+        matter."""
+        tok = self.id_emb(global_ids) + self.type_emb(type_ids)
+        for t in TOKEN_TYPES:
+            mask = (type_ids == _TYPE_TO_IDX[t]) & ~pad_mask
+            if mask.any():
+                tok = tok.clone()
+                tok[mask] = tok[mask] + self.feat_proj[t](features[mask])
+        x = tok
+        for block in self.blocks:
+            x = block(x, key_padding_mask=pad_mask)
+        return self.final_ln(x)
 
     def score(
         self, batch: TokenBatch, options: list[tuple[str, dict]]
