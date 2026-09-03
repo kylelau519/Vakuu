@@ -251,9 +251,9 @@ def _choose_generic_action_from_buffer(
     decision: BufferDecision, purpose: str | None
 ) -> tuple[str, dict, str | None]:
     """Buffer counterpart to _choose_generic_action. Reached only by a meta-branch's horizon walk
-    (facility_choices_paradox._play_meta_forward) -- the first caller ever to drive anything but
-    combat_play/mid-turn card_select through the buffer protocol; a turn-branch worker's own job
-    always ends the instant its one combat turn resolves, so it never reaches any of these.
+    (facility_choices_paradox._evaluate_option_chain) -- the first caller ever to drive anything
+    but combat_play/mid-turn card_select through the buffer protocol; a turn-branch worker's own
+    job always ends the instant its one combat turn resolves, so it never reaches any of these.
 
     Same "uniform random / simplest safe default, good enough to keep a run moving" philosophy as
     _choose_generic_action's own pydantic path for anything without an existing smart heuristic to

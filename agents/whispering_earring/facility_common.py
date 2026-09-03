@@ -188,7 +188,7 @@ def _bypass_card_reward(session) -> None:
     # combat-turn branch's job ends the instant it wins (see _play_turn_only's
     # bypass_reward_on_win) -- a meta-branch horizon walk that keeps playing past the win instead
     # resolves the same card_reward for real, through choose_action/session.step, and must NOT
-    # go through this bypass (see facility_choices_paradox._play_meta_forward).
+    # go through this bypass (see facility_choices_paradox._evaluate_option_chain).
     raw = session._session.Action("skip_card_reward", None)
     if session._decision(raw).decision == "error":
         raise Sts2ActionError(session._session.LastError or "unknown error")
@@ -284,18 +284,45 @@ META_ELIGIBLE_DECISIONS = frozenset({"card_reward"})
 
 
 def main_worker_loop(
-    cfg: FacilityConfig, job_queue: mp.Queue, results_queue, main_worker_index: int,
-    stop_event, trial_counter=None, resume: dict | None = None,
-    manager_address=None, manager_authkey: bytes | None = None, *,
+    cfg: FacilityConfig, job_queue: mp.Queue, job_queue_priority: mp.Queue, log_queue: mp.Queue,
+    results_queue, main_worker_index: int, stop_event, trial_counter=None,
+    resume: dict | None = None, manager_address=None, manager_authkey: bytes | None = None, *,
     combat_resolver: Callable, meta_resolver: Callable | None = None,
 ) -> None:
-    """job_queue is shared with every other main worker, but results_queue is this worker's own
-    private queue, created and owned by Facility, one per main worker. It must not be shared.
+    """job_queue/job_queue_priority/log_queue are shared with every other main worker, but
+    results_queue is this worker's own private queue, created and owned by Facility, one per main
+    worker. It must not be shared.
+
+    log_queue is relayed the same way branch_worker_loop's own is (_tag_worker_stderr, tagged
+    "main" here) -- added once a meta_resolver started loading Sts2BufferSession IN this process
+    (facility_choices_paradox.py's option-chains, see that module's docstring): unlike a main
+    line's own Sts2Session (a subprocess whose stderr is DEVNULL'd, see env.py), a BufferSession's
+    CLR logging writes straight to whatever this process's real fd 2 is -- with nothing to
+    redirect it, that meant every option-chain's [SIM]/[INFO] output dumped raw and unfiltered
+    (no milestone filtering, no color tag, no serialization through the single log-writer thread)
+    straight to the terminal, confirmed live once chains switched off Sts2Session. Redirecting fd
+    2 here is harmless even for facility_claws.py, whose main workers never load a BufferSession
+    at all -- nothing ever writes to the redirected pipe, so its relay thread just sits idle.
+
+    Two dispatch queues, not one -- added when facility_choices_paradox.py's meta-chains still
+    turn-branched their own combats through this SAME shared pool (dispatching BranchJobs the
+    exact same way the main line does), which meant a deep-run meta-chain (more likely to run
+    long before its natural-death end, since a built-up deck survives further) could starve the
+    main line's own turn-branch jobs behind a backlog of meta-chain work with no way to
+    distinguish "this is main-line, serve it first" under one FIFO queue. job_queue_priority is
+    for this worker's OWN direct combat_resolver call below (i.e. the main line's own
+    turn-branches); the plain job_queue is what gets threaded into meta_resolver. Option-chains no
+    longer dispatch into either queue at all as of the current facility_choices_paradox.py design
+    (they play unbranched on their own Sts2BufferSession instead -- see that module's docstring),
+    so this split is presently dormant for that specific starvation case, but branch_worker_loop
+    still always drains job_queue_priority first (see its docstring), and the split stays correct
+    general-purpose infra for the main line vs. anything else that might share the pool.
 
     combat_resolver(job_queue, results_queue, main_worker_index, cfg, recorder, session, decision,
     character, seed, main_id, combat_index, stop_event, checkpoint_path) -> (session, decision,
     outcome) drives one combat to resolution -- both concrete facilities pass
-    facility_claws._resolve_combat.
+    facility_claws._resolve_combat. Called below with job_queue_priority, not job_queue, whenever
+    it's the main line driving its own combat directly.
 
     meta_resolver(job_queue, results_queue, main_worker_index, cfg, recorder, session, decision,
     character, seed, main_id, decision_kind, divergence_index, stop_event, queue_manager,
@@ -303,7 +330,8 @@ def main_worker_loop(
     decision.decision is in META_ELIGIBLE_DECISIONS and this trial's meta-branch budget
     (cfg.meta_branches_per_trial, decremented below) allows it. None (facility_claws.py's case)
     means meta-eligible decisions just fall through to the ordinary choose_action() path below,
-    same as every other decision type.
+    same as every other decision type. Handed the plain (low-priority) job_queue, not
+    job_queue_priority -- see above.
 
     last_combat_checkpoint_path/last_combat_entry_index: the native checkpoint (and that combat's
     entry action's position in action_log) for whichever combat was entered most recently -- e.g.
@@ -329,16 +357,17 @@ def main_worker_loop(
     (confirmed by hand -- "cannot pickle 'weakref.ReferenceType' object"), so only its plain
     (address, authkey) values are handed to this worker at its own spawn. Connected here, once
     per worker process (not per trial, not per divergence) via SyncManager(...).connect() into
-    `queue_manager` below, and threaded into every meta_resolver call as its last argument -- a
-    meta_resolver that needs to mint manager-backed queues at runtime (e.g.
-    facility_choices_paradox.py's _resolve_meta_decision, one queue per concurrently-running
-    option-chain -- see that module's docstring) reuses THIS connection's own .Queue() rather than
-    building a fresh mp.Manager() locally, which would hit "daemonic processes are not allowed to
-    have children" (confirmed by hand) since this worker process is itself daemonic
-    (Facility.start() creates it with daemon=True). .connect() itself doesn't start a process --
-    just a client connection to the already-running server -- so it's fine to do here despite
-    that. Skipped entirely when meta_resolver is None (facility_claws.py's case): no connection is
-    opened, since nothing would ever use it.
+    `queue_manager` below, and threaded into every meta_resolver call as its last argument.
+    Currently unused by the one shipped meta_resolver (facility_choices_paradox.py's
+    _resolve_meta_decision no longer mints per-chain queues -- see that module's docstring on why
+    its option-chains stopped needing them at all); kept as plumbing in case a future meta_resolver
+    needs to mint manager-backed queues at runtime the way that one originally did, which is what
+    this connection was built for (a meta_resolver can't build its own fresh mp.Manager() locally,
+    since that would hit "daemonic processes are not allowed to have children" -- this worker
+    process is itself daemonic, Facility.start() creates it with daemon=True -- while .connect()
+    itself doesn't start a process, just a client connection to the already-running server, so
+    it's fine to do here despite that). Skipped entirely when meta_resolver is None
+    (facility_claws.py's case): no connection is opened, since nothing would ever use it.
 
     resume: if given, this worker's FIRST trial (only) reconstructs an in-progress run instead
     of starting fresh -- for recovering a trial that was progressing normally (e.g. had already
@@ -348,6 +377,7 @@ def main_worker_loop(
     convention the fresh-start path uses), actions (the full action log up to the resume point,
     same shape a branch/trial JSON's own "actions" field already has -- e.g. lift it straight
     from a "won"/"continue" branch file's "actions")."""
+    _tag_worker_stderr("main", main_worker_index, log_queue, cfg.verbose)
     # Each main worker is its own process; reseed explicitly so concurrent workers started via
     # fork (which would otherwise inherit identical RNG state) don't all draw the same
     # character/seed. spawn (macOS default) doesn't need this, but it's cheap insurance.
@@ -425,8 +455,8 @@ def main_worker_loop(
                         # see the comment above on why this stays a valid index into action_log.
                         last_combat_entry_index = len(session.action_log) - 1
                         session, decision, combat_outcome = combat_resolver(
-                            job_queue, results_queue, main_worker_index, cfg, recorder, session,
-                            decision, character, seed, main_id, combat_index, stop_event,
+                            job_queue_priority, results_queue, main_worker_index, cfg, recorder,
+                            session, decision, character, seed, main_id, combat_index, stop_event,
                             combat_checkpoint_path,
                         )
                         combat_checkpoint_path = None  # consumed -- not valid for the next combat
@@ -504,34 +534,49 @@ def main_worker_loop(
 
 
 def branch_worker_loop(
-    cfg: FacilityConfig, job_queue: mp.Queue, stop_event,
+    cfg: FacilityConfig, job_queue: mp.Queue, job_queue_priority: mp.Queue, stop_event,
     log_queue: mp.Queue, worker_index: int = 0, *, handlers: dict[type, Callable],
 ) -> None:
-    """Each job_queue item is (job, results_queue) -- the queue to report back to travels WITH
-    the job, rather than being looked up from a fixed main_worker_index -> queue table. That's
-    what lets a single divergence spawn more concurrent waiters than there are main workers: e.g.
-    facility_choices_paradox.py's _resolve_meta_decision hands each option-chain its own private
-    mp.Queue() (not the issuing main worker's shared one) so several chains' turn-branch waits
-    can be in flight at once without one chain's _wait_for_turn_result stealing a result meant
-    for another's pending set (see that function's docstring on why a shared queue there would be
-    silent data loss, not just a slowdown).
+    """Each job_queue/job_queue_priority item is (job, results_queue) -- the queue to report back
+    to travels WITH the job, rather than being looked up from a fixed main_worker_index -> queue
+    table. That lets a caller other than "the issuing main worker's own results_queue" dispatch
+    BranchJobs and collect its own results independently, which facility_choices_paradox.py's
+    option-chains USED to rely on (each chain got its own private mp.Queue() so several chains'
+    turn-branch waits could be in flight without one stealing another's result -- see
+    _wait_for_turn_result's docstring on why a shared queue would silently drop results). As of
+    the current design, option-chains no longer dispatch to this pool at all (they play unbranched
+    on their own Sts2BufferSession instead -- see facility_choices_paradox.py's module docstring
+    for why), so only the main line's own combat currently exercises this per-job-queue routing --
+    kept as the dispatch contract regardless, since nothing about it assumes there's only ever one
+    submitter.
 
-    handlers: job type -> handler(cfg, job, results_queue). Dispatches purely on type(job), so a
-    single shared pool can serve BranchJob (combat-turn branching, facility_claws.py) and
-    MetaBranchJob (card_reward branching, facility_choices_paradox.py) side by side -- see
-    agents/choices_paradox/model/README.md's "Shared worker pool, not a dedicated one" for why
-    that sharing is deliberate. facility_claws.py registers only BranchJob's handler;
-    facility_choices_paradox.py registers both (reusing facility_claws's BranchJob handler as-is,
-    since its own main line still plays combat turn-branched exactly like facility_claws.py's
-    does)."""
+    job_queue_priority always wins: checked first, non-blocking, on every iteration, and only
+    when it's empty does this worker wait (briefly) on the plain job_queue instead. See
+    main_worker_loop's docstring for why the split exists -- job_queue_priority carries the main
+    line's own turn-branch jobs, job_queue is the low-priority fallback for anything else that
+    might ever dispatch into this shared pool. Currently that's nothing (see above), so this split
+    is presently a no-op in practice for facility_choices_paradox.py specifically, but it stays
+    correct general-purpose infra for the main line vs. anything else sharing the pool. The
+    shutdown sentinel (None) still only ever arrives via the plain job_queue (see Facility.stop()),
+    so it's found here the same way it always was, just via the fallback branch.
+
+    handlers: job type -> handler(cfg, job, results_queue). Dispatches purely on type(job) --
+    currently just BranchJob (combat-turn branching), registered identically by both
+    facility_claws.py and facility_choices_paradox.py (the latter reuses facility_claws's own
+    BranchJob handler as-is for its main line's combat, which still plays turn-branched exactly
+    like facility_claws.py's does). The dict-keyed-by-type shape is what would let a second job
+    type share this same pool if one ever needed to -- not exercised today."""
     _tag_worker_stderr("branch", worker_index, log_queue, cfg.verbose)
     while True:
         try:
-            item = job_queue.get(timeout=1.0)
+            item = job_queue_priority.get_nowait()
         except Empty:
-            if stop_event.is_set():
-                return
-            continue
+            try:
+                item = job_queue.get(timeout=0.2)
+            except Empty:
+                if stop_event.is_set():
+                    return
+                continue
         if item is None:  # shutdown sentinel
             return
         job, results_queue = item
@@ -555,6 +600,11 @@ class Facility:
         self.branch_worker_fn = branch_worker_fn
         self.resume = resume  # see main_worker_loop's docstring -- consumed by worker 0's first trial only
         self.job_queue: mp.Queue = mp.Queue()  # shared dispatch pool -- every main worker feeds it
+        # High-priority twin of job_queue -- every main worker's OWN combat turn-branches go here
+        # instead, so they're never stuck behind facility_choices_paradox.py's meta-chain jobs
+        # (which land on job_queue -- can vastly outnumber the main line's own, see
+        # main_worker_loop's docstring). branch_worker_loop always drains this one first.
+        self.job_queue_priority: mp.Queue = mp.Queue()
         self.log_queue: mp.Queue = mp.Queue()  # every branch worker's relayed stderr -- see _tag_worker_stderr
         self.stop_event = mp.Event()
         self.trial_counter = mp.Value("i", 0) if cfg.n_main_trials is not None else None
@@ -602,7 +652,8 @@ class Facility:
         for i, results_queue in enumerate(self.main_result_queues):
             p = mp.Process(
                 target=self.main_worker_fn,
-                args=(self.cfg, self.job_queue, results_queue, i, self.stop_event, self.trial_counter,
+                args=(self.cfg, self.job_queue, self.job_queue_priority, self.log_queue,
+                      results_queue, i, self.stop_event, self.trial_counter,
                       self.resume if i == 0 else None, manager_address, manager_authkey),
                 daemon=True,
             )
@@ -612,7 +663,8 @@ class Facility:
         for i in range(self.cfg.n_branch_workers):
             p = mp.Process(
                 target=self.branch_worker_fn,
-                args=(self.cfg, self.job_queue, self.stop_event, self.log_queue, i),
+                args=(self.cfg, self.job_queue, self.job_queue_priority, self.stop_event,
+                      self.log_queue, i),
                 daemon=True,
             )
             p.start()
@@ -626,7 +678,8 @@ class Facility:
             p.join(timeout)
         for p in self.branch_procs:
             p.join(timeout)
-        # Every branch process (the only producers) has exited by now -- safe to shut the single
+        # Every producer (main AND branch processes both relay their own stderr now -- see
+        # main_worker_loop's _tag_worker_stderr call) has exited by now -- safe to shut the single
         # terminal-writer thread down.
         self.log_queue.put(None)
         if self.log_thread is not None:

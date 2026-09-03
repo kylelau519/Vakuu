@@ -40,8 +40,8 @@ class CompactRecorder:
         needs to score one specific already-taken-or-about-to-be-taken action only once the
         surrounding play has fully resolved (see set_value), when neither attach_value()'s
         next-call semantics nor end_turn()'s whole-range backfill fit: e.g.
-        facility_choices_paradox._play_meta_forward, which commits to a card_reward option, then
-        plays many further turns/combats forward before it knows what that one commit was
+        facility_choices_paradox._evaluate_option_chain, which commits to a card_reward option,
+        then plays many further turns/combats forward before it knows what that one commit was
         worth."""
         return self._step
 
