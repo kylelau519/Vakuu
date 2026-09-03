@@ -146,28 +146,41 @@ def _resolve_turn(
         return session, None, "error"
 
     _absorb_actions(recorder, adopted["actions"], len(prefix))
-    session.close()
-    new_session = Sts2Session(logger=recorder)
     cleaned = _clean_actions(adopted["actions"])
     if checkpoint_path is not None:
-        # Same fast path branch_worker_loop uses (see checkpoint.py's docstring) -- resync the
-        # main line to the winning branch's state via load_save + this combat's own actions,
-        # instead of open_from_checkpoint's full replay from StartRun. That full replay used to
-        # be paid here on EVERY turn regardless of the branch-side fix, growing with total run
-        # depth (not just combat depth) since this is the main line's own history, not a
-        # branch's -- measured turn-to-turn latency climbing from ~1.7s early in a run to ~7s+
-        # by ~200 actions in. load_and_resume_combat has no memory of anything before the
-        # checkpoint, so the pre-combat prefix is spliced back onto action_log afterward to keep
-        # the main line's own history complete for the trial's final output JSON.
+        # Resync the main line to the winning branch's state IN PLACE, on this SAME live
+        # session, via load_save + this combat's own actions -- instead of closing this
+        # session's subprocess and spawning a brand-new one first, which is what this used to do
+        # (close() + Sts2Session(logger=recorder), one dotnet subprocess fork/exec + CoreCLR
+        # cold start PER TURN). Confirmed safe by debug_verify_session_reuse.py (4 seeds, up to 4
+        # rooms past combat, zero divergence): the map-RNG-desync class of bug this respawn used
+        # to look like it might be guarding against (see _resolve_combat's post-win
+        # "safe_session" comment) is a property of what load_save()/SaveCheckpoint itself does
+        # and doesn't restore, not of whether the process calling it is fresh -- reusing one live
+        # session across repeated load_save() calls reproduces continuous play identically to
+        # respawning a fresh one every time. (That same script's "no repair" variant also matched
+        # continuous play on every seed tried, suggesting _resolve_combat's own post-win full
+        # replay below may no longer be necessary at all -- not acted on here, since that's a
+        # separate, higher-stakes claim than this one and deserves its own dedicated
+        # verification before removing an existing safety net.) load_and_resume_combat has no
+        # memory of anything before the checkpoint, so the pre-combat prefix is spliced back onto
+        # action_log afterward to keep the main line's own history complete for the trial's final
+        # output JSON.
         entry_action = cleaned[combat_start_index]
         in_combat_actions = cleaned[combat_start_index + 1:]
-        new_decision = new_session.load_and_resume_combat(
+        new_decision = session.load_and_resume_combat(
             checkpoint_path, entry_action, in_combat_actions
         )
-        new_session.action_log = cleaned[:combat_start_index] + new_session.action_log
+        session.action_log = cleaned[:combat_start_index] + session.action_log
     else:
-        new_decision = new_session.open_from_checkpoint(character, seed, cfg.ascension, cleaned)
-    return new_session, new_decision, adopted.get("outcome")  # "continue" | "won" | "lost"
+        # Rare (only the very first combat of a run lacks a checkpoint) and NOT covered by
+        # debug_verify_session_reuse.py's testing (that only exercised load_save reuse, not
+        # repeated start_run/StartRun on one live session) -- kept as a fresh respawn rather than
+        # extending the reuse optimization somewhere it hasn't actually been verified.
+        session.close()
+        session = Sts2Session(logger=recorder)
+        new_decision = session.open_from_checkpoint(character, seed, cfg.ascension, cleaned)
+    return session, new_decision, adopted.get("outcome")  # "continue" | "won" | "lost"
 
 
 def _resolve_combat(
