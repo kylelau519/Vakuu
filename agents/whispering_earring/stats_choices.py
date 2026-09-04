@@ -20,7 +20,7 @@ Only the choices_paradox-specific pieces are new here:
   against those names: n_evaluated/avg_value (every option-chain's own realized value, from the
   branch files) and n_adopted (how often the real trial actually took that card, from a second,
   full-trial replay of the main-line files -- mirrors choices_paradox/model/materialize.py's own
-  materialize_main_trial replay shape).
+  materialize_main_and_groups replay shape).
 
 Usage:
     python stats_choices.py [--raw-dir data/raw_choices] [--history-file PATH] [--round N]
@@ -192,7 +192,7 @@ def _card_value_group_task(group) -> tuple[dict[str, list], dict[str, list], int
 
 def _card_adoption_trial_task(path: str) -> tuple[dict[str, int], int]:
     """Full sequential replay of one main-line trial (mirrors choices_paradox/model/materialize.py's
-    own materialize_main_trial), tallying which card NAME each resolved meta-decision actually
+    own materialize_main_and_groups), tallying which card NAME each resolved meta-decision actually
     adopted -- needs the live card_reward/event_card_reward state at that exact point to decode
     it, same reason the value-side replay above does."""
     assert _stats_session is not None

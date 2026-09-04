@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import sys
+from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -90,23 +91,24 @@ def _read_trial(path: str) -> dict:
     return json.loads(Path(path).read_text())
 
 
-def _scan_trials(paths: list[str]) -> tuple[list[str], dict[tuple, _Group]]:
-    """Single read pass, same shape as claws' own _scan_trials -- see its docstring."""
-    main_paths: list[str] = []
+def _scan_trials(paths: list[str]) -> tuple[dict[str, str], dict[tuple, _Group]]:
+    """Single read pass, same shape as claws' own _scan_trials -- see its docstring (including
+    for why this returns main_id -> path rather than a plain path list)."""
+    main_id_to_path: dict[str, str] = {}
     groups: dict[tuple, _Group] = {}
 
     with ThreadPoolExecutor(max_workers=min(32, (os.cpu_count() or 4) * 4)) as pool:
         trials = pool.map(_read_trial, paths)
         for path, trial in zip(paths, trials):
-            _scan_one(path, trial, main_paths, groups)
+            _scan_one(path, trial, main_id_to_path, groups)
 
-    return main_paths, groups
+    return main_id_to_path, groups
 
 
-def _scan_one(path: str, trial: dict, main_paths: list[str], groups: dict[tuple, _Group]) -> None:
+def _scan_one(path: str, trial: dict, main_id_to_path: dict[str, str], groups: dict[tuple, _Group]) -> None:
     if trial.get("role") != "branch":
-        if trial.get("error") is None:
-            main_paths.append(path)
+        if trial.get("error") is None and trial.get("main_id") is not None:
+            main_id_to_path[trial["main_id"]] = path
         return
     if trial.get("branch_kind") != "meta":
         return  # combat's own turn-branch file -- claws/model/materialize.py's territory, not ours
@@ -143,7 +145,10 @@ def materialize_group(
 ) -> list[Example]:
     """Replays this group's shared prefix exactly once, tokenizes the resulting card_reward/
     card_select decision once, and emits one policy_real example per member directly from its
-    own recorded first action + value."""
+    own recorded first action + value. Only used as a fallback for a meta-branch group whose
+    main-line file is missing/errored (see main()) -- when the main file IS available,
+    materialize_main_and_groups() below reaches the same checkpoint without replaying this
+    group's prefix from scratch."""
     baseline = _group_baseline(group)
     if baseline is None:
         return []
@@ -182,21 +187,48 @@ def materialize_group(
     return examples
 
 
-def materialize_main_trial(
-    path: str, gvocab: GlobalVocab, session: Sts2BufferSession
+def materialize_main_and_groups(
+    path: str, own_groups: list[_Group], gvocab: GlobalVocab, session: Sts2BufferSession
 ) -> list[Example]:
-    """Full ordinary replay of one main-line trial."""
+    """Single sequential replay of one main-line trial, emitting both its own per-turn
+    policy_real=False examples (same as this function used to do as materialize_main_trial) and,
+    at each shared-prefix boundary one of its OWN sibling meta-branch groups diverged from, that
+    group's policy_real=True examples (same as materialize_group, without re-replaying from
+    action 0). See claws/model/materialize.py's own materialize_main_and_groups for why every
+    meta-branch group's own recorded prefix is guaranteed to be an exact prefix of THIS trial's
+    own action log (whispering_earring's branch-and-adopt commits each turn before the next is
+    even branched), and why walking it once here instead of replaying each group's prefix from
+    scratch is a large win on trials with many meta-decisions."""
     trial = json.loads(Path(path).read_text())
     if trial.get("error") is not None:
         return []
 
+    groups_by_len: dict[int, list[_Group]] = defaultdict(list)
+    baselines: dict[int, float] = {}
+    for g in own_groups:
+        baseline = _group_baseline(g)
+        if baseline is None:
+            continue  # same guard materialize_group applies per-group
+        groups_by_len[len(g.prefix_actions)].append(g)
+        baselines[id(g)] = baseline
+
+    actions = trial["actions"]
     examples: list[Example] = []
     decision = session.start(trial["character"], trial["seed"], trial.get("ascension", 0))
-    for entry in trial["actions"]:
-        if decision.decision in ("card_reward", "event_card_reward") and "policy" in entry:
-            # decision_kind passed down is always "card_reward" -- matches what _resolve_meta_decision
-            # recorded on the main line (mirroring the JSON protocol's own unified literal), even
-            # when this buffer-side replay shows the blessing-triggered "event_card_reward" kind.
+
+    for i in range(len(actions) + 1):
+        # i == len(actions) is a final sentinel pass -- covers the (unlikely but possible) case
+        # of a meta-branch group whose prefix is the trial's ENTIRE action log.
+        entry = actions[i] if i < len(actions) else None
+        is_policy_point = (
+            entry is not None and decision.decision in ("card_reward", "event_card_reward")
+            and "policy" in entry
+        )
+        if is_policy_point:
+            # decision_kind passed down is always "card_reward" -- matches what
+            # _resolve_meta_decision recorded on the main line (mirroring the JSON protocol's own
+            # unified literal), even when this buffer-side replay shows the blessing-triggered
+            # "event_card_reward" kind.
             options = legal_options_from_buffer(decision, "card_reward")
             batch = tokenize_from_buffer(decision, "card_reward", gvocab)
             examples.append({
@@ -213,7 +245,40 @@ def materialize_main_trial(
                 "advantage": 0.0,
                 "policy_real": False,
             })
+
+        groups_here = groups_by_len.get(i, [])
+        if groups_here and decision.decision in ("card_reward", "event_card_reward", "card_select"):
+            # All groups sharing one (main_id, prefix) key share one decision_kind -- same
+            # assumption materialize_group itself makes (there's only one real game decision at
+            # this exact point in this exact trial).
+            decision_kind = groups_here[0].decision_kind
+            options = legal_options_from_buffer(decision, decision_kind)
+            batch = tokenize_from_buffer(decision, decision_kind, gvocab)
+            for g in groups_here:
+                baseline = baselines[id(g)]
+                for first in g.members:
+                    action_index = _option_index(options, first)
+                    if action_index is None:
+                        continue
+                    examples.append({
+                        "type_ids": batch.type_ids,
+                        "global_ids": batch.global_ids,
+                        "features": batch.features,
+                        "mode_idx": batch.mode_idx,
+                        "player_pos": batch.player_pos,
+                        "mode_pos": batch.mode_pos,
+                        "offer_pos": batch.offer_pos,
+                        "options": options,
+                        "value": first["value"],
+                        "action_index": action_index,
+                        "advantage": first["value"] - baseline,
+                        "policy_real": True,
+                    })
+
+        if entry is None:
+            break
         decision = session.step(entry["action"], **entry.get("args", {}))
+
     return examples
 
 
@@ -234,13 +299,16 @@ def _init_worker() -> None:
     _session = Sts2BufferSession()
 
 
-def _materialize_main_task(path: str) -> tuple[str, list[Example] | None, str | None]:
+def _materialize_merged_task(
+    path: str, own_groups: list[_Group]
+) -> tuple[str, list[Example] | None, str | None]:
     assert _gvocab is not None and _session is not None
+    label = path if not own_groups else f"{path} (+{len(own_groups)} branch group(s))"
     try:
-        examples = materialize_main_trial(path, _gvocab, _session)
+        examples = materialize_main_and_groups(path, own_groups, _gvocab, _session)
     except Exception as e:
-        return path, None, f"{type(e).__name__}: {e}"
-    return path, examples, None
+        return label, None, f"{type(e).__name__}: {e}"
+    return label, examples, None
 
 
 def _materialize_group_task(group: _Group) -> tuple[str, list[Example] | None, str | None]:
@@ -279,15 +347,32 @@ def main() -> None:
 
     ensure_setup()  # once, here, in the parent -- see claws/model/materialize.py's comment
 
-    main_paths, groups = _scan_trials(trial_paths)
+    main_id_to_path, groups = _scan_trials(trial_paths)
     real_groups = {k: g for k, g in groups.items() if _group_baseline(g) is not None}
-    print(f"{len(main_paths)} main-line trial(s), {len(groups)} meta-branch group(s) "
+    print(f"{len(main_id_to_path)} main-line trial(s), {len(groups)} meta-branch group(s) "
           f"({len(real_groups)} with real cross-option signal)")
+
+    # Every group replays a prefix of its OWN main trial's action log, so route each group
+    # through one shared walk of its main file instead of replaying its prefix from scratch --
+    # see materialize_main_and_groups's docstring. A group only falls back to the old
+    # from-scratch replay when its main file is missing/errored.
+    groups_by_main_id: dict[str, list[_Group]] = defaultdict(list)
+    for group in groups.values():
+        groups_by_main_id[group.main_id].append(group)
+    orphan_groups = [
+        g for main_id, gs in groups_by_main_id.items() if main_id not in main_id_to_path for g in gs
+    ]
+    if orphan_groups:
+        print(f"{len(orphan_groups)} meta-branch group(s) have no matching main-line file -- "
+              f"replaying independently from action 0")
 
     all_examples: list[Example] = []
     with ProcessPoolExecutor(max_workers=args.jobs, initializer=_init_worker) as pool:
-        futures = [pool.submit(_materialize_main_task, path) for path in main_paths]
-        futures += [pool.submit(_materialize_group_task, group) for group in groups.values()]
+        futures = [
+            pool.submit(_materialize_merged_task, path, groups_by_main_id.get(main_id, []))
+            for main_id, path in main_id_to_path.items()
+        ]
+        futures += [pool.submit(_materialize_group_task, group) for group in orphan_groups]
         for future in as_completed(futures):
             label, examples, error = future.result()
             if error is not None:

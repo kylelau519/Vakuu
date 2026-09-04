@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import sys
+from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -84,24 +85,28 @@ def _read_trial(path: str) -> dict:
     return json.loads(Path(path).read_text())
 
 
-def _scan_trials(paths: list[str]) -> tuple[list[str], dict[tuple, _Group]]:
+def _scan_trials(paths: list[str]) -> tuple[dict[str, str], dict[tuple, _Group]]:
     """Single read pass over every trial file: classifies each as main-line or branch (grouped by the exact shared prefix
-    it replayed before diverging). The reads themselves run on a thread pool."""
-    main_paths: list[str] = []
+    it replayed before diverging). The reads themselves run on a thread pool. Returns
+    (main_id -> path for every non-errored main-line trial, branch groups) -- main_id comes from
+    each main-line file's own recorded field (see facility_common.py's main_worker_loop, which
+    writes it as f"{character}_{seed}" -- same value every branch of that trial also carries),
+    read for free here since _read_trial already loaded the whole file."""
+    main_id_to_path: dict[str, str] = {}
     groups: dict[tuple, _Group] = {}
 
     with ThreadPoolExecutor(max_workers=min(32, (os.cpu_count() or 4) * 4)) as pool:
         trials = pool.map(_read_trial, paths)
         for path, trial in zip(paths, trials):
-            _scan_one(path, trial, main_paths, groups)
+            _scan_one(path, trial, main_id_to_path, groups)
 
-    return main_paths, groups
+    return main_id_to_path, groups
 
 
-def _scan_one(path: str, trial: dict, main_paths: list[str], groups: dict[tuple, _Group]) -> None:
+def _scan_one(path: str, trial: dict, main_id_to_path: dict[str, str], groups: dict[tuple, _Group]) -> None:
     if trial.get("role") != "branch":
-        if trial.get("error") is None:
-            main_paths.append(path)
+        if trial.get("error") is None and trial.get("main_id") is not None:
+            main_id_to_path[trial["main_id"]] = path
         return
     if trial.get("branch_kind") == "meta":
         return  # choices_paradox's own MetaBranchJob file (different prefix/action shape --
@@ -135,7 +140,10 @@ def materialize_group(
 ) -> list[Example]:
     """Replays this group's shared prefix exactly once, tokenizes the resulting turn-start
     decision once, and emits one policy_real example per sibling directly from its own recorded
-    first action + value """
+    first action + value. Only used as a fallback for a branch group whose main-line file is
+    missing/errored (see main()) -- when the main file IS available,
+    materialize_main_and_groups() below reaches the same checkpoint without replaying this
+    group's prefix from scratch."""
     baseline = _group_baseline(group)
     if baseline is None:
         return []
@@ -171,36 +179,93 @@ def materialize_group(
     return examples
 
 
-def materialize_main_trial(
-    path: str, gvocab: GlobalVocab, session: Sts2BufferSession
+def materialize_main_and_groups(
+    path: str, own_groups: list[_Group], gvocab: GlobalVocab, session: Sts2BufferSession
 ) -> list[Example]:
-    """Full ordinary replay of one main-line trial -- unaffected by the branch-group shortcut
-    above"""
+    """Single sequential replay of one main-line trial, emitting both its own per-turn
+    policy_real=False examples (same as this function used to do as materialize_main_trial) and,
+    at each shared-prefix boundary one of its OWN sibling branch groups diverged from, that
+    group's policy_real=True examples (same as materialize_group, without re-replaying from
+    action 0).
+
+    This works because whispering_earring's turn-level branch-and-adopt (facility_claws.py)
+    commits each turn's action to the main line before the next turn is even branched -- so every
+    branch group spawned off this trial replayed a prefix that is guaranteed to be an EXACT
+    prefix of this trial's own action log (verified against real data, 0 mismatches across 840
+    branch files). Before this, each of a trial's branch groups independently replayed its own
+    prefix from scratch, so a trial with branch points every few turns paid for the sum of every
+    prefix length instead of just the trial's own length -- on one real ~126-action trial with 28
+    branch groups, that was 1759 replayed steps instead of 126, a ~15x blowup that scales O(L^2)
+    in trial length rather than O(L)."""
     trial = json.loads(Path(path).read_text())
     if trial.get("error") is not None:
         return []  # aborted trial -- no value signal, per ../README.md's Data section
 
+    groups_by_len: dict[int, list[_Group]] = defaultdict(list)
+    baselines: dict[int, float] = {}
+    for g in own_groups:
+        baseline = _group_baseline(g)
+        if baseline is None:
+            continue  # same guard materialize_group applies per-group
+        groups_by_len[len(g.prefix_actions)].append(g)
+        baselines[id(g)] = baseline
+
+    actions = trial["actions"]
     examples: list[Example] = []
     decision = session.start(trial["character"], trial["seed"], trial.get("ascension", 0))
-    for entry in trial["actions"]:
-        if decision.decision == "combat_play" and "policy" in entry:
+
+    for i in range(len(actions) + 1):
+        # i == len(actions) is a final sentinel pass -- covers the (unlikely but possible) case
+        # of a branch group whose prefix is the trial's ENTIRE action log -- without stepping
+        # anything further.
+        entry = actions[i] if i < len(actions) else None
+        is_policy_point = (
+            entry is not None and decision.decision == "combat_play" and "policy" in entry
+        )
+        groups_here = groups_by_len.get(i, [])
+        if is_policy_point or groups_here:
             options = legal_options_from_buffer(decision)
             batch = tokenize_from_buffer(decision, gvocab)
-            examples.append({
-                "type_ids": batch.type_ids,
-                "global_ids": batch.global_ids,
-                "features": batch.features,
-                "player_pos": batch.player_pos,
-                "hand_pos": batch.hand_pos,
-                "enemy_pos": batch.enemy_pos,
-                "potion_pos": batch.potion_pos,
-                "options": options,
-                "value": entry.get("value", 0.0),
-                "action_index": None,
-                "advantage": 0.0,
-                "policy_real": False,
-            })
+            if is_policy_point:
+                examples.append({
+                    "type_ids": batch.type_ids,
+                    "global_ids": batch.global_ids,
+                    "features": batch.features,
+                    "player_pos": batch.player_pos,
+                    "hand_pos": batch.hand_pos,
+                    "enemy_pos": batch.enemy_pos,
+                    "potion_pos": batch.potion_pos,
+                    "options": options,
+                    "value": entry.get("value", 0.0),
+                    "action_index": None,
+                    "advantage": 0.0,
+                    "policy_real": False,
+                })
+            if decision.decision == "combat_play":  # defensive -- see materialize_group's guard
+                for g in groups_here:
+                    baseline = baselines[id(g)]
+                    for first in g.members:
+                        action_index = _option_index(options, first)
+                        if action_index is None:
+                            continue
+                        examples.append({
+                            "type_ids": batch.type_ids,
+                            "global_ids": batch.global_ids,
+                            "features": batch.features,
+                            "player_pos": batch.player_pos,
+                            "hand_pos": batch.hand_pos,
+                            "enemy_pos": batch.enemy_pos,
+                            "potion_pos": batch.potion_pos,
+                            "options": options,
+                            "value": first["value"],
+                            "action_index": action_index,
+                            "advantage": first["value"] - baseline,
+                            "policy_real": True,
+                        })
+        if entry is None:
+            break
         decision = session.step(entry["action"], **entry.get("args", {}))
+
     return examples
 
 
@@ -221,13 +286,16 @@ def _init_worker() -> None:
     _session = Sts2BufferSession()
 
 
-def _materialize_main_task(path: str) -> tuple[str, list[Example] | None, str | None]:
+def _materialize_merged_task(
+    path: str, own_groups: list[_Group]
+) -> tuple[str, list[Example] | None, str | None]:
     assert _gvocab is not None and _session is not None  # set by _init_worker before any task runs
+    label = path if not own_groups else f"{path} (+{len(own_groups)} branch group(s))"
     try:
-        examples = materialize_main_trial(path, _gvocab, _session)
+        examples = materialize_main_and_groups(path, own_groups, _gvocab, _session)
     except Exception as e:
-        return path, None, f"{type(e).__name__}: {e}"
-    return path, examples, None
+        return label, None, f"{type(e).__name__}: {e}"
+    return label, examples, None
 
 
 def _materialize_group_task(group: _Group) -> tuple[str, list[Example] | None, str | None]:
@@ -270,15 +338,33 @@ def main() -> None:
     # Single read pass (cheap -- no CLR session needed, just reading the files) that both
     # separates out main-line trials and groups every branch trial by its shared prefix -- see
     # _scan_trials's docstring.
-    main_paths, groups = _scan_trials(trial_paths)
+    main_id_to_path, groups = _scan_trials(trial_paths)
     real_groups = {k: g for k, g in groups.items() if _group_baseline(g) is not None}
-    print(f"{len(main_paths)} main-line trial(s), {len(groups)} branch group(s) "
+    print(f"{len(main_id_to_path)} main-line trial(s), {len(groups)} branch group(s) "
           f"({len(real_groups)} with real cross-branch signal)")
+
+    # Every group replays a prefix of its OWN main trial's action log (branch-and-adopt commits
+    # each turn before the next is even branched -- see materialize_main_and_groups's docstring),
+    # so route each group through one shared walk of its main file instead of replaying its
+    # prefix from scratch. A group only falls back to the old from-scratch replay when its main
+    # file is missing/errored (excluded from main_id_to_path above).
+    groups_by_main_id: dict[str, list[_Group]] = defaultdict(list)
+    for group in groups.values():
+        groups_by_main_id[group.main_id].append(group)
+    orphan_groups = [
+        g for main_id, gs in groups_by_main_id.items() if main_id not in main_id_to_path for g in gs
+    ]
+    if orphan_groups:
+        print(f"{len(orphan_groups)} branch group(s) have no matching main-line file -- "
+              f"replaying independently from action 0")
 
     all_examples: list[Example] = []
     with ProcessPoolExecutor(max_workers=args.jobs, initializer=_init_worker) as pool:
-        futures = [pool.submit(_materialize_main_task, path) for path in main_paths]
-        futures += [pool.submit(_materialize_group_task, group) for group in groups.values()]
+        futures = [
+            pool.submit(_materialize_merged_task, path, groups_by_main_id.get(main_id, []))
+            for main_id, path in main_id_to_path.items()
+        ]
+        futures += [pool.submit(_materialize_group_task, group) for group in orphan_groups]
         for future in as_completed(futures):
             label, examples, error = future.result()
             if error is not None:
