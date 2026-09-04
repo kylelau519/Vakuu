@@ -54,13 +54,7 @@ _BOSS_HP_WEIGHT = 0.2
 _BOSS_WIN_FLOOR = 0.8
 _BOSS_ENEMY_WEIGHT = 0.2
 
-# Golden Compass reward shaping (see main_worker_loop's pending_map_steps machinery): a local
-# bonus for winning an Elite/Boss fight, backward-discounted across the select_map_node decisions
-# that led there, layered ON TOP of the flat terminal +1/-1 -- not replacing it. Keeping the flat
-# term matters: without it, a trial that beats a couple of Elites (+2 each) and then still dies
-# (just -1) would net positive, teaching the policy to chase risky Elites over safe clears. gamma
-# ~0.9 gives a ~6.6-decision half-life -- enough reach that a choice a few floors before a win
-# gets a real nudge, without smearing credit flatly across an entire ~15-50 decision run the way
+# Golden Compass reward shaping (see main_worker_loop's pending_map_steps machinery)
 # the old scheme did.
 _GOLDEN_COMPASS_GAMMA = 0.9
 _GOLDEN_COMPASS_ELITE_BONUS = 2.0
@@ -249,29 +243,16 @@ class FacilityConfig:
     n_main_workers: int = 1  # concurrent main lines, sharing one branch-worker pool
     n_main_trials: int | None = None  # stop after this many main-line trials *total*; None = forever
     raw_dir: str = "data/raw"
-    verbose: bool = False  # relay every branch worker's [SIM]/[INFO] line, not just milestones
-    # Facility.run()'s watchdog: if no relayed log line has landed for longer than this while a
-    # main worker is still alive, it's treated as wedged and killed rather than joined forever --
-    # added after a live CoreCLR crash got stuck mid-abort instead of terminating the process,
-    # which otherwise hangs the whole facility (Python's atexit multiprocessing cleanup does an
-    # equally untimed join). 1800s (30 min) is generous -- a legitimate long walk still produces a
-    # milestone line at least once per combat/room.
+    verbose: bool = False  
     stall_timeout_s: float = 1800.0
 
-    # Meta-decision (card_reward, eventually card_select) branching -- see
-    # agents/choices_paradox/model/README.md's Design section. facility_claws.py's CLI never
-    # touches this, so its default of 0 (disabled) keeps that facility's behavior unchanged.
-    # facility_choices_paradox.py's CLI sets it to None (branch every eligible decision) by
-    # default.
-    meta_branches_per_trial: int | None = 0  # 0 = disabled; None = unlimited; else a decrementing
-    # per-trial budget (not a sampling scheme -- see the README's FacilityConfig knobs section)
+    # Meta-decision (card_reward, eventually card_select) branching 
+    meta_branches_per_trial: int | None = 0  # 0 = disabled; None = unlimited
 
 
 def _bypass_card_reward(session) -> None:
     # A branch's own reward pick is discarded either way -- only the main line's adopted actions
-    # matter. Only used when a combat-turn branch's job ends the instant it wins (see
-    # _play_turn_only's bypass_reward_on_win); a meta-branch horizon walk that keeps playing past
-    # the win instead resolves the same card_reward for real and must NOT go through this bypass.
+    # matter.
     raw = session._session.Action("skip_card_reward", None)
     if session._decision(raw).decision == "error":
         raise Sts2ActionError(session._session.LastError or "unknown error")
@@ -364,7 +345,7 @@ META_ELIGIBLE_DECISIONS = frozenset({"card_reward"})
 # _drain_meta_results_blocking and main_worker_loop's finally block. Deliberately much shorter
 # than combat's own 120s _wait_for_turn_result timeout: this only delays this one worker starting
 # its NEXT trial (the mainline's own decisions were never blocked on it), not live play.
-_META_DRAIN_TIMEOUT = 30.0
+_META_DRAIN_TIMEOUT = 60.0
 
 
 def _apply_meta_result(

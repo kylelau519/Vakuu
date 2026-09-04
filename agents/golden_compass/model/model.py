@@ -21,12 +21,9 @@ recorded explicitly (see _choose_map_action_net's policy["chosen"] in whispering
 -- the resolved (col, row) alone doesn't disambiguate it, since more than one combination can
 share a first hop.
 
-Mirrors choices_paradox/model/model.py's tokenizer -> transformer -> per-option-query -> shared-
-head shape, simplified for a single decision kind and no "skip" option (map_select always offers
-at least one reachable node, so combination_options always returns at least one candidate).
 
-Value head IS tanh-bounded (torch.tanh, matching ClawsNet's convention -- see that module's
-`score()`), unlike ChoicesParadoxNet's unbounded one: this net's training target is the run's own
+
+Value head IS tanh-bounded, this net's training target is the run's own
 terminal reward (+1 win / -1 death, plus a local Elite/Boss-win shaping bonus -- see
 facility_common.py's pending_map_steps / recorder.set_value wiring), not a growing per-chain sum.
 """
@@ -64,17 +61,7 @@ _TYPE_TO_IDX = {t: i for i, t in enumerate(TOKEN_TYPES)}
 # MapPointType strings as returned by MapChoice.type -- same set golden_compass/policy.py's own
 # _NODE_VALUE heuristic keys off.
 NODE_TYPES = ["Monster", "Elite", "RestSite", "Shop", "Unknown", "Treasure", "Ancient", "Boss"]
-
-# An OPTION token's own feature vector is a per-type room-count histogram (see
-# _path_combination), one slot per NODE_TYPES entry -- so FEATURE_DIM is driven by that, not a
-# fixed constant. PLAYER/RELIC feature vectors are shorter and zero-pad the remaining slots
-# (shared feat_proj Linear width across all three token types -- see GoldenCompassNet.__init__).
 FEATURE_DIM = len(NODE_TYPES)
-
-# How far ahead a path is walked (see _enumerate_paths) -- floors, not tokens. 5 is a little under
-# a third of a typical ~16-floor act: far enough to see an approaching Elite/Rest Site coming, not
-# so far it's mostly noise from branches that haven't even been decided into yet, and not so far
-# that path enumeration's branching cost gets out of hand.
 _LOOKAHEAD_HORIZON = 5
 
 
@@ -126,16 +113,7 @@ def _enumerate_paths(
 ) -> list[list[Coord]]:
     """Every coordinate path starting at `coord`, walking the map's own `children` adjacency, up
     to `horizon` floors deep -- terminating early wherever a path dead-ends (Boss, or no
-    children) before that. The map is a DAG layered strictly by floor (children always sit one
-    row past their parent, per golden_compass/policy.py's own docstring), so recursion terminates
-    on its own via the horizon countdown or running out of children -- no cycle risk, no need for
-    a seen-set (unlike _map_node_index's old BFS-based lookahead, paths that reconverge on the
-    same node via different routes are legitimately different paths here, not deduped).
-
-    Branching factor is small in practice (STS2 maps merge back together often, rarely more than
-    a handful of live branches at once), so a plain recursive enumeration stays cheap even at
-    horizon 5 -- see this module's docstring for why the resulting path COUNT doesn't matter much
-    anyway (only the distinct combinations they produce reach the network)."""
+    children) before that."""
     node = node_index.get(coord)
     if node is None:
         return [[coord]]
@@ -151,10 +129,7 @@ def _enumerate_paths(
 
 
 def _path_combination(path: list[Coord], node_index: dict[Coord, dict]) -> Combination:
-    """log1p-compressed per-type room count along one path (see _enumerate_paths) -- the
-    "combination" a candidate is actually scored on (same log1p convention as this module's other
-    count-like features -- gold, deck size, relic counters -- so a long path with many duplicate
-    rooms of one type doesn't dominate the scale of a short one)."""
+    """log1p-compressed per-type room count along one path."""
     counts = {t: 0 for t in NODE_TYPES}
     for c in path:
         node = node_index.get(c)
@@ -167,18 +142,10 @@ def combination_options(
     decision: MapSelect, node_index: dict[Coord, dict] | None, horizon: int = _LOOKAHEAD_HORIZON,
 ) -> dict[Combination, list[list[Coord]]]:
     """combination -> [paths that produce it], pooled across EVERY one-hop `choices` candidate's
-    own subtree -- this dict IS the network's action space (see this module's docstring): the
+    own subtree -- this dict IS the network's action space: the
     ordered list of its keys is what tokenize()/GoldenCompassNet score, one token per distinct
     combination, and the dict itself is how a chosen combination resolves back to a real action
-    (see resolve_combination_action). Key order is deterministic (Python dict insertion order,
-    driven by decision.choices' own order and _enumerate_paths' fixed recursion order), so two
-    calls against the same decision/map produce identically-ordered options -- materialize.py
-    relies on this to replay a live-recorded choice index without re-deriving it from the
-    resolved (col, row) alone.
-
-    `node_index=None` (no live map available -- see tokenize()'s own docstring) degrades to one
-    candidate per physical one-hop child, each a singleton combination of just its own immediate
-    type -- the same information a one-hop-only tokenizer would have had, not a crash."""
+    (see resolve_combination_action)."""
     combos: dict[Combination, list[list[Coord]]] = {}
     for choice in decision.choices:
         coord = (choice.col, choice.row)
@@ -200,10 +167,7 @@ def resolve_combination_action(
     combo: Combination, combo_paths: dict[Combination, list[list[Coord]]],
     rng: random.Random | None = None,
 ) -> tuple[str, dict]:
-    """Any path sharing the chosen combination is equally valid to this net by construction (see
-    this module's docstring) -- picks one at random and returns its FIRST hop as the actual
-    select_map_node action. The rest of that path is discarded: the whole point is to replan from
-    scratch at the next map_select, not commit to a multi-floor route now."""
+    """Any path sharing the chosen combination is equally valid to this net by construction"""
     paths = combo_paths[combo]
     path = (rng or random).choice(paths)
     coord = path[0]

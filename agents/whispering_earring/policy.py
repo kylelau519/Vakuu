@@ -105,27 +105,6 @@ def choose_action(
     decision: Decision | BufferDecision, session: Sts2Session, purpose: str | None = None,
     combat_dirichlet_noise: bool = True, card_reward_dirichlet_noise: bool = True,
 ) -> tuple[str, dict, dict | None, str | None]:
-    """purpose/the trailing return value thread whichever card_select "purpose" (remove/upgrade)
-    a preceding shop/rest_site pick just triggered -- see _choose_card_select_action's docstring
-    for why this can no longer be a module-level global. Callers that loop over a sequence of
-    decisions (main_worker_loop, _play_turn_only, any debug script driving a session end to end)
-    must pass back whatever purpose the previous call returned; a caller that only ever needs one
-    decision (never card_select) can ignore the returned purpose entirely.
-
-    combat_dirichlet_noise/card_reward_dirichlet_noise: independent on/off switches for the two
-    trained-net samplers (_choose_combat_action_claws, _choose_card_reward_net respectively) --
-    both on by default, matching self-play training's own need for exploration (see this module's
-    docstring for why skipping it starves rare options of any training signal). Kept separate
-    rather than one shared flag because the two training loops want different answers for the
-    card_reward side: training Claws (facility_claws.py) wants it ON -- card_reward outcomes feed
-    back into which decks Claws sees, so a deterministic card_reward net would reinforce whatever
-    blind spots it already has instead of exploring around them; training Choices Paradox
-    (facility_choices_paradox.py's MetaOptionJob chains) wants it OFF for a chain's own
-    downstream card_reward picks, since that noise would add unwanted variance on top of the
-    option-chain comparison the chain's value IS the training signal for -- see
-    facility_choices_paradox.py's own module docstring on why combat's noise inside a chain is
-    accepted variance but this isn't. Neither flag affects either net's untrained/heuristic
-    fallback path (round 1, no checkpoint yet)."""
     if decision.decision == "combat_play":
         name, args, policy = _choose_combat_action(decision, session, combat_dirichlet_noise)
         return name, args, policy, None
@@ -150,18 +129,10 @@ def _load_claws_net():
 
 
 def get_claws_net():
-    """Public accessor for facility.py's TD-bootstrap value term (_play_turn_only) -- reuses
-    this module's lazily-loaded ClawsNet (see _load_claws_net) rather than a second load in
-    the same branch-worker process. Returns None if CLAWS_CHECKPOINT isn't set (no checkpoint
-    yet -- round 1)."""
     return _load_claws_net()
 
 
 def _load_choices_paradox_net():
-    """Same lazy-load-once-per-process convention as _load_claws_net, keyed off
-    CHOICES_PARADOX_CHECKPOINT -- kept as its own module-global (rather than reusing
-    facility_choices_paradox.py's copy) since that module isn't on the path of every process
-    that imports this one (facility_claws.py, in particular, never imports it)."""
     global _choices_paradox_net
     if _choices_paradox_net is not None or not _CHOICES_PARADOX_CHECKPOINT:
         return _choices_paradox_net
