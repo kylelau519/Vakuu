@@ -2,6 +2,10 @@
 choices_paradox/policy.py), which scores cards off Baalorlord's STS2 tier lists instead of
 picking blindly. map_select likewise delegates to Golden Compass (agents/golden_compass/
 policy.py), which value-to-go DPs the full map instead of picking a reachable node blindly.
+card_reward specifically upgrades to a trained ChoicesParadoxNet (agents/choices_paradox/model/
+model.py), sampled the same Dirichlet-noised-softmax way _choose_combat_action_claws samples
+Claws, once CHOICES_PARADOX_CHECKPOINT is set -- see _choose_card_reward_decision -- falling back
+to the tier-list heuristic otherwise (round 1, no checkpoint yet).
 
 Returns (action_name, kwargs, policy) rather than a built command, so callers pass the first two
 straight into session.step(name, **kwargs) -- the session builds/validates the actual command via
@@ -53,6 +57,22 @@ assert _spec is not None and _spec.loader is not None
 golden_compass = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(golden_compass)
 
+# Loaded by file path rather than a package import -- same reasoning as choices_paradox/
+# golden_compass above (no __init__.py-based package structure to import through, and this
+# avoids colliding with claws/model/model.py, also just named `model`).
+_choices_paradox_model_path = (
+    Path(__file__).resolve().parents[1] / "choices_paradox" / "model" / "model.py"
+)
+_spec = importlib.util.spec_from_file_location("choices_paradox_model", _choices_paradox_model_path)
+assert _spec is not None and _spec.loader is not None
+_cp_model = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = _cp_model  # dataclasses' class-processing looks itself up via
+# sys.modules[cls.__module__] during exec_module -- module_from_spec alone doesn't register it
+_spec.loader.exec_module(_cp_model)
+
+_CHOICES_PARADOX_CHECKPOINT = os.environ.get("CHOICES_PARADOX_CHECKPOINT")
+_choices_paradox_net = None  # lazy-loaded once per worker process, on first card_reward decision
+
 _REST_HEAL_HP_THRESHOLD = 35
 
 
@@ -65,18 +85,36 @@ class _BufferCard:
     id: str | None
 
 def choose_action(
-    decision: Decision | BufferDecision, session: Sts2Session, purpose: str | None = None
+    decision: Decision | BufferDecision, session: Sts2Session, purpose: str | None = None,
+    combat_dirichlet_noise: bool = True, card_reward_dirichlet_noise: bool = True,
 ) -> tuple[str, dict, dict | None, str | None]:
     """purpose/the trailing return value thread whichever card_select "purpose" (remove/upgrade)
     a preceding shop/rest_site pick just triggered -- see _choose_card_select_action's docstring
     for why this can no longer be a module-level global. Callers that loop over a sequence of
     decisions (main_worker_loop, _play_turn_only, any debug script driving a session end to end)
     must pass back whatever purpose the previous call returned; a caller that only ever needs one
-    decision (never card_select) can ignore the returned purpose entirely."""
+    decision (never card_select) can ignore the returned purpose entirely.
+
+    combat_dirichlet_noise/card_reward_dirichlet_noise: independent on/off switches for the two
+    trained-net samplers (_choose_combat_action_claws, _choose_card_reward_net respectively) --
+    both on by default, matching self-play training's own need for exploration (see this module's
+    docstring for why skipping it starves rare options of any training signal). Kept separate
+    rather than one shared flag because the two training loops want different answers for the
+    card_reward side: training Claws (facility_claws.py) wants it ON -- card_reward outcomes feed
+    back into which decks Claws sees, so a deterministic card_reward net would reinforce whatever
+    blind spots it already has instead of exploring around them; training Choices Paradox
+    (facility_choices_paradox.py's MetaOptionJob chains) wants it OFF for a chain's own
+    downstream card_reward picks, since that noise would add unwanted variance on top of the
+    option-chain comparison the chain's value IS the training signal for -- see
+    facility_choices_paradox.py's own module docstring on why combat's noise inside a chain is
+    accepted variance but this isn't. Neither flag affects either net's untrained/heuristic
+    fallback path (round 1, no checkpoint yet)."""
     if decision.decision == "combat_play":
-        name, args, policy = _choose_combat_action(decision, session)
+        name, args, policy = _choose_combat_action(decision, session, combat_dirichlet_noise)
         return name, args, policy, None
-    name, kwargs, next_purpose = _choose_generic_action(decision, session, purpose)
+    name, kwargs, next_purpose = _choose_generic_action(
+        decision, session, purpose, card_reward_dirichlet_noise
+    )
     return name, kwargs, None, next_purpose
 
 
@@ -102,16 +140,77 @@ def get_claws_net():
     return _load_claws_net()
 
 
-def _choose_combat_action_claws(decision: CombatPlay, net) -> tuple[str, dict, dict]:
+def _load_choices_paradox_net():
+    """Same lazy-load-once-per-process convention as _load_claws_net, keyed off
+    CHOICES_PARADOX_CHECKPOINT -- kept as its own module-global (rather than reusing
+    facility_choices_paradox.py's copy) since that module isn't on the path of every process
+    that imports this one (facility_claws.py, in particular, never imports it)."""
+    global _choices_paradox_net
+    if _choices_paradox_net is not None or not _CHOICES_PARADOX_CHECKPOINT:
+        return _choices_paradox_net
+    if not os.path.exists(_CHOICES_PARADOX_CHECKPOINT):
+        return None  # round 1, or CHOICES_PARADOX_CHECKPOINT unset by the training script yet
+    _choices_paradox_net = _cp_model.ChoicesParadoxNet.from_checkpoint(_CHOICES_PARADOX_CHECKPOINT)
+    return _choices_paradox_net
+
+
+def _choose_card_reward_net(decision, net, dirichlet_noise: bool = True) -> tuple[str, dict]:
+    """Samples (not argmax) from ChoicesParadoxNet's own softmax over model.py's
+    legal_options()/legal_options_from_buffer(), mixed with root Dirichlet noise unless
+    dirichlet_noise=False -- same convention (and same _DIRICHLET_EPS/_DIRICHLET_ALPHA_SCALE) as
+    _choose_combat_action_claws above and facility_choices_paradox.py's own
+    _choose_meta_option_claws. `decision` is either a pydantic CardReward or a BufferDecision --
+    net.forward dispatches on that itself."""
+    import torch
+
+    options, logits, _value = net.forward(decision, "card_reward")
+    probs = torch.softmax(logits, dim=-1)
+    if dirichlet_noise:
+        alpha = _DIRICHLET_ALPHA_SCALE / len(options)
+        noise = torch.distributions.Dirichlet(torch.full((len(options),), alpha)).sample()
+        probs = (1 - _DIRICHLET_EPS) * probs + _DIRICHLET_EPS * noise
+    idx = int(torch.multinomial(probs, 1).item())
+    return options[idx]
+
+
+def _choose_card_reward_decision(
+    decision, cards: list, can_skip: bool, deck_size: int,
+    card_reward_dirichlet_noise: bool = True,
+) -> tuple[str, dict]:
+    """card_reward's action chooser, shared by the pydantic (_choose_generic_action) and buffer
+    (_choose_card_reward_from_buffer, including its event_card_reward variant) paths. Samples
+    from a loaded ChoicesParadoxNet when CHOICES_PARADOX_CHECKPOINT is set (see
+    _choose_card_reward_net) -- the trained pick, aware of full-deck synergy/curve the tier list
+    can't see -- falling back to choices_paradox.policy's static tier-list heuristic otherwise
+    (round 1, no checkpoint yet), same "noisy but harmless" fallback Claws's own combat picker
+    already follows. `decision` is only used by the net path (net.forward's own dispatch on
+    pydantic CardReward vs. BufferDecision); the heuristic path reads only cards/can_skip/
+    deck_size, same as before this was wired in. card_reward_dirichlet_noise is passed straight
+    through to _choose_card_reward_net and has no effect on the heuristic fallback."""
+    net = _load_choices_paradox_net()
+    if net is not None:
+        return _choose_card_reward_net(decision, net, card_reward_dirichlet_noise)
+
+    index = choices_paradox.choose_card_reward(cards, can_skip, deck_size)
+    if index is None:
+        return "skip_card_reward", {}
+    return "select_card_reward", {"card_index": index}
+
+
+def _choose_combat_action_claws(
+    decision: CombatPlay, net, combat_dirichlet_noise: bool = True
+) -> tuple[str, dict, dict]:
     """Samples (not argmax) from the network's own softmax over model.py's legal_options(),
-    mixed with root Dirichlet noise -- see this module's docstring for why."""
+    mixed with root Dirichlet noise unless combat_dirichlet_noise=False -- see this module's
+    docstring for why noise is on by default."""
     import torch
 
     options, logits, _value = net.forward(decision)
     probs = torch.softmax(logits, dim=-1)
-    alpha = _DIRICHLET_ALPHA_SCALE / len(options)
-    noise = torch.distributions.Dirichlet(torch.full((len(options),), alpha)).sample()
-    probs = (1 - _DIRICHLET_EPS) * probs + _DIRICHLET_EPS * noise
+    if combat_dirichlet_noise:
+        alpha = _DIRICHLET_ALPHA_SCALE / len(options)
+        noise = torch.distributions.Dirichlet(torch.full((len(options),), alpha)).sample()
+        probs = (1 - _DIRICHLET_EPS) * probs + _DIRICHLET_EPS * noise
     idx = int(torch.multinomial(probs, 1).item())
     policy = [
         {"action": a, "args": args, "prob": p} for (a, args), p in zip(options, probs.tolist())
@@ -121,11 +220,12 @@ def _choose_combat_action_claws(decision: CombatPlay, net) -> tuple[str, dict, d
 
 
 def _choose_combat_action(
-    decision: CombatPlay | BufferDecision, session: Sts2Session
+    decision: CombatPlay | BufferDecision, session: Sts2Session,
+    combat_dirichlet_noise: bool = True,
 ) -> tuple[str, dict, dict]:
     net = _load_claws_net()
     if net is not None:
-        return _choose_combat_action_claws(decision, net)
+        return _choose_combat_action_claws(decision, net, combat_dirichlet_noise)
 
     options = (
         _combat_options_from_buffer(decision.arr)
@@ -193,7 +293,8 @@ def _combat_options_from_buffer(arr) -> list[tuple[str, dict]]:
 
 
 def _choose_generic_action(
-    decision: Decision, session: Sts2Session, purpose: str | None
+    decision: Decision, session: Sts2Session, purpose: str | None,
+    card_reward_dirichlet_noise: bool = True,
 ) -> tuple[str, dict, str | None]:
     """Non-combat decisions: pick a uniformly random legal option, or the simplest safe
     default (leave/skip) where "random" isn't a meaningful choice yet. Good enough to
@@ -206,9 +307,11 @@ def _choose_generic_action(
 
     A BufferDecision reaching here is delegated to _choose_generic_action_from_buffer entirely --
     see that function's docstring for why every branch below except card_select assumes a
-    pydantic Decision's attribute tree (.player, .cards, .choices, ...) directly."""
+    pydantic Decision's attribute tree (.player, .cards, .choices, ...) directly.
+    card_reward_dirichlet_noise is only read by the card_reward branch (see choose_action's
+    docstring)."""
     if isinstance(decision, BufferDecision):
-        return _choose_generic_action_from_buffer(decision, purpose)
+        return _choose_generic_action_from_buffer(decision, purpose, card_reward_dirichlet_noise)
 
     dec = decision.decision
 
@@ -217,12 +320,11 @@ def _choose_generic_action(
         return name, kwargs, None
 
     if dec == "card_reward":
-        index = choices_paradox.choose_card_reward(
-            decision.cards, decision.can_skip, decision.player.deck_size or 0
+        name, kwargs = _choose_card_reward_decision(
+            decision, decision.cards, decision.can_skip, decision.player.deck_size or 0,
+            card_reward_dirichlet_noise,
         )
-        if index is None:
-            return "skip_card_reward", {}, None
-        return "select_card_reward", {"card_index": index}, None
+        return name, kwargs, None
 
     if dec == "bundle_select":
         return "select_bundle", {"bundle_index": random.choice(decision.bundles).index}, None
@@ -247,7 +349,7 @@ def _choose_generic_action(
 
 
 def _choose_generic_action_from_buffer(
-    decision: BufferDecision, purpose: str | None
+    decision: BufferDecision, purpose: str | None, card_reward_dirichlet_noise: bool = True
 ) -> tuple[str, dict, str | None]:
     """Buffer counterpart to _choose_generic_action. Reached only by a meta-branch's horizon walk
     (facility_choices_paradox._run_meta_option_job) -- a turn-branch worker's own job always
@@ -271,7 +373,7 @@ def _choose_generic_action_from_buffer(
         name, kwargs = _choose_map_action_from_buffer(arr)
         return name, kwargs, None
     if dec in ("card_reward", "event_card_reward"):
-        name, kwargs = _choose_card_reward_from_buffer(arr)
+        name, kwargs = _choose_card_reward_from_buffer(decision, card_reward_dirichlet_noise)
         return name, kwargs, None
     if dec == "bundle_select":
         return "select_bundle", {"bundle_index": random.choice([b for b, _ in bl.bundles(arr)])}, None
@@ -305,13 +407,19 @@ def _choose_map_action_from_buffer(arr) -> tuple[str, dict]:
     return "select_map_node", {"col": col, "row": row}
 
 
-def _choose_card_reward_from_buffer(arr) -> tuple[str, dict]:
+def _choose_card_reward_from_buffer(
+    decision: BufferDecision, card_reward_dirichlet_noise: bool = True
+) -> tuple[str, dict]:
     """Handles both buffer decision kinds a "card_reward" pydantic-side decision can actually be:
     the ordinary post-combat CARD_REWARD section, or the blessing-triggered EVENT_CARD_REWARD one
     -- STS2's JSON protocol unifies them under one "card_reward" literal (WriteEventCardReward),
     but the buffer protocol keeps them as separate sections with no shared can_skip flag (the
     event variant is unconditionally skippable -- see model.py's legal_options_from_buffer for the
-    same distinction)."""
+    same distinction). Takes the whole BufferDecision, not just its .arr, so the net path
+    (_choose_card_reward_decision -> _choose_card_reward_net -> net.forward) has `.decision`
+    available to tell the two kinds apart the same way model.py's own tokenize_from_buffer/
+    legal_options_from_buffer do; the heuristic path only ever reads cards/can_skip/deck_size."""
+    arr = decision.arr
     if bl.decision_name(arr) == "event_card_reward":
         cards = [
             _BufferCard(i, decode_token(bl.card_token(slot)))
@@ -321,10 +429,9 @@ def _choose_card_reward_from_buffer(arr) -> tuple[str, dict]:
     else:
         cards = [_BufferCard(i, decode_token(bl.card_token(slot))) for i, slot in bl.reward_cards(arr)]
         can_skip = bl.can_skip_reward(arr)
-    index = choices_paradox.choose_card_reward(cards, can_skip, bl.player_deck_size(arr))
-    if index is None:
-        return "skip_card_reward", {}
-    return "select_card_reward", {"card_index": index}
+    return _choose_card_reward_decision(
+        decision, cards, can_skip, bl.player_deck_size(arr), card_reward_dirichlet_noise
+    )
 
 
 def _choose_shop_action_from_buffer(arr) -> tuple[str, dict, str | None]:

@@ -9,7 +9,14 @@ while true; do
     echo "==========================================="
 
     export CLAWS_CHECKPOINT="$vakuu/agents/claws/model/claws.pt"
-    [ -f "$CLAWS_CHECKPOINT" ] || unset CLAWS_CHECKPOINT  
+    [ -f "$CLAWS_CHECKPOINT" ] || unset CLAWS_CHECKPOINT
+
+    # policy.py's card_reward decisions upgrade to this trained net (if one exists yet) instead
+    # of the static tier-list heuristic -- see agents/whispering_earring/policy.py's
+    # _choose_card_reward_decision.
+    CHOICES_CHECKPOINT="$vakuu/agents/choices_paradox/model/choices_paradox.pt"
+    [ -f "$CHOICES_CHECKPOINT" ] || CHOICES_CHECKPOINT=""
+    export CHOICES_PARADOX_CHECKPOINT="$CHOICES_CHECKPOINT"
 
     echo "[1/6] Cleaning up old raw data..."
     find "$vakuu/agents/whispering_earring/data/raw/" -maxdepth 1 -name '*.json' -delete

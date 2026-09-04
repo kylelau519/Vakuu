@@ -312,7 +312,14 @@ def _run_meta_option_job(cfg: FacilityConfig, job: MetaOptionJob, results_queue)
                     )
                     continue
 
-                name, kwargs, policy, pending_purpose = choose_action(decision, session, pending_purpose)
+                # card_reward_dirichlet_noise=False: any card_reward this chain hits past its own
+                # initial commit would otherwise pick up extra sampling variance on top of the
+                # option-chain comparison this whole job exists to measure -- see choose_action's
+                # docstring on why that's unwanted here even though combat's own noise (left on,
+                # via _play_turn_only above) is accepted variance for a chain's play.
+                name, kwargs, policy, pending_purpose = choose_action(
+                    decision, session, pending_purpose, card_reward_dirichlet_noise=False,
+                )
                 if policy is not None:
                     recorder.attach_policy(policy)
                 decision = session.step(name, **kwargs)
