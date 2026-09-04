@@ -79,7 +79,7 @@ def _meta_decision_rows(main_trials: list[dict]) -> list[dict]:
     for trial in main_trials:
         for entry in trial.get("actions", []):
             policy = entry.get("policy")
-            if not policy or "value" not in policy[0]:
+            if not isinstance(policy, list) or not policy or "value" not in policy[0]:
                 continue
             values = [p["value"] for p in policy if p.get("value") is not None]
             if len(values) < 2:

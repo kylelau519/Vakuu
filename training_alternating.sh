@@ -93,7 +93,7 @@ while true; do
 
     echo "[choices 2/6] Running facility_choices_paradox.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility_choices_paradox.py" \
-        --trials 6 --branch-workers 10 --main-workers 3 \
+        --trials 6 --branch-workers 5 --main-workers 5 \
         --branches-per-turn 4 --meta-branches-per-trial 6\
         --raw-dir "$raw_dir"
 

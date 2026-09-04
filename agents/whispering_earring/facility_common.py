@@ -345,7 +345,7 @@ META_ELIGIBLE_DECISIONS = frozenset({"card_reward"})
 # _drain_meta_results_blocking and main_worker_loop's finally block. Deliberately much shorter
 # than combat's own 120s _wait_for_turn_result timeout: this only delays this one worker starting
 # its NEXT trial (the mainline's own decisions were never blocked on it), not live play.
-_META_DRAIN_TIMEOUT = 60.0
+_META_DRAIN_TIMEOUT = 30.0
 
 
 def _apply_meta_result(
@@ -415,6 +415,163 @@ def _drain_meta_results_blocking(
         _apply_meta_result(meta_id, value, pending_meta_jobs, checkpoint_refcount, recorder)
 
 
+@dataclass
+class _TrialState:
+    """Mutable per-trial bookkeeping threaded through _play_trial (see main_worker_loop).
+    `session` lives here rather than as a plain local so a mid-combat exception still leaves the
+    caller's finally-block session.close() pointed at the live session -- combat_resolver rebinds
+    it in place whenever it enters a fresh Sts2Session."""
+    session: Sts2Session
+    checkpoint_dir: str
+    meta_budget: int | None
+    combat_checkpoint_path: str | None = None
+    # Native checkpoint (and its entry action's position in action_log) for whichever combat was
+    # entered most recently -- survives past that combat's own resolution so a meta_resolver call
+    # on the decision it just produced can reconstruct "right after that combat" via
+    # load_and_resume_combat instead of replaying from StartRun.
+    last_combat_checkpoint_path: str | None = None
+    last_combat_entry_index: int | None = None
+    pending_purpose: str | None = None  # threaded through choose_action -- see its docstring
+    divergence_index: int = 0
+    checkpoint_paths_this_trial: list = field(default_factory=list)
+    # select_map_node commit steps (recorder.mark_step()) and each one's chosen node type, index-
+    # aligned -- backfilled with this trial's own terminal outcome plus Elite/Boss shaping bonus
+    # by _apply_golden_compass_rewards once the trial ends. See agents/golden_compass/model/
+    # README.md's Design section for why a map choice needs no MetaOptionJob-style branching.
+    pending_map_steps: list = field(default_factory=list)
+    pending_map_step_types: list = field(default_factory=list)
+    local_map_rewards: dict = field(default_factory=dict)  # step -> undiscounted shaping bonus
+    # meta_id -> (checkpoint_path, is_adopted, commit_step) for MetaOptionJobs dispatched this
+    # trial that haven't reported back yet; checkpoint_path -> how many still need it. Drained via
+    # _drain_meta_results_nowait/_blocking. Stay empty whenever meta_resolver is None.
+    pending_meta_jobs: dict = field(default_factory=dict)
+    checkpoint_refcount: dict = field(default_factory=dict)
+
+
+def _play_trial(
+    cfg: FacilityConfig, job_queue_priority: mp.Queue, job_queue: mp.Queue, results_queue,
+    meta_results_queue, main_worker_index: int, recorder, character: str, seed: str, main_id: str,
+    this_trial_resume: dict | None, stop_event, queue_manager, combat_resolver: Callable,
+    meta_resolver: Callable | None, state: _TrialState,
+) -> tuple[str, object]:
+    """Plays one trial's decisions from the first through game_over, or through an ending combat
+    outcome ("lost"/"error"). Returns (outcome, final decision); any exception propagates to the
+    caller, which records it as an "error" outcome."""
+    if this_trial_resume is not None:
+        decision = state.session.open_from_checkpoint(
+            character, seed, cfg.ascension, this_trial_resume["actions"]
+        )
+        combat_index = this_trial_resume["combat_index"]
+    else:
+        decision = state.session.start(character, seed, cfg.ascension)
+        combat_index = 0
+
+    while decision.decision != "game_over":
+        if decision.decision == "combat_play":
+            combat_index += 1
+            state.last_combat_checkpoint_path = state.combat_checkpoint_path
+            state.last_combat_entry_index = len(state.session.action_log) - 1
+            state.session, decision, combat_outcome = combat_resolver(
+                job_queue_priority, results_queue, main_worker_index, cfg, recorder,
+                state.session, decision, character, seed, main_id, combat_index, stop_event,
+                state.combat_checkpoint_path,
+            )
+            state.combat_checkpoint_path = None  # consumed -- not valid for the next combat
+            # combat_outcome is None exactly on a win (see facility_claws._resolve_combat) --
+            # attribute an Elite/Boss shaping bonus to the select_map_node choice that led into
+            # it (always 1:1 with the combat it starts).
+            if (combat_outcome is None and state.pending_map_step_types
+                    and state.pending_map_step_types[-1] in ("Elite", "Boss")):
+                bonus = (_GOLDEN_COMPASS_ELITE_BONUS
+                         if state.pending_map_step_types[-1] == "Elite"
+                         else _GOLDEN_COMPASS_BOSS_BONUS)
+                step = state.pending_map_steps[-1]
+                state.local_map_rewards[step] = state.local_map_rewards.get(step, 0.0) + bonus
+            if combat_outcome is not None:
+                return combat_outcome, decision
+            continue
+
+        if (meta_resolver is not None and state.meta_budget != 0
+                and decision.decision in META_ELIGIBLE_DECISIONS):
+            state.divergence_index += 1
+            if state.meta_budget is not None:
+                state.meta_budget -= 1
+            decision, new_pending = meta_resolver(
+                job_queue, results_queue, meta_results_queue, main_worker_index, cfg,
+                recorder, state.session, decision, character, seed, main_id,
+                decision.decision, state.divergence_index, stop_event, queue_manager,
+                state.last_combat_checkpoint_path, state.last_combat_entry_index,
+            )
+            for meta_id, ckpt_path, is_adopted, commit_step in new_pending:
+                state.pending_meta_jobs[meta_id] = (ckpt_path, is_adopted, commit_step)
+                if ckpt_path is not None:
+                    state.checkpoint_refcount[ckpt_path] = (
+                        state.checkpoint_refcount.get(ckpt_path, 0) + 1
+                    )
+            # Cheap -- returns immediately once meta_results_queue is empty. Catches most
+            # completions naturally as the trial keeps playing; _drain_meta_results_blocking is
+            # the bounded catch-all once the trial ends (see main_worker_loop).
+            _drain_meta_results_nowait(
+                meta_results_queue, state.pending_meta_jobs, state.checkpoint_refcount, recorder
+            )
+            continue
+
+        name, kwargs, policy, state.pending_purpose = choose_action(
+            decision, state.session, state.pending_purpose
+        )
+        if policy is not None:
+            recorder.attach_policy(policy)
+        if name == "select_map_node":
+            # Step index captured here, before session.step() below advances the recorder's step
+            # counter, and the chosen node's type read off decision.choices before step() moves
+            # past this decision -- both needed later by _apply_golden_compass_rewards.
+            state.pending_map_steps.append(recorder.mark_step())
+            chosen = next(
+                (c for c in decision.choices
+                 if (c.col, c.row) == (kwargs["col"], kwargs["row"])),
+                None,
+            )
+            state.pending_map_step_types.append(chosen.type if chosen is not None else None)
+            # select_map_node is the only action that consumes RNG for encounter selection, at
+            # room-entry time -- the checkpoint MUST be taken before it, not after, or a branch
+            # reloading it would draw a different encounter (see checkpoint.py's docstring and
+            # the whispering_earring_combat_checkpoint_branching memory). Filename is unique per
+            # (trial, prospective combat index), not reused -- a straggler branch worker can still
+            # be reading an earlier file after the main line has moved on, and a reused name would
+            # let it silently load the wrong state.
+            checkpoint_path = os.path.join(
+                state.checkpoint_dir, f"{main_id}_c{combat_index + 1:03d}.json"
+            )
+            os.makedirs(state.checkpoint_dir, exist_ok=True)
+            state.session.save(checkpoint_path)
+            state.checkpoint_paths_this_trial.append(checkpoint_path)
+        decision = state.session.step(name, **kwargs)
+        if name == "select_map_node" and decision.decision == "combat_play":
+            state.combat_checkpoint_path = checkpoint_path
+
+    return ("won" if decision.victory else "lost"), decision
+
+
+def _apply_golden_compass_rewards(recorder, outcome: str, state: _TrialState) -> None:
+    """Backfills each select_map_node step's training value: this trial's terminal +1/-1 plus a
+    backward-discounted Elite/Boss-win shaping bonus (state.local_map_rewards), decayed by
+    _GOLDEN_COMPASS_GAMMA per step of distance -- see that constant's comment for why the flat
+    terminal term is kept rather than replaced. No-op for an "error" trial (see
+    agents/golden_compass/model/materialize.py's docstring for why an absent value is skipped
+    rather than treated as a real 0 training target)."""
+    if outcome not in ("won", "lost") or not state.pending_map_steps:
+        return
+    map_reward = 1.0 if outcome == "won" else -1.0
+    shaping = 0.0
+    discounted_shaping = [0.0] * len(state.pending_map_steps)
+    for i in range(len(state.pending_map_steps) - 1, -1, -1):
+        shaping = (state.local_map_rewards.get(state.pending_map_steps[i], 0.0)
+                   + _GOLDEN_COMPASS_GAMMA * shaping)
+        discounted_shaping[i] = shaping
+    for step, bonus in zip(state.pending_map_steps, discounted_shaping):
+        recorder.set_value(step, map_reward + bonus)
+
+
 def main_worker_loop(
     cfg: FacilityConfig, job_queue: mp.Queue, job_queue_priority: mp.Queue, log_queue: mp.Queue,
     results_queue, main_worker_index: int, stop_event, trial_counter=None,
@@ -422,81 +579,51 @@ def main_worker_loop(
     meta_results_queue=None, *,
     combat_resolver: Callable, meta_resolver: Callable | None = None,
 ) -> None:
-    """job_queue/job_queue_priority/log_queue are shared with every other main worker;
-    results_queue and meta_results_queue are this worker's own private queues, created and owned
-    by Facility, and must not be shared.
+    """Runs main-line trials (via _play_trial) until stop_event fires or cfg.n_main_trials is
+    reached.
 
-    job_queue_priority exists so this worker's OWN combat turn-branches are never stuck behind
-    facility_choices_paradox.py's meta-chain jobs (which land on the plain job_queue and can vastly
-    outnumber the main line's own); branch_worker_loop always drains job_queue_priority first.
-    Called below with job_queue_priority whenever it's the main line driving its own combat
-    directly; job_queue is what gets threaded into meta_resolver.
+    job_queue/job_queue_priority/log_queue are shared with every other main worker; results_queue
+    and meta_results_queue are this worker's own private queues (Facility-owned) and must not be
+    shared -- meta_results_queue is kept separate from results_queue so an asynchronously-
+    dispatched MetaOptionJob result can never be mistaken for a stale turn-branch result by
+    combat's own _wait_for_turn_result. job_queue_priority carries this worker's own combat turn-
+    branches so they're never stuck behind another main line's meta-chain jobs on the plain
+    job_queue; branch_worker_loop always drains it first.
 
-    meta_results_queue is SEPARATE from results_queue (not reused) so that a MetaOptionJob's result
-    can never be silently dropped by combat's own _wait_for_turn_result, which discards anything
-    whose id isn't in ITS current pending set ("stale result from an earlier turn") -- safe for
-    combat alone, but a meta result arriving on a shared queue while a LATER, unrelated combat's
-    wait-loop is running would be lost the same way. meta_resolver dispatches its jobs
-    asynchronously (doesn't wait on them itself, see its own docstring), so this worker tracks
-    completions itself afterward via pending_meta_jobs/checkpoint_refcount below, applied through
-    _drain_meta_results_nowait/_drain_meta_results_blocking.
-
-    combat_resolver(job_queue, results_queue, main_worker_index, cfg, recorder, session, decision,
-    character, seed, main_id, combat_index, stop_event, checkpoint_path) -> (session, decision,
-    outcome) drives one combat to resolution -- both concrete facilities pass
-    facility_claws._resolve_combat.
+    combat_resolver(job_queue_priority, results_queue, main_worker_index, cfg, recorder, session,
+    decision, character, seed, main_id, combat_index, stop_event, checkpoint_path) ->
+    (session, decision, outcome): drives one combat to resolution. outcome is None on a win, else
+    "lost"/"error" ends the trial.
 
     meta_resolver(job_queue, results_queue, meta_results_queue, main_worker_index, cfg, recorder,
     session, decision, character, seed, main_id, decision_kind, divergence_index, stop_event,
     queue_manager, last_combat_checkpoint_path, last_combat_entry_index) -> (decision,
-    pending_meta_jobs), called whenever decision.decision is in META_ELIGIBLE_DECISIONS and this
-    trial's meta-branch budget (cfg.meta_branches_per_trial, decremented below) allows it.
-    pending_meta_jobs is a list of (meta_id, checkpoint_path, is_adopted, commit_step) tuples for
-    whatever jobs meta_resolver just dispatched onto job_queue -- merged into this worker's own
-    pending_meta_jobs/checkpoint_refcount dicts below. None (facility_claws.py's case) means
-    meta-eligible decisions just fall through to the ordinary choose_action() path below.
+    pending_meta_jobs): called whenever decision.decision is META_ELIGIBLE and this trial's
+    meta-branch budget (cfg.meta_branches_per_trial) allows it. pending_meta_jobs is a list of
+    (meta_id, checkpoint_path, is_adopted, commit_step) tuples for jobs just dispatched onto
+    job_queue. None (facility_claws.py's case) means meta-eligible decisions just fall through to
+    choose_action(). last_combat_checkpoint_path/entry_index (may be None pre-first-combat) locate
+    the most recently entered combat's checkpoint and its entry point in action_log -- a
+    checkpoint taken directly at the pending decision does NOT work for reconstructing "right
+    after that combat" (confirmed by hand: save/load_save doesn't preserve a pending decision
+    screen).
 
-    last_combat_checkpoint_path/last_combat_entry_index: the native checkpoint (and that combat's
-    entry action's position in action_log) for whichever combat was entered most recently -- e.g.
-    the one that just produced the card_reward decision meta_resolver is about to be called with.
-    A meta_resolver needing to reconstruct "the state right after that combat" can replay just
-    that combat's own tail of actions via load_and_resume_combat(last_combat_checkpoint_path,
-    action_log[last_combat_entry_index], action_log[last_combat_entry_index + 1:]) instead of
-    replaying from StartRun -- a checkpoint taken directly AT the pending card_reward does NOT
-    work for this (confirmed by hand: RunSimulator's save/load_save doesn't preserve a pending
-    decision screen -- reloading lands on the FOLLOWING decision, past the reward). May be None if
-    no checkpoint was available yet (this run's very first combat).
+    manager_address/manager_authkey: (address, authkey) to reconnect to the Facility's own
+    multiprocessing.Manager() via SyncManager(...).connect() -- this worker is daemonic and can't
+    own a Manager itself, and a live SyncManager isn't picklable through Process(args=...) at all
+    (confirmed by hand). Unused by the one shipped meta_resolver; kept for a future one that needs
+    manager-backed queues at runtime. Skipped when meta_resolver is None.
 
-    manager_address/manager_authkey: how to reach the Facility's own multiprocessing.Manager()
-    (built and owned by the Facility process, which is not itself daemonic). Not the SyncManager
-    object itself -- a live SyncManager holds its own server Process handle, which isn't picklable
-    through Process(args=...) at all (confirmed by hand: "cannot pickle 'weakref.ReferenceType'
-    object") -- so only its plain (address, authkey) values are handed to this worker at spawn,
-    and reconnected here via SyncManager(...).connect() into `queue_manager`, threaded into every
-    meta_resolver call. Currently unused by the one shipped meta_resolver; kept as plumbing in
-    case a future one needs to mint manager-backed queues at runtime (a meta_resolver can't build
-    its own mp.Manager() locally, since this worker process is itself daemonic and "daemonic
-    processes are not allowed to have children" -- .connect() doesn't spawn anything, so it's fine
-    here). Skipped entirely when meta_resolver is None.
-
-    resume: if given, this worker's FIRST trial (only) reconstructs an in-progress run instead of
+    resume: if given, this worker's FIRST trial only reconstructs an in-progress run instead of
     starting fresh -- for recovering a trial that was progressing normally when the facility was
     killed before it reached game_over. Keys: character, seed, main_id, combat_index (combats
     already resolved), actions (full action log up to the resume point, same shape a branch/trial
     JSON's own "actions" field has)."""
     _tag_worker_stderr("main", main_worker_index, log_queue, cfg.verbose)
-    # New process group, with this worker as its leader -- Facility.stop()'s force-kill path uses
-    # os.killpg on this group instead of killing just this one PID. Needed because combat_resolver
-    # shells out to a real `dotnet run` OS subprocess (Sts2Session) and re-spawns a fresh one every
-    # combat turn -- confirmed by hand that one of these can sit around for DAYS, fully orphaned,
-    # once its owning Python process dies without running Sts2Session.close(). Must happen before
-    # anything below can spawn a child: a process can only change its OWN group before it has any
-    # children of its own to leave behind in the old one.
+    # New process group -- Facility.stop()'s force-kill uses os.killpg on it (see there for why:
+    # combat_resolver's dotnet-run subprocesses need to die with it, not be orphaned).
     os.setpgid(0, 0)
-    # Each main worker is its own process; reseed explicitly so concurrent workers started via
-    # fork (which would otherwise inherit identical RNG state) don't all draw the same
-    # character/seed. spawn (macOS default) doesn't need this, but it's cheap insurance.
-    random.seed(os.urandom(16))
+    random.seed(os.urandom(16))  # avoid fork-inherited identical RNG across concurrent workers
 
     queue_manager = None
     if meta_resolver is not None and manager_address is not None:
@@ -526,204 +653,47 @@ def main_worker_loop(
             "character": character, "seed": seed, "ascension": cfg.ascension,
             "main_id": main_id, "role": "main",
         })
-        session = Sts2Session(logger=recorder)
+        state = _TrialState(
+            session=Sts2Session(logger=recorder),
+            checkpoint_dir=os.path.join(cfg.raw_dir, "checkpoints"),
+            meta_budget=cfg.meta_branches_per_trial,
+        )
         outcome = None
-        combat_checkpoint_path = None
-        # The checkpoint (and its entry action's position in action_log) for whichever combat was
-        # MOST RECENTLY entered -- unlike combat_checkpoint_path (cleared once handed to
-        # combat_resolver), these survive past that combat's resolution so a meta_resolver call on
-        # the card_reward decision it just produced can reconstruct "right after that win" via
-        # load_and_resume_combat instead of replaying the whole run. last_combat_entry_index stays
-        # valid after the combat resolves since actions are only ever appended, never reordered.
-        last_combat_checkpoint_path = None
-        last_combat_entry_index = None
-        pending_purpose = None  # threaded through choose_action -- see its docstring
-        meta_budget = cfg.meta_branches_per_trial
-        divergence_index = 0
-        # One file per combat (not reused/overwritten across the trial) -- see the checkpoint-
-        # taking comment below for why reuse is unsafe. Deleted once this trial concludes.
-        checkpoint_dir = os.path.join(cfg.raw_dir, "checkpoints")
-        checkpoint_paths_this_trial: list[str] = []
-        # Step indices of every select_map_node commit this trial, via recorder.mark_step() --
-        # backfilled with this trial's own +1 (won) / -1 (lost) terminal outcome, plus a local
-        # Elite/Boss-win shaping bonus (see local_map_rewards below), once it's known, right
-        # before recorder.save() below. See agents/golden_compass/model/README.md's Design
-        # section for why a map choice needs no MetaOptionJob-style branching to get a real
-        # training value: unlike a card_reward pick, its value IS just this trial's own outcome.
-        pending_map_steps: list[int] = []
-        # Node type (MapChoice.type, e.g. "Elite"/"Boss"/"Monster") chosen at each of
-        # pending_map_steps' own steps, index-aligned -- lets the combat-resolution code below
-        # attribute a won Elite/Boss fight back to the specific select_map_node decision that led
-        # into it, without re-deriving it from the trial's floor numbering.
-        pending_map_step_types: list[str | None] = []
-        # step -> undiscounted local shaping bonus earned AT that step (a won Elite/Boss fight) --
-        # backward-discounted across pending_map_steps at trial end (_GOLDEN_COMPASS_GAMMA), so a
-        # choice a few floors before a win gets more credit than one from 30 floors earlier.
-        local_map_rewards: dict[int, float] = {}
-        # meta_id -> (checkpoint_path, is_adopted, commit_step) for every MetaOptionJob dispatched
-        # this trial that hasn't reported back yet; checkpoint_path -> how many still-outstanding
-        # jobs need it. Both populated by meta_resolver's returned pending_meta_jobs, drained by
-        # _drain_meta_results_nowait/_blocking (see main_worker_loop's docstring). Unused (stay
-        # empty) whenever meta_resolver is None.
-        pending_meta_jobs: dict[str, tuple[str | None, bool, int]] = {}
-        checkpoint_refcount: dict[str, int] = {}
         try:
             try:
-                if this_trial_resume is not None:
-                    decision = session.open_from_checkpoint(
-                        character, seed, cfg.ascension, this_trial_resume["actions"]
-                    )
-                    combat_index = this_trial_resume["combat_index"]
-                else:
-                    decision = session.start(character, seed, cfg.ascension)
-                    combat_index = 0
-
-                while decision.decision != "game_over":
-                    if decision.decision == "combat_play":
-                        combat_index += 1
-                        last_combat_checkpoint_path = combat_checkpoint_path
-                        # Fixed for the rest of this combat's life, including after it resolves --
-                        # see the comment above on why this stays a valid index into action_log.
-                        last_combat_entry_index = len(session.action_log) - 1
-                        session, decision, combat_outcome = combat_resolver(
-                            job_queue_priority, results_queue, main_worker_index, cfg, recorder,
-                            session, decision, character, seed, main_id, combat_index, stop_event,
-                            combat_checkpoint_path,
-                        )
-                        combat_checkpoint_path = None  # consumed -- not valid for the next combat
-                        # combat_resolver returns None as combat_outcome exactly when this combat
-                        # was WON (see facility_claws._resolve_combat's own contract: "lost"/
-                        # "error" strings end the trial; a win returns None and play continues) --
-                        # attribute the Elite/Boss shaping bonus to the select_map_node choice that
-                        # led into it. One-to-one: a combat is always immediately preceded by
-                        # exactly one select_map_node, so pending_map_step_types[-1] is that choice.
-                        if (combat_outcome is None and pending_map_step_types
-                                and pending_map_step_types[-1] in ("Elite", "Boss")):
-                            bonus = (_GOLDEN_COMPASS_ELITE_BONUS
-                                     if pending_map_step_types[-1] == "Elite"
-                                     else _GOLDEN_COMPASS_BOSS_BONUS)
-                            step = pending_map_steps[-1]
-                            local_map_rewards[step] = local_map_rewards.get(step, 0.0) + bonus
-                        if combat_outcome is not None:
-                            outcome = combat_outcome
-                            break
-                        continue
-
-                    if (meta_resolver is not None and meta_budget != 0
-                            and decision.decision in META_ELIGIBLE_DECISIONS):
-                        divergence_index += 1
-                        if meta_budget is not None:
-                            meta_budget -= 1
-                        decision, new_pending = meta_resolver(
-                            job_queue, results_queue, meta_results_queue, main_worker_index, cfg,
-                            recorder, session, decision, character, seed, main_id,
-                            decision.decision, divergence_index, stop_event, queue_manager,
-                            last_combat_checkpoint_path, last_combat_entry_index,
-                        )
-                        for meta_id, ckpt_path, is_adopted, commit_step in new_pending:
-                            pending_meta_jobs[meta_id] = (ckpt_path, is_adopted, commit_step)
-                            if ckpt_path is not None:
-                                checkpoint_refcount[ckpt_path] = checkpoint_refcount.get(ckpt_path, 0) + 1
-                        # Cheap -- returns immediately once meta_results_queue is empty. Catches
-                        # most completions naturally as the trial keeps playing; see
-                        # main_worker_loop's docstring and the finally block's bounded counterpart.
-                        _drain_meta_results_nowait(
-                            meta_results_queue, pending_meta_jobs, checkpoint_refcount, recorder
-                        )
-                        continue
-
-                    name, kwargs, policy, pending_purpose = choose_action(
-                        decision, session, pending_purpose
-                    )
-                    if policy is not None:
-                        recorder.attach_policy(policy)
-                    if name == "select_map_node":
-                        # Step index for this commit's eventual value -- see pending_map_steps'
-                        # own comment above. Must be captured here, before session.step() below
-                        # advances the recorder's step counter via log_action().
-                        pending_map_steps.append(recorder.mark_step())
-                        # The chosen node's own type (Elite/Boss/Monster/...), for the Elite/Boss
-                        # shaping bonus above -- read off decision.choices here (before session
-                        # .step() below moves past this decision) rather than re-derived later.
-                        chosen = next(
-                            (c for c in decision.choices
-                             if (c.col, c.row) == (kwargs["col"], kwargs["row"])),
-                            None,
-                        )
-                        pending_map_step_types.append(chosen.type if chosen is not None else None)
-                        # select_map_node is the only action that consumes RNG for encounter
-                        # selection, at room-entry time -- the checkpoint MUST be taken before
-                        # it, not after, or a branch reloading it and replaying this same action
-                        # would draw a different encounter (see checkpoint.py's docstring and
-                        # the whispering_earring_combat_checkpoint_branching memory). Whether
-                        # this node turns out to be a combat is only known after stepping into
-                        # it below; if it isn't, this save is simply never consumed (harmless --
-                        # cleaned up with the rest of this trial's checkpoints below).
-                        #
-                        # Filename is unique per (trial, prospective combat index), NOT reused
-                        # across the trial: a straggler branch worker (the shared pool can be
-                        # oversubscribed) can still be reading this file long after the main
-                        # line has moved on to a LATER select_map_node, and a reused filename
-                        # would let it silently load the wrong state.
-                        checkpoint_path = os.path.join(
-                            checkpoint_dir, f"{main_id}_c{combat_index + 1:03d}.json"
-                        )
-                        os.makedirs(checkpoint_dir, exist_ok=True)
-                        session.save(checkpoint_path)
-                        checkpoint_paths_this_trial.append(checkpoint_path)
-                    decision = session.step(name, **kwargs)
-                    if name == "select_map_node" and decision.decision == "combat_play":
-                        combat_checkpoint_path = checkpoint_path
-
-                if outcome is None:  # loop ended via game_over, not a combat lineage-ending loss
-                    outcome = "won" if decision.victory else "lost"
+                outcome, _ = _play_trial(
+                    cfg, job_queue_priority, job_queue, results_queue, meta_results_queue,
+                    main_worker_index, recorder, character, seed, main_id, this_trial_resume,
+                    stop_event, queue_manager, combat_resolver, meta_resolver, state,
+                )
             except Exception as e:
                 recorder.log_error(f"{type(e).__name__}: {e}")
                 outcome = "error"
-            # Golden Compass's training value: this trial's own terminal +1 (won) / -1 (lost)
-            # outcome, PLUS a backward-discounted Elite/Boss-win shaping bonus (local_map_rewards,
-            # decayed by _GOLDEN_COMPASS_GAMMA per select_map_node step of distance) -- and no
-            # value at all (not 0) for an "error" trial -- see agents/golden_compass/model/
-            # materialize.py's docstring for why an absent value is skipped rather than treated as
-            # a real 0 training target. The flat terminal term is kept, not replaced -- see
-            # _GOLDEN_COMPASS_GAMMA's own comment for why (a trial that beats Elites and still
-            # dies must still net negative).
-            if outcome in ("won", "lost") and pending_map_steps:
-                map_reward = 1.0 if outcome == "won" else -1.0
-                shaping = 0.0
-                discounted_shaping = [0.0] * len(pending_map_steps)
-                for i in range(len(pending_map_steps) - 1, -1, -1):
-                    shaping = (local_map_rewards.get(pending_map_steps[i], 0.0)
-                               + _GOLDEN_COMPASS_GAMMA * shaping)
-                    discounted_shaping[i] = shaping
-                for step, bonus in zip(pending_map_steps, discounted_shaping):
-                    recorder.set_value(step, map_reward + bonus)
-            # Bounded wait for this trial's still-outstanding MetaOptionJobs (empty/no-op whenever
-            # meta_resolver is None) -- must run BEFORE recorder.save() below, since that's the
-            # only chance for a late-arriving adopted-option value to land via recorder.set_value.
-            # Whatever doesn't resolve within _META_DRAIN_TIMEOUT is abandoned here; its checkpoint
-            # still gets deleted below regardless (see that comment).
+            _apply_golden_compass_rewards(recorder, outcome, state)
+            # Bounded wait for this trial's still-outstanding MetaOptionJobs (no-op whenever
+            # meta_resolver is None) -- must run BEFORE recorder.save() below, the only chance for
+            # a late-arriving adopted-option value to land via recorder.set_value. Whatever
+            # doesn't resolve within _META_DRAIN_TIMEOUT is abandoned; its checkpoint still gets
+            # deleted below regardless.
             _drain_meta_results_blocking(
-                meta_results_queue, pending_meta_jobs, checkpoint_refcount, recorder,
+                meta_results_queue, state.pending_meta_jobs, state.checkpoint_refcount, recorder,
                 timeout=_META_DRAIN_TIMEOUT,
             )
             try:
-                recorder.save(f"{cfg.raw_dir}/{main_id}.json", session.action_log, outcome=outcome)
+                recorder.save(
+                    f"{cfg.raw_dir}/{main_id}.json", state.session.action_log, outcome=outcome
+                )
             except Exception as e:
                 recorder.log_error(f"save failed: {type(e).__name__}: {e}")
         finally:
-            session.close()
-            # By the time a trial concludes, every combat branch it contained has already resolved
-            # (or given up on) -- combat's own _wait_for_turn_result blocks the main line
-            # synchronously, so nothing there can straggle past this point. Meta-decision branches
-            # are different: MetaOptionJobs are dispatched asynchronously and NOT waited on inline
-            # (see facility_choices_paradox.py's docstring), so the bounded drain above is what
-            # gives them a fair chance first -- anything still outstanding after that timeout is
-            # accepted as a straggler: its checkpoint is deleted here same as everything else, and
-            # a job that reads it late gets a clean, already-handled error rather than corrupting
-            # anything (see _run_meta_option_job's try/except). Safe to reclaim the disk
-            # unconditionally here rather than let these accumulate for the life of the facility.
-            for path in checkpoint_paths_this_trial:
+            state.session.close()
+            # Every combat branch has resolved by now (combat's own _wait_for_turn_result blocks
+            # the main line synchronously); meta-decision branches got a fair chance via the
+            # bounded drain above. Anything still outstanding is a straggler: safe to reclaim its
+            # checkpoint unconditionally here rather than let these accumulate for the facility's
+            # life (a job reading one late just gets a clean, already-handled error -- see
+            # _run_meta_option_job's try/except).
+            for path in state.checkpoint_paths_this_trial:
                 try:
                     os.remove(path)
                 except OSError:
@@ -877,13 +847,21 @@ class Facility:
         self.stop_event.set()
         for _ in self.branch_procs:
             self.job_queue.put(None)
-        for p in self.main_procs:
-            p.join(timeout)
-        for p in self.branch_procs:
-            p.join(timeout)
-        # A process still alive here didn't respond to stop_event within `timeout` -- most likely
-        # wedged inside a native CLR call that never returns. SIGKILL can't be deferred, so the
-        # join() right after is bounded even without its own timeout.
+        # One shared deadline across every worker, not `timeout` re-granted per process -- joining
+        # main_procs then branch_procs in separate per-process `p.join(timeout)` loops costs up to
+        # `timeout * n_workers` in the worst case (every worker still mid-job when stop_event
+        # fires), which at high worker counts is indistinguishable from a hang: confirmed by hand
+        # via a concurrency stress test where 40 branch workers stuck on in-flight jobs held this
+        # teardown motionless for minutes. A single deadline bounds total shutdown wait by
+        # `timeout` regardless of worker count -- stragglers just get less of it each.
+        deadline = time.monotonic() + timeout
+        for p in self.main_procs + self.branch_procs:
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                p.join(remaining)
+        # A process still alive here didn't respond to stop_event within the shared deadline --
+        # most likely wedged inside a native CLR call that never returns. SIGKILL can't be
+        # deferred, so the join() right after is bounded even without its own timeout.
         #
         # os.killpg, not p.kill() -- a plain p.kill() only signals this ONE pid, orphaning any
         # live `dotnet run` Sts2Session subprocess a wedged main worker holds (SIGKILL gives it no
@@ -900,7 +878,8 @@ class Facility:
                 # here (joined below), and a bare print() to stdout could still visually land
                 # inside the live board's rows on the same terminal even though it's a separate fd.
                 self.live.scroll(
-                    f"{p.name} didn't stop within {timeout}s -- killing its process group (SIGKILL)"
+                    f"{p.name} didn't stop within the {timeout}s shutdown window -- killing its "
+                    f"process group (SIGKILL)"
                 )
                 try:
                     os.killpg(p.pid, signal.SIGKILL)
