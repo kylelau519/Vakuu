@@ -18,6 +18,14 @@ while true; do
     [ -f "$CHOICES_CHECKPOINT" ] || CHOICES_CHECKPOINT=""
     export CHOICES_PARADOX_CHECKPOINT="$CHOICES_CHECKPOINT"
 
+    # map_select decisions upgrade to this trained net (if one exists yet) instead of
+    # golden_compass/policy.py's DP heuristic -- see agents/whispering_earring/policy.py's
+    # _choose_map_action. Trained by the separate training_golden_compass.sh loop, off this
+    # script's own data/raw output -- not produced here.
+    GOLDEN_COMPASS_CHECKPOINT_PATH="$vakuu/agents/golden_compass/model/golden_compass.pt"
+    [ -f "$GOLDEN_COMPASS_CHECKPOINT_PATH" ] || GOLDEN_COMPASS_CHECKPOINT_PATH=""
+    export GOLDEN_COMPASS_CHECKPOINT="$GOLDEN_COMPASS_CHECKPOINT_PATH"
+
     echo "[1/6] Cleaning up old raw data..."
     find "$vakuu/agents/whispering_earring/data/raw/" -maxdepth 1 -name '*.json' -delete
     find "$vakuu/agents/whispering_earring/data/raw/checkpoints/" -maxdepth 1 -name '*.json' -delete

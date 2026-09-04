@@ -39,6 +39,7 @@ _CLAWS_CHECKPOINT = os.environ.get("CLAWS_CHECKPOINT")
 _claws_net = None  # lazy-loaded once per worker process, on first combat decision -- see below
 
 _DIRICHLET_EPS = 0.15  # fraction of root probability mass replaced by noise -- AlphaZero's own
+_COMBAT_DIRICHLET_EPS = 0.30
 # self-play default
 _DIRICHLET_ALPHA_SCALE = 10.0  # concentration = this / n_legal_options, the same "~10 / average
 # legal move count" convention AlphaZero-style implementations use so alpha adapts to how many
@@ -57,6 +58,19 @@ assert _spec is not None and _spec.loader is not None
 golden_compass = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(golden_compass)
 
+# Loaded by file path rather than a package import -- same reasoning as the choices_paradox
+# model import below (no __init__.py-based package structure, avoids colliding with
+# claws/model/model.py and choices_paradox/model/model.py, also both just named `model`).
+_golden_compass_model_path = (
+    Path(__file__).resolve().parents[1] / "golden_compass" / "model" / "model.py"
+)
+_spec = importlib.util.spec_from_file_location("golden_compass_model", _golden_compass_model_path)
+assert _spec is not None and _spec.loader is not None
+_gc_model = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = _gc_model  # dataclasses' class-processing looks itself up via
+# sys.modules[cls.__module__] during exec_module -- module_from_spec alone doesn't register it
+_spec.loader.exec_module(_gc_model)
+
 # Loaded by file path rather than a package import -- same reasoning as choices_paradox/
 # golden_compass above (no __init__.py-based package structure to import through, and this
 # avoids colliding with claws/model/model.py, also just named `model`).
@@ -72,6 +86,9 @@ _spec.loader.exec_module(_cp_model)
 
 _CHOICES_PARADOX_CHECKPOINT = os.environ.get("CHOICES_PARADOX_CHECKPOINT")
 _choices_paradox_net = None  # lazy-loaded once per worker process, on first card_reward decision
+
+_GOLDEN_COMPASS_CHECKPOINT = os.environ.get("GOLDEN_COMPASS_CHECKPOINT")
+_golden_compass_net = None  # lazy-loaded once per worker process, on first map_select decision
 
 _REST_HEAL_HP_THRESHOLD = 35
 
@@ -112,10 +129,10 @@ def choose_action(
     if decision.decision == "combat_play":
         name, args, policy = _choose_combat_action(decision, session, combat_dirichlet_noise)
         return name, args, policy, None
-    name, kwargs, next_purpose = _choose_generic_action(
+    name, kwargs, next_purpose, policy = _choose_generic_action(
         decision, session, purpose, card_reward_dirichlet_noise
     )
-    return name, kwargs, None, next_purpose
+    return name, kwargs, policy, next_purpose
 
 
 def _load_claws_net():
@@ -152,6 +169,56 @@ def _load_choices_paradox_net():
         return None  # round 1, or CHOICES_PARADOX_CHECKPOINT unset by the training script yet
     _choices_paradox_net = _cp_model.ChoicesParadoxNet.from_checkpoint(_CHOICES_PARADOX_CHECKPOINT)
     return _choices_paradox_net
+
+
+def _load_golden_compass_net():
+    """Same lazy-load-once-per-process convention as _load_claws_net/_load_choices_paradox_net,
+    keyed off GOLDEN_COMPASS_CHECKPOINT."""
+    global _golden_compass_net
+    if _golden_compass_net is not None or not _GOLDEN_COMPASS_CHECKPOINT:
+        return _golden_compass_net
+    if not os.path.exists(_GOLDEN_COMPASS_CHECKPOINT):
+        return None  # round 1, or GOLDEN_COMPASS_CHECKPOINT unset by the training script yet
+    _golden_compass_net = _gc_model.GoldenCompassNet.from_checkpoint(_GOLDEN_COMPASS_CHECKPOINT)
+    return _golden_compass_net
+
+
+def _choose_map_action_net(
+    decision, session: Sts2Session, net, dirichlet_noise: bool = True,
+) -> tuple[str, dict, dict]:
+    """Samples (not argmax) from GoldenCompassNet's own softmax over model.py's
+    combination_options() -- one score per DISTINCT reachable-room-type combination, pooled
+    across every one-hop `choices` branch, not one score per physical node (see that module's
+    docstring for why). Dirichlet noise mixed in unless dirichlet_noise=False -- same convention
+    as _choose_card_reward_net/_choose_combat_action_claws above. `decision` is the pydantic
+    MapSelect -- net.forward has no buffer-side counterpart yet (see that module's docstring).
+    `session` is passed straight to net.forward() for its map-lookahead features (one
+    session.get_map() call, cheap -- see model.py's tokenize() docstring).
+
+    Once a combination is sampled, resolve_combination_action() picks any one of the (possibly
+    several) physical paths that produced it and walks only its first hop -- see that function's
+    own docstring for why the rest of the path is thrown away. The chosen index is stashed as
+    policy["chosen"] (alongside the full distribution, for inspection) since materialize.py needs
+    it to know which combination was actually picked when replaying this trial later -- the
+    resolved (col, row) alone can be ambiguous (more than one combination can share a first hop),
+    see model.py's docstring and materialize.py's _action_index."""
+    import torch
+
+    combos, logits, _value, combo_paths = net.forward(decision, session)
+    probs = torch.softmax(logits, dim=-1)
+    if dirichlet_noise:
+        alpha = _DIRICHLET_ALPHA_SCALE / len(combos)
+        noise = torch.distributions.Dirichlet(torch.full((len(combos),), alpha)).sample()
+        probs = (1 - _DIRICHLET_EPS) * probs + _DIRICHLET_EPS * noise
+    idx = int(torch.multinomial(probs, 1).item())
+    policy = {
+        "combinations": [
+            {"combo": list(c), "prob": p} for c, p in zip(combos, probs.tolist())
+        ],
+        "chosen": idx,
+    }
+    name, args = _gc_model.resolve_combination_action(combos[idx], combo_paths)
+    return name, args, policy
 
 
 def _choose_card_reward_net(decision, net, dirichlet_noise: bool = True) -> tuple[str, dict]:
@@ -210,7 +277,7 @@ def _choose_combat_action_claws(
     if combat_dirichlet_noise:
         alpha = _DIRICHLET_ALPHA_SCALE / len(options)
         noise = torch.distributions.Dirichlet(torch.full((len(options),), alpha)).sample()
-        probs = (1 - _DIRICHLET_EPS) * probs + _DIRICHLET_EPS * noise
+        probs = (1 - _COMBAT_DIRICHLET_EPS) * probs + _COMBAT_DIRICHLET_EPS * noise
     idx = int(torch.multinomial(probs, 1).item())
     policy = [
         {"action": a, "args": args, "prob": p} for (a, args), p in zip(options, probs.tolist())
@@ -295,7 +362,7 @@ def _combat_options_from_buffer(arr) -> list[tuple[str, dict]]:
 def _choose_generic_action(
     decision: Decision, session: Sts2Session, purpose: str | None,
     card_reward_dirichlet_noise: bool = True,
-) -> tuple[str, dict, str | None]:
+) -> tuple[str, dict, str | None, dict | None]:
     """Non-combat decisions: pick a uniformly random legal option, or the simplest safe
     default (leave/skip) where "random" isn't a meaningful choice yet. Good enough to
     keep a run moving forward -- combat_play is what's actually being trained right now.
@@ -304,6 +371,11 @@ def _choose_generic_action(
     which can return "remove"/"upgrade" to be threaded into the caller's *next* choose_action
     call (see that function's docstring) -- the only two actions that ever trigger a follow-up
     card_select whose purpose isn't recoverable from CardSelect's own fields.
+
+    Returns a fourth element, policy: None for every decision type except map_select once a
+    trained GoldenCompassNet is loaded (see _choose_map_action) -- mirrors combat_play's own
+    policy (for recorder.attach_policy), card_reward's real training instead goes through
+    facility_choices_paradox.py's separate MetaOptionJob commit path, not through here.
 
     A BufferDecision reaching here is delegated to _choose_generic_action_from_buffer entirely --
     see that function's docstring for why every branch below except card_select assumes a
@@ -316,79 +388,75 @@ def _choose_generic_action(
     dec = decision.decision
 
     if dec == "map_select":
-        name, kwargs = _choose_map_action(decision, session)
-        return name, kwargs, None
+        name, kwargs, policy = _choose_map_action(decision, session)
+        return name, kwargs, None, policy
 
     if dec == "card_reward":
         name, kwargs = _choose_card_reward_decision(
             decision, decision.cards, decision.can_skip, decision.player.deck_size or 0,
             card_reward_dirichlet_noise,
         )
-        return name, kwargs, None
+        return name, kwargs, None, None
 
     if dec == "bundle_select":
-        return "select_bundle", {"bundle_index": random.choice(decision.bundles).index}, None
+        return "select_bundle", {"bundle_index": random.choice(decision.bundles).index}, None, None
 
     if dec == "card_select":
         name, kwargs = _choose_card_select_action(decision, purpose)
-        return name, kwargs, None
+        return name, kwargs, None, None
 
     if dec == "shop":
-        return _choose_shop_action(decision)
+        name, kwargs, next_purpose = _choose_shop_action(decision)
+        return name, kwargs, next_purpose, None
 
     if dec == "rest_site":
-        return _choose_rest_site_action(decision)
+        name, kwargs, next_purpose = _choose_rest_site_action(decision)
+        return name, kwargs, next_purpose, None
 
     if dec == "event_choice":
         unlocked = [o for o in decision.options if not o.is_locked]
         if not unlocked:
-            return "leave_room", {}, None
-        return "choose_option", {"option_index": random.choice(unlocked).index}, None
+            return "leave_room", {}, None, None
+        return "choose_option", {"option_index": random.choice(unlocked).index}, None, None
 
     raise ValueError(f"no policy for decision type {dec!r}")
 
 
 def _choose_generic_action_from_buffer(
     decision: BufferDecision, purpose: str | None, card_reward_dirichlet_noise: bool = True
-) -> tuple[str, dict, str | None]:
+) -> tuple[str, dict, str | None, dict | None]:
     """Buffer counterpart to _choose_generic_action. Reached only by a meta-branch's horizon walk
     (facility_choices_paradox._run_meta_option_job) -- a turn-branch worker's own job always
-    ends the instant its one combat turn resolves, so it never reaches any of these. Same "uniform
-    random / simplest safe default" philosophy as the pydantic path; where a smart heuristic
-    already exists (card_reward, shop's card/potion picks), it's reused via the _BufferCard
-    wrapper rather than duplicated.
-
-    "card_reward"/"event_card_reward" are handled together here since the buffer protocol splits
-    what the JSON protocol reports as one "card_reward" literal into two distinct decision kinds
-    (see _choose_card_reward_from_buffer's docstring). map_select can't delegate to Golden Compass
-    (that needs session.get_map()'s pydantic-shaped map) so it picks uniformly among the current
-    map point's own children instead. rest_site can't distinguish HEAL/SMITH/etc. by option_id
-    (buffer_layout's rest_options() has no semantic label), so it picks uniformly and never
-    threads a purpose -- an upgrade pick just falls back to card_select's own uniform-random
-    choice (see _choose_card_select_action's purpose=None fallback)."""
+    ends the instant its one combat turn resolves, so it never reaches any of these. 
+    """
     dec = decision.decision
     arr = decision.arr
 
     if dec == "map_select":
         name, kwargs = _choose_map_action_from_buffer(arr)
-        return name, kwargs, None
+        return name, kwargs, None, None
     if dec in ("card_reward", "event_card_reward"):
         name, kwargs = _choose_card_reward_from_buffer(decision, card_reward_dirichlet_noise)
-        return name, kwargs, None
+        return name, kwargs, None, None
     if dec == "bundle_select":
-        return "select_bundle", {"bundle_index": random.choice([b for b, _ in bl.bundles(arr)])}, None
+        return (
+            "select_bundle", {"bundle_index": random.choice([b for b, _ in bl.bundles(arr)])},
+            None, None,
+        )
     if dec == "card_select":
         name, kwargs = _choose_card_select_action(decision, purpose)
-        return name, kwargs, None
+        return name, kwargs, None, None
     if dec == "shop":
-        return _choose_shop_action_from_buffer(arr)
+        name, kwargs, next_purpose = _choose_shop_action_from_buffer(arr)
+        return name, kwargs, next_purpose, None
     if dec == "rest_site":
-        return _choose_rest_site_action_from_buffer(arr)
+        name, kwargs, next_purpose = _choose_rest_site_action_from_buffer(arr)
+        return name, kwargs, next_purpose, None
     if dec == "event_choice":
         unlocked = [i for i, is_locked in bl.event_options(arr) if not is_locked]
         if not unlocked:
-            return "leave_room", {}, None
-        return "choose_option", {"option_index": random.choice(unlocked)}, None
+            return "leave_room", {}, None, None
+        return "choose_option", {"option_index": random.choice(unlocked)}, None, None
 
     raise ValueError(f"no buffer-side policy for decision type {dec!r}")
 
@@ -466,17 +534,32 @@ def _choose_rest_site_action_from_buffer(arr) -> tuple[str, dict, str | None]:
     return "choose_option", {"option_index": random.choice(enabled)}, None
 
 
-def _choose_map_action(decision: Decision, session: Sts2Session) -> tuple[str, dict]:
-    """Delegates to Golden Compass's value-to-go DP over the full act map."""
+def _choose_map_action(
+    decision: Decision, session: Sts2Session, map_dirichlet_noise: bool = True,
+) -> tuple[str, dict, dict | None]:
+    """Samples from a trained GoldenCompassNet (agents/golden_compass/model/model.py) when
+    GOLDEN_COMPASS_CHECKPOINT is set, scoring the distinct room-type combinations reachable within
+    a few floors of map_select's own one-hop `choices` (not the physical nodes themselves -- see
+    that module's docstring) -- falling back to Golden Compass's DP-over-the-full-map heuristic
+    (agents/golden_compass/policy.py) otherwise (round 1, no checkpoint yet), same "noisy but
+    harmless" fallback convention as _choose_card_reward_decision. Only the net path returns a
+    policy (for recorder.attach_policy); the heuristic path returns None, same as before this
+    was wired in -- see facility_common.py's pending_map_steps for how a map_select decision's
+    *value* gets recorded independent of which path chose it."""
+    net = _load_golden_compass_net()
+    if net is not None:
+        name, kwargs, policy = _choose_map_action_net(decision, session, net, map_dirichlet_noise)
+        return name, kwargs, policy
+
     hp_frac = decision.player.hp / decision.player.max_hp if decision.player.max_hp else 1.0
     target = golden_compass.choose_next_node(session.get_map(), hp_frac=hp_frac)
     if target is not None:
         for choice in decision.choices:
             if (choice.col, choice.row) == target:
-                return "select_map_node", {"col": choice.col, "row": choice.row}
+                return "select_map_node", {"col": choice.col, "row": choice.row}, None
 
     pick = random.choice(decision.choices)
-    return "select_map_node", {"col": pick.col, "row": pick.row}
+    return "select_map_node", {"col": pick.col, "row": pick.row}, None
 
 
 def _choose_card_select_action(

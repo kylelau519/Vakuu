@@ -54,6 +54,18 @@ _BOSS_HP_WEIGHT = 0.2
 _BOSS_WIN_FLOOR = 0.8
 _BOSS_ENEMY_WEIGHT = 0.2
 
+# Golden Compass reward shaping (see main_worker_loop's pending_map_steps machinery): a local
+# bonus for winning an Elite/Boss fight, backward-discounted across the select_map_node decisions
+# that led there, layered ON TOP of the flat terminal +1/-1 -- not replacing it. Keeping the flat
+# term matters: without it, a trial that beats a couple of Elites (+2 each) and then still dies
+# (just -1) would net positive, teaching the policy to chase risky Elites over safe clears. gamma
+# ~0.9 gives a ~6.6-decision half-life -- enough reach that a choice a few floors before a win
+# gets a real nudge, without smearing credit flatly across an entire ~15-50 decision run the way
+# the old scheme did.
+_GOLDEN_COMPASS_GAMMA = 0.9
+_GOLDEN_COMPASS_ELITE_BONUS = 2.0
+_GOLDEN_COMPASS_BOSS_BONUS = 3.0
+
 
 def _random_seed() -> str:
     return f"{random.choice(_SEED_WORDS)}-{random.randint(0, 999_999)}"
@@ -551,6 +563,22 @@ def main_worker_loop(
         # taking comment below for why reuse is unsafe. Deleted once this trial concludes.
         checkpoint_dir = os.path.join(cfg.raw_dir, "checkpoints")
         checkpoint_paths_this_trial: list[str] = []
+        # Step indices of every select_map_node commit this trial, via recorder.mark_step() --
+        # backfilled with this trial's own +1 (won) / -1 (lost) terminal outcome, plus a local
+        # Elite/Boss-win shaping bonus (see local_map_rewards below), once it's known, right
+        # before recorder.save() below. See agents/golden_compass/model/README.md's Design
+        # section for why a map choice needs no MetaOptionJob-style branching to get a real
+        # training value: unlike a card_reward pick, its value IS just this trial's own outcome.
+        pending_map_steps: list[int] = []
+        # Node type (MapChoice.type, e.g. "Elite"/"Boss"/"Monster") chosen at each of
+        # pending_map_steps' own steps, index-aligned -- lets the combat-resolution code below
+        # attribute a won Elite/Boss fight back to the specific select_map_node decision that led
+        # into it, without re-deriving it from the trial's floor numbering.
+        pending_map_step_types: list[str | None] = []
+        # step -> undiscounted local shaping bonus earned AT that step (a won Elite/Boss fight) --
+        # backward-discounted across pending_map_steps at trial end (_GOLDEN_COMPASS_GAMMA), so a
+        # choice a few floors before a win gets more credit than one from 30 floors earlier.
+        local_map_rewards: dict[int, float] = {}
         # meta_id -> (checkpoint_path, is_adopted, commit_step) for every MetaOptionJob dispatched
         # this trial that hasn't reported back yet; checkpoint_path -> how many still-outstanding
         # jobs need it. Both populated by meta_resolver's returned pending_meta_jobs, drained by
@@ -582,6 +610,19 @@ def main_worker_loop(
                             combat_checkpoint_path,
                         )
                         combat_checkpoint_path = None  # consumed -- not valid for the next combat
+                        # combat_resolver returns None as combat_outcome exactly when this combat
+                        # was WON (see facility_claws._resolve_combat's own contract: "lost"/
+                        # "error" strings end the trial; a win returns None and play continues) --
+                        # attribute the Elite/Boss shaping bonus to the select_map_node choice that
+                        # led into it. One-to-one: a combat is always immediately preceded by
+                        # exactly one select_map_node, so pending_map_step_types[-1] is that choice.
+                        if (combat_outcome is None and pending_map_step_types
+                                and pending_map_step_types[-1] in ("Elite", "Boss")):
+                            bonus = (_GOLDEN_COMPASS_ELITE_BONUS
+                                     if pending_map_step_types[-1] == "Elite"
+                                     else _GOLDEN_COMPASS_BOSS_BONUS)
+                            step = pending_map_steps[-1]
+                            local_map_rewards[step] = local_map_rewards.get(step, 0.0) + bonus
                         if combat_outcome is not None:
                             outcome = combat_outcome
                             break
@@ -616,6 +657,19 @@ def main_worker_loop(
                     if policy is not None:
                         recorder.attach_policy(policy)
                     if name == "select_map_node":
+                        # Step index for this commit's eventual value -- see pending_map_steps'
+                        # own comment above. Must be captured here, before session.step() below
+                        # advances the recorder's step counter via log_action().
+                        pending_map_steps.append(recorder.mark_step())
+                        # The chosen node's own type (Elite/Boss/Monster/...), for the Elite/Boss
+                        # shaping bonus above -- read off decision.choices here (before session
+                        # .step() below moves past this decision) rather than re-derived later.
+                        chosen = next(
+                            (c for c in decision.choices
+                             if (c.col, c.row) == (kwargs["col"], kwargs["row"])),
+                            None,
+                        )
+                        pending_map_step_types.append(chosen.type if chosen is not None else None)
                         # select_map_node is the only action that consumes RNG for encounter
                         # selection, at room-entry time -- the checkpoint MUST be taken before
                         # it, not after, or a branch reloading it and replaying this same action
@@ -645,6 +699,24 @@ def main_worker_loop(
             except Exception as e:
                 recorder.log_error(f"{type(e).__name__}: {e}")
                 outcome = "error"
+            # Golden Compass's training value: this trial's own terminal +1 (won) / -1 (lost)
+            # outcome, PLUS a backward-discounted Elite/Boss-win shaping bonus (local_map_rewards,
+            # decayed by _GOLDEN_COMPASS_GAMMA per select_map_node step of distance) -- and no
+            # value at all (not 0) for an "error" trial -- see agents/golden_compass/model/
+            # materialize.py's docstring for why an absent value is skipped rather than treated as
+            # a real 0 training target. The flat terminal term is kept, not replaced -- see
+            # _GOLDEN_COMPASS_GAMMA's own comment for why (a trial that beats Elites and still
+            # dies must still net negative).
+            if outcome in ("won", "lost") and pending_map_steps:
+                map_reward = 1.0 if outcome == "won" else -1.0
+                shaping = 0.0
+                discounted_shaping = [0.0] * len(pending_map_steps)
+                for i in range(len(pending_map_steps) - 1, -1, -1):
+                    shaping = (local_map_rewards.get(pending_map_steps[i], 0.0)
+                               + _GOLDEN_COMPASS_GAMMA * shaping)
+                    discounted_shaping[i] = shaping
+                for step, bonus in zip(pending_map_steps, discounted_shaping):
+                    recorder.set_value(step, map_reward + bonus)
             # Bounded wait for this trial's still-outstanding MetaOptionJobs (empty/no-op whenever
             # meta_resolver is None) -- must run BEFORE recorder.save() below, since that's the
             # only chance for a late-arriving adopted-option value to land via recorder.set_value.
