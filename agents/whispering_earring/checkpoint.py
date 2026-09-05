@@ -12,14 +12,15 @@ f"{main_id}_m{divergence_index:03d}_o{option_index:02d}") before calling into
 facility_claws._resolve_combat, or sibling chains running concurrently would mint identical
 branch_ids and clobber each other's output file.
 
-is_last_of_act/boss_ids/boss_max_hp are decided once at combat entry from the main line's live
+is_last_of_act/enemy_ids/enemy_max_hp are decided once at combat entry from the main line's live
 context (context.room_type/context.enemies -- see facility_claws._resolve_combat) and carried on
 every turn-branch of that combat, since a branch worker only ever sees a buffer-protocol decision
-with no room_type of its own. boss_ids/boss_max_hp let a branch recognize the tracked entities via
+with no room_type of its own. enemy_ids/enemy_max_hp let a branch recognize the tracked entities via
 decode_token despite that (see facility_common._tracked_enemy_hp); anything summoned mid-fight is
-silently not counted. Empty/0 whenever is_last_of_act is False. A BranchJob is handed to a branch
-worker directly through the facility's job queue (an mp.Queue -- plain Python objects, no disk
-round-trip needed).
+silently not counted. Tracked for every combat, not just boss fights -- is_last_of_act only
+changes how the terminal/per-turn reward *weights* HP vs. enemy damage, not whether enemy damage
+is tracked at all. A BranchJob is handed to a branch worker directly through the facility's job
+queue (an mp.Queue -- plain Python objects, no disk round-trip needed).
 
 `actions` is the full action history since run start, kept so a branch worker's recorder metadata
 and output JSON stay identical whichever reconstruction path is used. `checkpoint_path`/
@@ -50,8 +51,8 @@ class BranchJob:
     combat_hp_before: int
     combat_max_hp: int
     is_last_of_act: bool = False
-    boss_ids: frozenset[str] = frozenset()
-    boss_max_hp: int = 0
+    enemy_ids: frozenset[str] = frozenset()
+    enemy_max_hp: int = 0
     actions: list[dict] = field(default_factory=list)
     checkpoint_path: str | None = None
     combat_start_index: int = 0

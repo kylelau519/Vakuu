@@ -23,7 +23,7 @@ def _spawn_turn_branches(
     job_queue, results_queue, cfg: FacilityConfig, main_id: str, act: int, floor: int,
     combat_index: int, turn_index: int, character: str, seed: str, actions_so_far: list[dict],
     combat_hp_before: int, combat_max_hp: int, checkpoint_path: str | None, combat_start_index: int,
-    is_last_of_act: bool = False, boss_ids: frozenset[str] = frozenset(), boss_max_hp: int = 0,
+    is_last_of_act: bool = False, enemy_ids: frozenset[str] = frozenset(), enemy_max_hp: int = 0,
 ) -> list[str]:
     branch_ids = []
     for b in range(cfg.branches_per_turn):
@@ -31,7 +31,7 @@ def _spawn_turn_branches(
             main_id=main_id, act=act, floor=floor, combat_index=combat_index, turn_index=turn_index,
             branch_index=b, character=character, seed=seed, ascension=cfg.ascension,
             combat_hp_before=combat_hp_before, combat_max_hp=combat_max_hp, is_last_of_act=is_last_of_act,
-            boss_ids=boss_ids, boss_max_hp=boss_max_hp,
+            enemy_ids=enemy_ids, enemy_max_hp=enemy_max_hp,
             actions=list(actions_so_far), checkpoint_path=checkpoint_path,
             combat_start_index=combat_start_index,
         )
@@ -99,7 +99,7 @@ def _resolve_turn(
     session: Sts2Session, character: str, seed: str, main_id: str, act: int, floor: int, combat_index: int,
     turn_index: int, combat_hp_before: int, combat_max_hp: int, stop_event,
     checkpoint_path: str | None, combat_start_index: int, is_last_of_act: bool = False,
-    boss_ids: frozenset[str] = frozenset(), boss_max_hp: int = 0,
+    enemy_ids: frozenset[str] = frozenset(), enemy_max_hp: int = 0,
 ):
     """Delegates one turn to cfg.branches_per_turn parallel attempts and adopts the
     best-scoring result."""
@@ -107,7 +107,7 @@ def _resolve_turn(
     branch_ids = _spawn_turn_branches(
         job_queue, results_queue, cfg, main_id, act, floor, combat_index, turn_index,
         character, seed, prefix, combat_hp_before, combat_max_hp,
-        checkpoint_path, combat_start_index, is_last_of_act, boss_ids, boss_max_hp,
+        checkpoint_path, combat_start_index, is_last_of_act, enemy_ids, enemy_max_hp,
     )
     adopted = _wait_for_turn_result(results_queue, branch_ids, len(prefix), stop_event)
 
@@ -149,8 +149,8 @@ def _resolve_combat(
     act = decision.context.act
     floor = decision.context.floor
     is_last_of_act = decision.context.room_type == "Boss"
-    boss_ids = frozenset(e.id for e in decision.enemies if e.id) if is_last_of_act else frozenset()
-    boss_max_hp = sum(e.max_hp for e in decision.enemies if e.id in boss_ids)
+    enemy_ids = frozenset(e.id for e in decision.enemies if e.id)
+    enemy_max_hp = sum(e.max_hp for e in decision.enemies if e.id in enemy_ids)
     combat_hp_before, combat_max_hp = decision.player.hp, decision.player.max_hp
     combat_start_index = len(session.action_log) - 1
     turn_index = 0
@@ -160,7 +160,7 @@ def _resolve_combat(
             job_queue, results_queue, main_worker_index, cfg, recorder, session,
             character, seed, main_id, act, floor, combat_index, turn_index,
             combat_hp_before, combat_max_hp, stop_event,
-            checkpoint_path, combat_start_index, is_last_of_act, boss_ids, boss_max_hp,
+            checkpoint_path, combat_start_index, is_last_of_act, enemy_ids, enemy_max_hp,
         )
         if turn_outcome == "continue":
             continue
@@ -199,7 +199,7 @@ def _run_branch_job(cfg: FacilityConfig, job: BranchJob, results_queue) -> None:
                 )
             outcome, _decision = _play_turn_only(
                 session, decision, job.combat_hp_before, job.combat_max_hp, job.is_last_of_act,
-                job.boss_ids, job.boss_max_hp,
+                job.enemy_ids, job.enemy_max_hp,
             )
         except Exception as e:
             recorder.log_error(f"{type(e).__name__}: {e}")

@@ -36,11 +36,16 @@ _SEED_WORDS = ["falcon", "ember", "wolf", "raven", "thorn", "comet", "storm", "h
 _HEALTHY_HP_FRACTION = 0.5
 _LOW_HP_SLOPE = 3.0
 
+# Per-turn shaping weight, applied equally to hp_term and enemy_term below -- both are
+# potential-differences (telescope to a fixed total over the whole combat regardless of which
+# turn the damage happened on), so weighting them the same doesn't bake in a fixed HP-for-damage
+# trade rate; it only densifies credit assignment turn-by-turn.
+_HP_WEIGHT = 0.6
+
 # Boss-fight (act-final combat) reward shaping. At ascension 2+, winning an act heals 80% of
-# missing HP, so leftover HP is worth much less there than in a normal fight  
+# missing HP, so leftover HP is worth much less there than in a normal fight
 _BOSS_HP_WEIGHT = 0.2
 _BOSS_WIN_FLOOR = 0.8
-_BOSS_ENEMY_WEIGHT = 0.2
 
 # Golden Compass reward shaping (see main_worker_loop's pending_map_steps machinery)
 # the old scheme did.
@@ -179,13 +184,14 @@ def _combat_value(outcome: CombatOutcome) -> float:
     return _HEALTHY_HP_FRACTION - shortfall * _LOW_HP_SLOPE
 
 
-def _tracked_enemy_hp(arr, boss_ids: frozenset[str]) -> int:
-    """Sums current HP across only the enemy slots whose decoded token is in boss_ids for aggressive mode"""
-    if not boss_ids:
+def _tracked_enemy_hp(arr, enemy_ids: frozenset[str]) -> int:
+    """Sums current HP across only the enemy slots whose decoded token is in enemy_ids -- anything
+    summoned mid-fight (not in the set captured at combat entry) is silently not counted."""
+    if not enemy_ids:
         return 0
     return sum(
         bl.enemy_hp(slot) for _, slot in bl.enemies(arr)
-        if decode_token(bl.enemy_token(slot)) in boss_ids
+        if decode_token(bl.enemy_token(slot)) in enemy_ids
     )
 
 
@@ -214,7 +220,7 @@ def _bypass_card_reward(session) -> None:
 
 def _play_turn_only(
     session, decision, combat_hp_before: int, combat_max_hp: int,
-    is_last_of_act: bool = False, boss_ids: frozenset[str] = frozenset(), boss_max_hp: int = 0,
+    is_last_of_act: bool = False, enemy_ids: frozenset[str] = frozenset(), enemy_max_hp: int = 0,
     bypass_reward_on_win: bool = True,
 ):
     """Plays exactly one turn (through the mid-turn card_select edge case, e.g. Power Potion/
@@ -226,7 +232,7 @@ def _play_turn_only(
 
     bypass_reward_on_win: For branch job to skip reward because they are irrelevant."""
     hp_before_turn = decision.player_hp
-    enemy_hp_before_turn = _tracked_enemy_hp(decision.arr, boss_ids) if is_last_of_act else 0
+    enemy_hp_before_turn = _tracked_enemy_hp(decision.arr, enemy_ids)
     session.logger.begin_turn()
     ended_turn = False
     while decision.decision in ("combat_play", "card_select"):
@@ -267,11 +273,11 @@ def _play_turn_only(
             -(hp_before_turn - decision.player_hp) / combat_max_hp if combat_max_hp else 0.0
         )
         enemy_term = 0.0
-        if is_last_of_act and boss_max_hp:
-            enemy_hp_after_turn = _tracked_enemy_hp(decision.arr, boss_ids)
-            enemy_term = (enemy_hp_before_turn - enemy_hp_after_turn) / boss_max_hp
-        hp_weight = _BOSS_HP_WEIGHT if is_last_of_act else 0.75
-        turn_value = hp_weight * hp_term + _BOSS_ENEMY_WEIGHT * enemy_term + 1 * v_net
+        if enemy_max_hp:
+            enemy_hp_after_turn = _tracked_enemy_hp(decision.arr, enemy_ids)
+            enemy_term = (enemy_hp_before_turn - enemy_hp_after_turn) / enemy_max_hp
+        hp_weight = _BOSS_HP_WEIGHT if is_last_of_act else _HP_WEIGHT
+        turn_value = hp_weight * (hp_term + enemy_term) + v_net
 
     session.logger.end_turn(turn_value)
     return outcome, decision

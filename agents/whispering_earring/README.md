@@ -31,11 +31,16 @@ branch-and-adopt something to select between.
 
 Each adopted turn is scored with a TD-bootstrapped value, not a flat per-combat constant (see
 `facility_common.py`'s `_play_turn_only` and `_combat_value`): a turn that doesn't end the combat gets
-`-(hp_lost_this_turn)/max_hp + V_net(state_after_turn)` (the current `ClawsNet`'s own value-head
-estimate, one forward pass, no further simulation); a turn that does end the combat gets the
-existing terminal HP-loss formula (`_combat_value`) instead of a bootstrap. This is what lets a
-turn that took damage to set up a good follow-up score differently from a turn that didn't,
-which a single scalar backfilled onto the whole combat couldn't do.
+`hp_weight * (hp_term + enemy_term) + V_net(state_after_turn)`, where `hp_term`/`enemy_term` are
+each `±(hp_lost_or_dealt_this_turn)/max_hp` and `V_net` is the current `ClawsNet`'s own value-head
+estimate (one forward pass, no further simulation); a turn that does end the combat gets the
+existing terminal HP-loss formula (`_combat_value`) instead of a bootstrap. `hp_term`/`enemy_term`
+are both potential-differences that telescope to a fixed total over the whole combat regardless of
+which turn the damage happened on, so weighting them equally densifies credit assignment without
+biasing the policy toward trading HP for damage at some fixed rate -- the actual tradeoff is still
+governed by the terminal win/loss reward. This per-turn shaping is also what lets a turn that took
+damage to set up a good follow-up score differently from a turn that didn't, which a single scalar
+backfilled onto the whole combat couldn't do.
 
 Branch workers drive their own turn via sts2-cli's buffer protocol (`buffer_env.Sts2BufferSession`,
 in-process, no subprocess/JSON/pydantic decode) instead of the JSON `Sts2Session` -- see sts2-cli's
