@@ -32,6 +32,8 @@ while true; do
     [ -f "$GOLDEN_COMPASS_CHECKPOINT_PATH" ] || GOLDEN_COMPASS_CHECKPOINT_PATH=""
     export GOLDEN_COMPASS_CHECKPOINT="$GOLDEN_COMPASS_CHECKPOINT_PATH"
 
+    cleanup_procs
+    
     echo "[claws 1/6] Cleaning up old raw data..."
     find "$vakuu/agents/whispering_earring/data/raw/" -maxdepth 1 -name '*.json' -delete
     find "$vakuu/agents/whispering_earring/data/raw/checkpoints/" -maxdepth 1 -name '*.json' -delete
@@ -39,7 +41,7 @@ while true; do
     echo "[claws 2/6] Running facility_claws.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility_claws.py" \
         --trials 5 --branch-workers 15 --branches-per-turn 30 --main-workers 3 \
-        --raw-dir "$vakuu/agents/whispering_earring/data/raw"
+        --ascension 1 --raw-dir "$vakuu/agents/whispering_earring/data/raw"
 
     echo "[claws 3/6] Floor/combat stats for this round..."
     python "$vakuu/agents/whispering_earring/stats.py" \
@@ -95,7 +97,7 @@ while true; do
     python "$vakuu/agents/whispering_earring/facility_choices_paradox.py" \
         --trials 6 --branch-workers 5 --main-workers 5 \
         --branches-per-turn 4 --meta-branches-per-trial 6\
-        --raw-dir "$raw_dir"
+        --ascension 1 --raw-dir "$raw_dir"
 
     echo "[choices 3/6] Meta-decision stats for this round..."
     python "$vakuu/agents/whispering_earring/stats_choices.py" \
@@ -141,7 +143,7 @@ while true; do
 
     echo "[golden 2/2] Training model..."
     python "$vakuu/agents/golden_compass/model/train.py" \
-        "$vakuu/agents/golden_compass/model/dataset.pt" --epochs 20 \
+        "$vakuu/agents/golden_compass/model/dataset.pt" --epochs 35 \
         --out "$vakuu/agents/golden_compass/model/golden_compass.pt" \
         --init "$GOLDEN_COMPASS_CHECKPOINT_PATH"
 

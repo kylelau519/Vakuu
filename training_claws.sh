@@ -33,7 +33,7 @@ while true; do
     echo "[2/6] Running facility_claws.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility_claws.py" \
         --trials 5 --branch-workers 15 --branches-per-turn 40 --main-workers 3 \
-        --raw-dir "$vakuu/agents/whispering_earring/data/raw"
+        --ascension 1 --raw-dir "$vakuu/agents/whispering_earring/data/raw"
 
     echo "[3/6] Floor/combat stats for this round..."
     python "$vakuu/agents/whispering_earring/stats.py" \
