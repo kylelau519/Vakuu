@@ -1,21 +1,5 @@
 """Combat turn-branching: the original whispering_earring self-play facility, generating training
-data for `claws` (see agents/claws/model/). Split out of a single facility.py once
-facility_choices_paradox.py needed the same worker-pool machinery for a second, independent kind
-of branching (card_reward meta-decisions) -- see facility_common.py's module docstring for the
-split, and this package's README.md for the branching scheme this file implements (N concurrent
-main-line workers, each forking off a checkpoint at every *turn* to explore alternate lines via a
-shared pool of branch workers, discarded after that one turn resolves -- a main line adopts
-whichever of its branches scores best, per `_turn_score_key`, once all have reported or timed
-out).
-
-Branch workers drive their own turn via sts2-cli's buffer protocol (`buffer_env.Sts2BufferSession`,
-in-process, no subprocess/JSON/pydantic decode) instead of the JSON `Sts2Session` -- see sts2-cli's
-`src/Sts2Headless/README.md` for the wire format and `policy.py`'s combat/card-select choosers for
-how they branch on the decision type (`isinstance(decision, BufferDecision)`) to read fields via
-`buffer_layout.py` instead of a pydantic attribute tree. The main self-play line still uses
-`Sts2Session`/pydantic `Decision` throughout, since it never plays `combat_play` directly (see
-`_resolve_turn`) -- only branch workers do.
-"""
+data for `claws` """
 from __future__ import annotations
 
 import functools
@@ -73,7 +57,7 @@ def _wait_for_turn_result(
     results_queue, branch_ids: list[str], prefix_len: int, stop_event, timeout: float = 120
 ) -> dict | None:
     """Blocks on results_queue (branch_id, result) pairs. Most branches here report "continue"
-    (combat still ongoing) rather than a terminal outcome, so they can't just be accepted on first
+    rather than a terminal outcome, so they can't just be accepted on first
     success -- every branch's turn_value is compared once all have reported (or timed out). A
     branch that itself won the combat this turn is still an immediate, unambiguous best pick."""
     usable: dict[str, dict] = {}
@@ -88,10 +72,7 @@ def _wait_for_turn_result(
             continue  # stale result from an already-resolved earlier turn
         pending.discard(branch_id)
         if (result is None or result.get("outcome") == "error"
-                or len(result.get("actions") or []) < prefix_len):
-            # branch errored before saving (or its prefix replay itself failed) -- _turn_score_key
-            # only ranks "lost" as worse than everything else, so an unfiltered "error" branch
-            # would otherwise be adopted like a legitimate result.
+                or len(result.get("actions") or []) <= prefix_len):
             continue
         usable[branch_id] = result
         if result.get("outcome") == "won":
@@ -141,16 +122,7 @@ def _resolve_turn(
     cleaned = _clean_actions(adopted["actions"])
     if checkpoint_path is not None:
         # Resync the main line to the winning branch's state IN PLACE, on this SAME live session,
-        # via load_save + this combat's own actions -- not by closing and respawning a fresh
-        # subprocess every turn (one dotnet fork/exec + CoreCLR cold start per turn), which this
-        # used to do out of caution about a map-RNG desync from load_save's own EnterAct call.
-        # That desync was real (Odds.UnknownMapPoint getting reset instead of preserved across
-        # load_save) but has since been fixed upstream in sts2-cli (RunSimulator.SaveLoad.cs,
-        # commit 3f47140) and independently confirmed fixed by debug_verify_session_reuse.py
-        # (4 seeds, up to 4 rooms past combat, zero divergence) -- so reusing one live session
-        # across repeated load_save() calls is now safe. load_and_resume_combat has no memory of
-        # anything before the checkpoint, so the pre-combat prefix is spliced back onto
-        # action_log afterward to keep the main line's history complete for the trial's output.
+        # via load_save + this combat's own actions
         entry_action = cleaned[combat_start_index]
         in_combat_actions = cleaned[combat_start_index + 1:]
         new_decision = session.load_and_resume_combat(
@@ -173,19 +145,7 @@ def _resolve_combat(
     session: Sts2Session, decision, character: str, seed: str, main_id: str, combat_index: int, stop_event,
     checkpoint_path: str | None,
 ):
-    """Drives _resolve_turn turn-by-turn until the combat actually ends.
-
-    checkpoint_path is the native save the main line took right before the select_map_node action
-    that entered this combat (see facility_common.main_worker_loop) -- None if unavailable (e.g.
-    this run's very first combat). combat_start_index is that entry action's position in
-    session.action_log, captured once here so every turn-branch spawned for this combat replays
-    from the same fixed point regardless of which session object later represents the main line.
-
-    is_last_of_act is decided once here from context.room_type (a live per-room field, unlike the
-    buffer protocol's boss1_token/boss2_token which stay set for every combat of the act) and
-    carried for the whole combat via BranchJob.is_last_of_act (see checkpoint.py's docstring).
-    boss_ids/boss_max_hp are captured the same way, from context.enemies -- the entities actually
-    in the room at boss-combat entry, ignoring anything summoned later."""
+    """Drives _resolve_turn turn-by-turn until the combat actually ends.  """
     act = decision.context.act
     floor = decision.context.floor
     is_last_of_act = decision.context.room_type == "Boss"
@@ -207,10 +167,6 @@ def _resolve_combat(
         if turn_outcome in ("won", "lost"):
             recorder.record_combat(act, floor, combat_index, turn_outcome)
         if turn_outcome == "won":
-            # A won combat leaves `decision` on a pending card_reward -- already discarded on
-            # every branch that reported "won" (see facility_common._bypass_card_reward); the main
-            # line makes its own pick below. No post-win session rebuild needed anymore -- see
-            # _resolve_turn's session-reuse comment above for why that's safe now.
             return session, decision, None
         return session, decision, turn_outcome  # "lost" or "error"
 
@@ -229,13 +185,8 @@ def _run_branch_job(cfg: FacilityConfig, job: BranchJob, results_queue) -> None:
     result = None
     try:
         try:
+            # fast load from checkpoint
             if job.checkpoint_path is not None:
-                # Fast path: resume from the native save taken right before this combat's
-                # room-entry action, replaying only this combat's own actions, instead of
-                # replaying the entire run from StartRun (see checkpoint.py's docstring).
-                # load_and_resume_combat has no memory of anything before the checkpoint, so the
-                # pre-combat prefix is prepended here to keep session.action_log's shape identical
-                # to what open_from_checkpoint would have produced.
                 entry_action = job.actions[job.combat_start_index]
                 in_combat_actions = job.actions[job.combat_start_index + 1:]
                 decision = session.load_and_resume_combat(
@@ -277,6 +228,7 @@ if __name__ == "__main__":
     facility = Facility(
         FacilityConfig(
             characters=args.characters,
+            ascension=args.ascension,
             n_branch_workers=args.branch_workers,
             branches_per_turn=args.branches_per_turn,
             n_main_workers=args.main_workers,
