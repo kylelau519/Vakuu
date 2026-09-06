@@ -18,9 +18,13 @@ Two concrete facilities share one core (`facility_common.py`):
 
 See `facility_claws.py`'s module docstring for the combat branching scheme (N concurrent
 main-line workers, each forking off a checkpoint at every *turn* to explore alternate lines via a
-shared pool of branch workers, discarded after that one turn resolves -- a main line adopts
-whichever of its branches scores best, per `_turn_score_key`, once all have reported or timed
-out) and `policy.py`
+shared pool of branch workers -- a main line adopts a fixed-index branch's result (see
+`_wait_for_turn_result`), not whichever scores best or survives: selecting by outcome or by the
+network's own value estimate would bias the main line's future toward states that dodged death
+via N parallel attempts or that the net already rates highly, neither of which reflects what a
+real single-pass deployment ever gets to do. Every branch, adopted or not, still gets recorded to
+its own file and still feeds materialize.py's REINFORCE baseline -- only which branch's *future*
+gets explored depends on this choice) and `policy.py`
 for the current action-selection policy: combat is uniform-random exploration by default
 (non-combat decisions delegate to the Choices Paradox and Golden Compass placeholder policies,
 since a random meta/path policy would produce decks and runs too weak to make combat outcomes

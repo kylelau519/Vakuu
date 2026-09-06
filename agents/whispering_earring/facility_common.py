@@ -297,7 +297,13 @@ def _clean_actions(actions: list[dict]) -> list[dict]:
 
 
 META_ELIGIBLE_DECISIONS = frozenset({"card_reward", "rest_site", "event_choice"})
-_META_DRAIN_TIMEOUT = 30.0
+# Raised from 30.0: MetaOptionJobs land on the low-priority half of the shared branch-worker
+# queue (combat turn-branches always go first, see facility_choices_paradox.py's dispatch), so
+# with few branch workers relative to many concurrent main lines (e.g. 3 workers / 10 main
+# workers), a meta job can sit queued -- not even started -- well past 30s. Confirmed live: every
+# sibling of a divergence failing with the same FileNotFoundException (not just a straggler among
+# otherwise-successful siblings) means the whole divergence missed the window, not a per-job race.
+_META_DRAIN_TIMEOUT = 120.0
 
 
 def _apply_meta_result(

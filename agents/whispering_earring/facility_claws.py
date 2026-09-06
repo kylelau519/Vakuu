@@ -42,6 +42,62 @@ def _spawn_turn_branches(
     return branch_ids
 
 
+def _wait_for_turn_result(
+    results_queue, branch_ids: list[str], prefix_len: int, stop_event, timeout: float = 120
+) -> dict | None:
+    """Blocks on results_queue (branch_id, result) pairs, adopting whichever branch's result is
+    returned -- in strict branch_ids order, NOT by comparing outcomes or values. branch_ids[0] is
+    the preferred continuation; a later index is only used when an earlier one itself failed to
+    produce a usable result (crashed/errored/timed out), never because its outcome was worse.
+
+    This is deliberate: adopting by outcome ("any survivor beats a loss") or by value ("take the
+    highest-scoring branch") biases the main line's future toward states that either dodged death
+    via N parallel attempts (survivorship bias -- real single-pass deployment gets no such
+    do-over) or that the network's OWN current value estimate already rates highly (a "continue"
+    branch's value is ClawsNet's own unverified guess, not ground truth -- greedily maximizing a
+    noisy estimate across many candidates is upward-biased by construction, the "winner's curse",
+    and self-reinforces whatever the net already believes). Picking a fixed index sidesteps both:
+    the main line's continuation no longer depends on any branch's outcome or value at all.
+
+    Every branch is still recorded to its own file by _run_branch_job regardless of what's
+    returned here, so branches that lose out on adoption (including outright losses) still
+    contribute their own (state, action, value) to materialize.py's REINFORCE baseline -- only
+    which branch's *future* gets explored is affected by this function."""
+    results: dict[str, dict] = {}
+    pending = set(branch_ids)
+    deadline = time.time() + timeout
+    while pending and time.time() < deadline and not stop_event.is_set():
+        try:
+            branch_id, result = results_queue.get(timeout=1.0)
+        except Empty:
+            continue
+        if branch_id not in pending:
+            continue  # stale result from an already-resolved earlier turn
+        pending.discard(branch_id)
+        if (result is None or result.get("outcome") == "error"
+                or len(result.get("actions") or []) <= prefix_len):
+            continue  # unusable -- the next index in branch_ids takes over as preferred
+        results[branch_id] = result
+        for candidate_id in branch_ids:
+            if candidate_id in results:
+                return results[candidate_id]
+            if candidate_id in pending:
+                break  # an earlier index hasn't reported yet -- don't skip ahead of it
+    if pending:
+        print(f"warning: {len(pending)}/{len(branch_ids)} turn branch(es) didn't finish within "
+              f"{timeout}s: {sorted(pending)}")
+    for candidate_id in branch_ids:
+        if candidate_id in results:
+            return results[candidate_id]
+    return None
+
+
+# NOT USED -- kept for reference/possible revert. This is the original value/outcome-based
+# adoption scheme, replaced by the fixed-index _wait_for_turn_result above because it introduces
+# survivorship bias (any non-"lost" outcome beats a "lost" one) and winner's-curse bias (greedily
+# maximizing ClawsNet's own noisy "continue" value estimate across many candidates), both of
+# which skew what the main line explores toward states that dodged death or that the net already
+# rates highly -- see git history / chat for the full reasoning.
 def _turn_score_key(result: dict) -> tuple[int, float]:
     """Ranks a turn-branch result for adoption: any non-"lost" outcome beats a "lost" one,
     then maximize the branch's own end_turn()-backfilled value -- identical across every one
@@ -53,10 +109,11 @@ def _turn_score_key(result: dict) -> tuple[int, float]:
     return (0 if outcome == "lost" else 1, value)
 
 
-def _wait_for_turn_result(
+def _wait_for_turn_result_by_value(
     results_queue, branch_ids: list[str], prefix_len: int, stop_event, timeout: float = 120
 ) -> dict | None:
-    """Blocks on results_queue (branch_id, result) pairs. Most branches here report "continue"
+    """NOT USED -- see _turn_score_key's comment. Original version of _wait_for_turn_result:
+    blocks on results_queue (branch_id, result) pairs. Most branches here report "continue"
     rather than a terminal outcome, so they can't just be accepted on first
     success -- every branch's turn_value is compared once all have reported (or timed out). A
     branch that itself won the combat this turn is still an immediate, unambiguous best pick."""
@@ -101,8 +158,8 @@ def _resolve_turn(
     checkpoint_path: str | None, combat_start_index: int, is_last_of_act: bool = False,
     enemy_ids: frozenset[str] = frozenset(), enemy_max_hp: int = 0,
 ):
-    """Delegates one turn to cfg.branches_per_turn parallel attempts and adopts the
-    best-scoring result."""
+    """Delegates one turn to cfg.branches_per_turn parallel attempts and adopts a fixed-index
+    branch's result (see _wait_for_turn_result for why not the best-scoring one)."""
     prefix = list(session.action_log)
     branch_ids = _spawn_turn_branches(
         job_queue, results_queue, cfg, main_id, act, floor, combat_index, turn_index,

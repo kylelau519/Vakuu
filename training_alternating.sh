@@ -1,12 +1,36 @@
 #!/bin/bash
+shopt -s nullglob
 
 export vakuu="/Users/kylelau519/Programming/Vakuu"
 ROUND=1
+HISTORY_WINDOW=10  # how many past rounds' raw data to keep + train on, alongside the fresh round
 
 cleanup_procs() {
     pkill -9 -f "multiprocessing.spawn"
     pkill -9 -f "sts2-cli/src/Sts2Headless"
     sleep 5
+}
+
+# Moves a just-finished round's raw trial JSON out of raw_dir into history_dir/round_<timestamp>/
+# instead of deleting it (previously: `find raw_dir -delete`), so materialize.py can later be
+# pointed at the last $window rounds together for a proper accumulated retrain instead of only
+# ever seeing one round's small on-policy batch -- see chat about survivorship/exploration-
+# collapse risk from training on a single fresh round with no replay buffer. Prunes down to the
+# newest $window round directories once archived.
+archive_round_data() {
+    local raw_dir="$1" history_dir="$2" window="$3"
+    if [ -n "$(find "$raw_dir" -maxdepth 1 -name '*.json' -print -quit)" ]; then
+        local dest="$history_dir/round_$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$dest"
+        find "$raw_dir" -maxdepth 1 -name '*.json' -exec mv {} "$dest/" \;
+    fi
+    local dirs=("$history_dir"/round_*)
+    local n=${#dirs[@]}
+    if (( n > window )); then
+        for ((i = 0; i < n - window; i++)); do
+            rm -rf "${dirs[$i]}"
+        done
+    fi
 }
 
 while true; do
@@ -34,8 +58,9 @@ while true; do
 
     cleanup_procs
     
-    echo "[claws 1/6] Cleaning up old raw data..."
-    find "$vakuu/agents/whispering_earring/data/raw/" -maxdepth 1 -name '*.json' -delete
+    echo "[claws 1/6] Archiving previous round's raw data (keeping last $HISTORY_WINDOW rounds)..."
+    archive_round_data "$vakuu/agents/whispering_earring/data/raw" \
+        "$vakuu/agents/whispering_earring/data/history/claws" "$HISTORY_WINDOW"
     find "$vakuu/agents/whispering_earring/data/raw/checkpoints/" -maxdepth 1 -name '*.json' -delete
 
     echo "[claws 2/6] Running facility_claws.py (Data Generation)..."
@@ -48,9 +73,10 @@ while true; do
         --raw-dir "$vakuu/agents/whispering_earring/data/raw" \
         --round "$ROUND" --no-card-stats
 
-    echo "[claws 4/6] Materializing dataset..."
+    echo "[claws 4/6] Materializing dataset (this round + up to $HISTORY_WINDOW archived rounds)..."
     python "$vakuu/agents/claws/model/materialize.py" \
         "$vakuu/agents/whispering_earring/data/raw/" \
+        "$vakuu/agents/whispering_earring/data/history/claws/"*/ \
         --out "$vakuu/agents/claws/model/dataset.pt" \
         --jobs 8
 
@@ -58,7 +84,8 @@ while true; do
     python "$vakuu/agents/claws/model/train.py" \
         "$vakuu/agents/claws/model/dataset.pt" --epochs 40 \
         --out "$vakuu/agents/claws/model/claws.pt" \
-        --init "${CLAWS_CHECKPOINT:-}"
+        --init "${CLAWS_CHECKPOINT:-}" \
+        --lr 5e-6
 
     echo "[claws 6/6] Backing up checkpoint..."
     backup_dir="$vakuu/agents/claws/model/backups"
@@ -89,14 +116,15 @@ while true; do
 
     raw_dir="$vakuu/agents/whispering_earring/data/raw_choices"
 
-    echo "[choices 1/6] Cleaning up old raw data..."
-    find "$raw_dir/" -maxdepth 1 -name '*.json' -delete
+    echo "[choices 1/6] Archiving previous round's raw data (keeping last $HISTORY_WINDOW rounds)..."
+    archive_round_data "$raw_dir" \
+        "$vakuu/agents/whispering_earring/data/history/choices" "$HISTORY_WINDOW"
     find "$raw_dir/checkpoints/" -maxdepth 1 -name '*.json' -delete
 
     echo "[choices 2/6] Running facility_choices_paradox.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility_choices_paradox.py" \
-        --trials 6 --branch-workers 5 --main-workers 5 \
-        --branches-per-turn 4 --meta-branches-per-trial 6\
+        --trials 20 --branch-workers 3 --main-workers 10 \
+        --branches-per-turn 4 --meta-branches-per-trial 20\
         --ascension 1 --raw-dir "$raw_dir"
 
     echo "[choices 3/6] Meta-decision stats for this round..."
@@ -104,18 +132,20 @@ while true; do
         --raw-dir "$raw_dir" \
         --round "$ROUND"
 
-    echo "[choices 4/6] Materializing dataset..."
+    echo "[choices 4/6] Materializing dataset (this round + up to $HISTORY_WINDOW archived rounds)..."
     python "$vakuu/agents/choices_paradox/model/materialize.py" \
         "$raw_dir/" \
+        "$vakuu/agents/whispering_earring/data/history/choices/"*/ \
         --out "$vakuu/agents/choices_paradox/model/dataset.pt" \
         --jobs 8
 
     echo "[choices 5/6] Training model..."
     python "$vakuu/agents/choices_paradox/model/train.py" \
-        "$vakuu/agents/choices_paradox/model/dataset.pt" --epochs 50 \
+        "$vakuu/agents/choices_paradox/model/dataset.pt" --epochs 80 \
         --out "$vakuu/agents/choices_paradox/model/choices_paradox.pt" \
         --init "$CHOICES_CHECKPOINT" \
-        --warm-start-from "${CLAWS_CHECKPOINT:-}"
+        --warm-start-from "${CLAWS_CHECKPOINT:-}" \
+        --lr 5e-6
 
     echo "[choices 6/6] Backing up checkpoint..."
     backup_dir="$vakuu/agents/choices_paradox/model/backups"
