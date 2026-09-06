@@ -138,21 +138,31 @@ def _decode_option_names(decision, options: list[tuple[str, dict]]) -> list[str]
     return names
 
 
-def _decode_rest_event_names(decision, decision_kind: str, options: list[tuple[str, dict]]) -> list[str]:
-    """One name per legal_options(...) entry for a rest_site/event_choice decision -- "<leave_room>"
-    for that fixed non-option action, otherwise the JSON protocol's own per-option identity: a
-    RestOption's option_id (e.g. "REST_SITE_HEAL") or an EventOption's text_key, prefixed with the
-    event's name since text_key alone isn't guaranteed unique across different events. See
-    _rest_event_group_task's docstring for why this needs `decision` to come from Sts2Session
+def _decode_rest_event_names(decision, decision_kind: str, options: list[tuple[str, dict]]) -> list:
+    """One name per legal_options(...) entry for a rest_site/event_choice decision. rest_site
+    names are plain strings (RestOption.option_id, e.g. "REST_SITE_HEAL", or "<leave_room>") --
+    there's only one flavor of rest site, so a flat cross-round table is meaningful. event_choice
+    names are (event_name, option_label) tuples instead: options from different events are never
+    comparable against each other (Neow's opening pick and a random act-2 event share nothing), so
+    _print_event_value_table groups by the event_name half rather than ranking every event's
+    options in one flat list. option_label is text_key's last "."-segment (text_key itself is
+    already event-scoped, e.g. "NEOW.pages.INITIAL.options.WINGED_BOOTS" -- the
+    "EVENT.pages.PAGE.options." prefix is redundant once event_name is its own column).
+    See _rest_event_group_task's docstring for why this needs `decision` to come from Sts2Session
     (JSON protocol), not the buffer-protocol decision _decode_option_names above works from."""
     if decision_kind == "rest_site":
         by_index = {o.index: o.option_id for o in decision.options}
-    else:
-        by_index = {o.index: f"{decision.event_name}: {o.text_key}" for o in decision.options}
-    names = []
-    for action, args in options:
-        names.append("<leave_room>" if action == "leave_room" else by_index.get(args["option_index"], "?"))
-    return names
+        return [
+            "<leave_room>" if action == "leave_room" else by_index.get(args["option_index"], "?")
+            for action, args in options
+        ]
+    event_name = decision.event_name
+    by_index = {o.index: o.text_key.rsplit(".", 1)[-1] for o in decision.options}
+    return [
+        (event_name, "<leave_room>") if action == "leave_room"
+        else (event_name, by_index.get(args["option_index"], "?"))
+        for action, args in options
+    ]
 
 
 _stats_session: Sts2BufferSession | None = None
@@ -415,6 +425,44 @@ def _print_option_value_table(
         print(f"{name:<28} {n:>11} {avg:>10.3f} {vs_skip:>12}")
 
 
+def _nest_event_dict(flat: dict[tuple[str, str], list]) -> dict[str, dict[str, list]]:
+    """(event_name, option) -> value becomes event_name -> {option: value} -- JSON object keys
+    must be strings, so a tuple-keyed dict can't go into the history record as-is."""
+    nested: dict[str, dict[str, list]] = defaultdict(dict)
+    for (event_name, option), value in flat.items():
+        nested[event_name][option] = value
+    return dict(nested)
+
+
+def _print_event_value_table(
+    total: dict[tuple[str, str], list], adv_total: dict[tuple[str, str], list], title: str,
+) -> None:
+    """Event-choice counterpart to _print_option_value_table, grouped by event -- see
+    _decode_rest_event_names's docstring for why different events' options aren't rankable against
+    each other in one flat list the way cards or rest_site options are. Groups sorted
+    alphabetically by event name (stable across rounds, so the same event's block lands in the
+    same place each time you diff two rounds' output); options within a group sorted by
+    avg_value, best first."""
+    print(f"\n-- {title}: event option value, name-resolved, grouped by event -- 'avg_value' raw "
+          f"realized value from every option-chain that committed to this option; 'avg_vs_skip' "
+          f"= v_i - v0 against that same event's own leave_room value (materialize.py's causal "
+          f"baseline), positive means better than leaving without picking anything --")
+    if not total:
+        print("no event value data found.")
+        return
+    by_event: dict[str, list[tuple[str, int, float, str]]] = defaultdict(list)
+    for (event_name, option), (n, val_sum) in total.items():
+        adv_n, adv_sum = adv_total.get((event_name, option), (0, 0.0))
+        vs_skip = f"{adv_sum / adv_n:+.3f}" if adv_n else "n/a"
+        by_event[event_name].append((option, n, val_sum / n if n else 0.0, vs_skip))
+    print(f"{len(by_event)} distinct event(s)")
+    for event_name in sorted(by_event):
+        rows = sorted(by_event[event_name], key=lambda r: -r[2])
+        print(f"  {event_name}:")
+        for option, n, avg, vs_skip in rows:
+            print(f"    {option:<26} n={n:<5} avg_value={avg:>8.3f}  avg_vs_skip={vs_skip}")
+
+
 def _print_card_coverage_table(coverage: dict[str, list], n_rounds_total: int, title: str) -> None:
     """Cross-round -- unlike _print_card_value_table, this is safe to accumulate across rounds
     since it's just presence counts, not a situational value (see _aggregate's comment)."""
@@ -612,7 +660,7 @@ def main() -> None:
         event_total, event_adv_total = per_kind.get("event_choice", ({}, {}))
         _print_card_value_table(card_total, card_adv_total, "This round")
         _print_option_value_table(rest_total, rest_adv_total, "This round", "rest_site option")
-        _print_option_value_table(event_total, event_adv_total, "This round", "event option")
+        _print_event_value_table(event_total, event_adv_total, "This round")
         if n_units:
             print(f"(replayed {n_units - skipped}/{n_units} group(s)/trial(s) for card/rest/"
                   f"event identity; {skipped} skipped)")
@@ -643,8 +691,8 @@ def main() -> None:
         "card_adv_stats": card_adv_total,
         "rest_stats": rest_total,
         "rest_adv_stats": rest_adv_total,
-        "event_stats": event_total,
-        "event_adv_stats": event_adv_total,
+        "event_stats": _nest_event_dict(event_total),
+        "event_adv_stats": _nest_event_dict(event_adv_total),
         "card_groups_total": n_units,
         "card_groups_skipped": skipped,
     }
