@@ -359,6 +359,7 @@ def main() -> None:
               f"replaying independently from action 0")
 
     all_examples: list[Example] = []
+    per_file_counts: list[tuple[str, int]] = []
     with ProcessPoolExecutor(max_workers=args.jobs, initializer=_init_worker) as pool:
         futures = [
             pool.submit(_materialize_merged_task, path, groups_by_main_id.get(main_id, []))
@@ -372,11 +373,27 @@ def main() -> None:
                 continue
             assert examples is not None
             if examples:
-                print(f"{label}: {len(examples)} examples")
+                per_file_counts.append((label, len(examples)))
             all_examples.extend(examples)
 
+    _print_truncated_counts(per_file_counts)
     torch.save(all_examples, args.out)
     print(f"wrote {len(all_examples)} examples to {args.out}")
+
+
+def _print_truncated_counts(per_file_counts: list[tuple[str, int]], head_tail: int = 5) -> None:
+    """Print "{label}: N examples" per file, but only the first/last `head_tail` when there are
+    many -- with hundreds of raw trial files the full per-file listing just floods the terminal."""
+    total = len(per_file_counts)
+    if total <= 2 * head_tail:
+        for label, n in per_file_counts:
+            print(f"{label}: {n} examples")
+        return
+    for label, n in per_file_counts[:head_tail]:
+        print(f"{label}: {n} examples")
+    print(f"... ({total - 2 * head_tail} more files) ...")
+    for label, n in per_file_counts[-head_tail:]:
+        print(f"{label}: {n} examples")
 
 
 if __name__ == "__main__":

@@ -63,6 +63,37 @@ def _normalize_advantages(examples: list[dict]) -> None:
             ex["advantage"] = (ex["advantage"] - mean) / std
 
 
+def _snapshot(net: ChoicesParadoxNet) -> dict[str, torch.Tensor]:
+    return {k: v.detach().clone() for k, v in net.state_dict().items()}
+
+
+def _count_changed(before: dict[str, torch.Tensor], after: dict[str, torch.Tensor]) -> tuple[int, int]:
+    """Exact (not near-) equality: how many scalars in the whole network moved at all this epoch.
+    Sparse inputs (e.g. an embedding table) leave rows for unseen entities bit-for-bit unchanged,
+    so this doubles as a per-epoch coverage signal, not just a "did training run" sanity check."""
+    changed = total = 0
+    for k, b in before.items():
+        a = after[k]
+        total += a.numel()
+        changed += int((a != b).sum().item())
+    return changed, total
+
+
+def _l2_delta(before: dict[str, torch.Tensor], after: dict[str, torch.Tensor]) -> float:
+    """L2 norm of (after - before) across every parameter tensor, treating the whole network as
+    one flat vector. A step-size signal, not an overfitting signal by itself: it tracks how far
+    Adam moved the weights this epoch, which shrinks as the loss converges to a fixed point
+    regardless of whether that fixed point generalizes. It's only suggestive of overfitting
+    alongside a widening train/held-out loss gap -- large or non-decaying movement while train
+    loss keeps dropping is consistent with the net still chasing (memorizing) individual examples
+    rather than settling, but this alone can't distinguish that from a still-useful large update."""
+    total_sq = 0.0
+    for k, b in before.items():
+        a = after[k]
+        total_sq += ((a - b) ** 2).sum().item()
+    return total_sq ** 0.5
+
+
 def train(
     examples: list[dict], net: ChoicesParadoxNet, epochs: int, lr: float, seed: int = 0,
     value_only: bool = False,
@@ -70,6 +101,7 @@ def train(
     _normalize_advantages(examples)
     opt = torch.optim.Adam(net.parameters(), lr=lr)
     rng = random.Random(seed)
+    before = _snapshot(net)
 
     for epoch in range(epochs):
         order = list(range(len(examples)))
@@ -103,8 +135,14 @@ def train(
 
         n = len(examples)
         policy_avg = f"{total_policy / n_real:.4f} (n={n_real} real)" if n_real else "n/a"
+        after = _snapshot(net)
+        changed, total = _count_changed(before, after)
+        l2_delta = _l2_delta(before, after)
+        before = after
         print(f"epoch {epoch + 1}/{epochs}: policy_loss={policy_avg} "
-              f"value_loss={total_value / n:.4f}")
+              f"value_loss={total_value / n:.4f} "
+              f"params_changed={changed}/{total} ({changed / total:.1%}) "
+              f"param_delta_l2={l2_delta:.4f}")
 
 
 def main() -> None:

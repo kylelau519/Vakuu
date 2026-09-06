@@ -171,6 +171,7 @@ def main() -> None:
     ensure_setup()  # once, here, in the parent -- see claws/model/materialize.py's comment
 
     all_examples: list[Example] = []
+    per_file_counts: list[tuple[str, int]] = []
     with ProcessPoolExecutor(max_workers=args.jobs, initializer=_init_worker) as pool:
         futures = [pool.submit(_materialize_main_task, path) for path in trial_paths]
         for future in as_completed(futures):
@@ -180,11 +181,27 @@ def main() -> None:
                 continue
             assert examples is not None
             if examples:
-                print(f"{path}: {len(examples)} examples")
+                per_file_counts.append((path, len(examples)))
             all_examples.extend(examples)
 
+    _print_truncated_counts(per_file_counts)
     torch.save(all_examples, args.out)
     print(f"wrote {len(all_examples)} examples to {args.out}")
+
+
+def _print_truncated_counts(per_file_counts: list[tuple[str, int]], head_tail: int = 5) -> None:
+    """Print "{path}: N examples" per file, but only the first/last `head_tail` when there are
+    many -- with hundreds of raw trial files the full per-file listing just floods the terminal."""
+    total = len(per_file_counts)
+    if total <= 2 * head_tail:
+        for path, n in per_file_counts:
+            print(f"{path}: {n} examples")
+        return
+    for path, n in per_file_counts[:head_tail]:
+        print(f"{path}: {n} examples")
+    print(f"... ({total - 2 * head_tail} more files) ...")
+    for path, n in per_file_counts[-head_tail:]:
+        print(f"{path}: {n} examples")
 
 
 if __name__ == "__main__":

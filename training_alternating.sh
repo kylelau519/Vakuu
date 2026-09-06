@@ -173,7 +173,7 @@ while true; do
 
     echo "[golden 2/2] Training model..."
     python "$vakuu/agents/golden_compass/model/train.py" \
-        "$vakuu/agents/golden_compass/model/dataset.pt" --epochs 35 \
+        "$vakuu/agents/golden_compass/model/dataset.pt" --epochs 60 \
         --out "$vakuu/agents/golden_compass/model/golden_compass.pt" \
         --init "$GOLDEN_COMPASS_CHECKPOINT_PATH"
 

@@ -42,8 +42,8 @@ from stats import (
     _print_seed_table, _print_value_summary, _read_history, _seed_rows, _value_summary,
 )
 
-cp_materialize = cp_model = bl = Sts2BufferSession = decode_token = ensure_setup = None  # see
-# _import_choices_stats_deps -- only the card-stats replay path needs torch/the CLR bridge
+cp_materialize = cp_model = bl = Sts2BufferSession = Sts2Session = decode_token = ensure_setup = None
+# see _import_choices_stats_deps -- only the card-stats replay path needs torch/the CLR bridge
 
 
 def _import_choices_stats_deps() -> None:
@@ -52,7 +52,7 @@ def _import_choices_stats_deps() -> None:
     choices_paradox/model/, not claws/model/ -- a different package's materialize.py/model.py
     (different tokenizer, different _Group shape), never both in the same process (see
     facility_choices_paradox.py's own comment on why that matters)."""
-    global cp_materialize, cp_model, bl, Sts2BufferSession, decode_token, ensure_setup
+    global cp_materialize, cp_model, bl, Sts2BufferSession, Sts2Session, decode_token, ensure_setup
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "choices_paradox" / "model"))
     import materialize as _cp_materialize  # _scan_trials -- shared-prefix branch grouping
     import model as _cp_model  # legal_options_from_buffer
@@ -60,10 +60,12 @@ def _import_choices_stats_deps() -> None:
     import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imports below)
     import buffer_layout as _bl
     from buffer_env import Sts2BufferSession as _Sts2BufferSession, decode_token as _decode_token
+    from env import Sts2Session as _Sts2Session  # rest_site/event_choice name resolution only --
+    # see _rest_event_group_task's docstring for why these two need the JSON protocol, not buffer
     from installation import ensure_setup as _ensure_setup
 
     cp_materialize, cp_model = _cp_materialize, _cp_model
-    bl, Sts2BufferSession = _bl, _Sts2BufferSession
+    bl, Sts2BufferSession, Sts2Session = _bl, _Sts2BufferSession, _Sts2Session
     decode_token, ensure_setup = _decode_token, _ensure_setup
 
 
@@ -136,7 +138,76 @@ def _decode_option_names(decision, options: list[tuple[str, dict]]) -> list[str]
     return names
 
 
+def _decode_rest_event_names(decision, decision_kind: str, options: list[tuple[str, dict]]) -> list[str]:
+    """One name per legal_options(...) entry for a rest_site/event_choice decision -- "<leave_room>"
+    for that fixed non-option action, otherwise the JSON protocol's own per-option identity: a
+    RestOption's option_id (e.g. "REST_SITE_HEAL") or an EventOption's text_key, prefixed with the
+    event's name since text_key alone isn't guaranteed unique across different events. See
+    _rest_event_group_task's docstring for why this needs `decision` to come from Sts2Session
+    (JSON protocol), not the buffer-protocol decision _decode_option_names above works from."""
+    if decision_kind == "rest_site":
+        by_index = {o.index: o.option_id for o in decision.options}
+    else:
+        by_index = {o.index: f"{decision.event_name}: {o.text_key}" for o in decision.options}
+    names = []
+    for action, args in options:
+        names.append("<leave_room>" if action == "leave_room" else by_index.get(args["option_index"], "?"))
+    return names
+
+
 _stats_session: Sts2BufferSession | None = None
+_json_stats_session: Sts2Session | None = None  # lazy per worker -- most rounds have zero
+# rest_site/event_choice divergences, so don't pay for a dotnet subprocess unless one's needed
+
+
+def _get_json_stats_session() -> Sts2Session:
+    global _json_stats_session
+    if _json_stats_session is None:
+        _json_stats_session = Sts2Session()
+    return _json_stats_session
+
+
+def _rest_event_group_task(group) -> tuple[str, dict[str, list], dict[str, list], int]:
+    """JSON-protocol counterpart to _card_value_group_task, for rest_site/event_choice groups
+    only. The buffer protocol used everywhere else in this facility (see facility_choices_paradox.
+    _choose_meta_option_claws's own comment on this) carries no per-option identity for either
+    kind -- buffer_layout.rest_options()/event_options() expose only (present, is_enabled)/
+    is_locked flags, nothing like the card token that lets _decode_option_names name a card. The
+    JSON protocol's RestOption/EventOption models do carry a real id, so this replays the group's
+    shared prefix through a real dotnet subprocess (Sts2Session) instead of the in-process CLR
+    (Sts2BufferSession) the rest of this module uses, just to reach that one decision and read its
+    options' names off. Slower per group, but only run for the (typically few) rest_site/
+    event_choice divergences, not every trial -- see _rest_event_pick_stats."""
+    global _json_stats_session
+    session = _get_json_stats_session()
+    counts: dict[str, list] = defaultdict(lambda: [0, 0.0])
+    adv_counts: dict[str, list] = defaultdict(lambda: [0, 0.0])
+    try:
+        decision = session.start(group.character, group.seed, group.ascension)
+        for entry in group.prefix_actions:
+            decision = session.step(entry["action"], **entry.get("args", {}))
+        if decision.decision != group.decision_kind:
+            return group.decision_kind, {}, {}, 1
+
+        baseline = cp_materialize._group_baseline(group)
+        options = cp_model.legal_options(decision, group.decision_kind)
+        names = _decode_rest_event_names(decision, group.decision_kind, options)
+
+        for member in group.members:
+            idx = cp_materialize._option_index(options, member)
+            name = names[idx] if idx is not None else "?"
+            if "value" in member:
+                row = counts[name]
+                row[0] += 1
+                row[1] += member["value"]
+                if baseline is not None:
+                    adv_row = adv_counts[name]
+                    adv_row[0] += 1
+                    adv_row[1] += member["value"] - baseline
+        return group.decision_kind, dict(counts), dict(adv_counts), 0
+    except Exception:
+        _json_stats_session = None  # subprocess likely dead/wedged -- force a fresh one next task
+        return group.decision_kind, {}, {}, 1
 
 
 def _init_choices_stats_worker() -> None:
@@ -219,29 +290,49 @@ def _card_adoption_trial_task(path: str) -> tuple[dict[str, int], int]:
     return dict(counts), 0
 
 
-def _card_pick_stats(raw_dir: Path, jobs: int) -> tuple[dict[str, list], dict[str, list], int, int]:
-    """Returns (name -> [n_evaluated, value_sum, n_adopted], name -> [n_evaluated, advantage_sum]
-    (v_i - v0 vs. skip, only from groups with a real skip baseline), groups+trials skipped,
-    groups+trials total). Empty/zero if there's nothing to replay yet (e.g. round 1 before any
-    branch has finished)."""
+_CARD_DECISION_KINDS = frozenset({"card_reward", "event_card_reward"})
+_REST_EVENT_DECISION_KINDS = frozenset({"rest_site", "event_choice"})
+
+
+def _pick_stats(raw_dir: Path, jobs: int) -> tuple[dict, dict[str, list], dict[str, list], int, int]:
+    """Returns (per_kind, name -> [n_evaluated, value_sum, n_adopted] for card_reward/
+    event_card_reward only, name -> [n_evaluated, advantage_sum] for the same, groups+trials
+    skipped, groups+trials total). `per_kind` is {"rest_site": (total, adv_total), "event_choice":
+    (total, adv_total)} -- name -> [n_evaluated, value_sum] each, no adoption count (see
+    _rest_event_group_task's docstring: these two need a slow JSON-protocol replay per group, and
+    adding trial-level adoption counts on top would mean a second full JSON-protocol replay of
+    every main-line trial, not just the divergent groups -- skipped as not worth that cost yet).
+    Card pick stats are the pre-existing name-resolved table; empty/zero if there's nothing to
+    replay yet (e.g. round 1 before any branch has finished)."""
     _import_choices_stats_deps()
     paths = [str(p) for p in raw_dir.glob("*.json")]
     try:
         main_paths, groups = cp_materialize._scan_trials(paths)
     except Exception as e:
         print(f"warning: card-stats grouping pass failed ({type(e).__name__}: {e}); "
-              "skipping card stats for this round")
-        return {}, {}, 0, 0
+              "skipping card/rest/event stats for this round")
+        return {}, {}, {}, 0, 0
+
+    card_groups = [g for g in groups.values() if g.decision_kind in _CARD_DECISION_KINDS]
+    rest_groups = [g for g in groups.values() if g.decision_kind == "rest_site"]
+    event_groups = [g for g in groups.values() if g.decision_kind == "event_choice"]
 
     total: dict[str, list] = defaultdict(lambda: [0, 0.0, 0])
     adv_total: dict[str, list] = defaultdict(lambda: [0, 0.0])
+    rest_total: dict[str, list] = defaultdict(lambda: [0, 0.0])
+    rest_adv_total: dict[str, list] = defaultdict(lambda: [0, 0.0])
+    event_total: dict[str, list] = defaultdict(lambda: [0, 0.0])
+    event_adv_total: dict[str, list] = defaultdict(lambda: [0, 0.0])
     skipped = 0
     n_units = len(groups) + len(main_paths)
     if n_units == 0:
-        return {}, {}, 0, 0
+        return {}, {}, {}, 0, 0
 
     with ProcessPoolExecutor(max_workers=jobs, initializer=_init_choices_stats_worker) as pool:
-        value_futures = [pool.submit(_card_value_group_task, g) for g in groups.values()]
+        value_futures = [pool.submit(_card_value_group_task, g) for g in card_groups]
+        rest_event_futures = [
+            pool.submit(_rest_event_group_task, g) for g in (*rest_groups, *event_groups)
+        ]
         adoption_futures = [pool.submit(_card_adoption_trial_task, p) for p in main_paths]
         for fut in as_completed(value_futures):
             counts, adv_counts, skip = fut.result()
@@ -254,12 +345,31 @@ def _card_pick_stats(raw_dir: Path, jobs: int) -> tuple[dict[str, list], dict[st
                 adv_row = adv_total[name]
                 adv_row[0] += n
                 adv_row[1] += adv_sum
+        for fut in as_completed(rest_event_futures):
+            decision_kind, counts, adv_counts, skip = fut.result()
+            skipped += skip
+            dst, adv_dst = (
+                (rest_total, rest_adv_total) if decision_kind == "rest_site"
+                else (event_total, event_adv_total)
+            )
+            for name, (n, val_sum) in counts.items():
+                row = dst[name]
+                row[0] += n
+                row[1] += val_sum
+            for name, (n, adv_sum) in adv_counts.items():
+                adv_row = adv_dst[name]
+                adv_row[0] += n
+                adv_row[1] += adv_sum
         for fut in as_completed(adoption_futures):
             counts, skip = fut.result()
             skipped += skip
             for name, n in counts.items():
                 total[name][2] += n
-    return dict(total), dict(adv_total), skipped, n_units
+    per_kind = {
+        "rest_site": (dict(rest_total), dict(rest_adv_total)),
+        "event_choice": (dict(event_total), dict(event_adv_total)),
+    }
+    return per_kind, dict(total), dict(adv_total), skipped, n_units
 
 
 def _print_card_value_table(total: dict[str, list], adv_total: dict[str, list], title: str) -> None:
@@ -280,6 +390,29 @@ def _print_card_value_table(total: dict[str, list], adv_total: dict[str, list], 
     print(f"{'card':<28} {'n_evaluated':>11} {'avg_value':>10} {'avg_vs_skip':>12} {'n_adopted':>10}")
     for name, n, avg, vs_skip, n_adopted in rows:
         print(f"{name:<28} {n:>11} {avg:>10.3f} {vs_skip:>12} {n_adopted:>10}")
+
+
+def _print_option_value_table(
+    total: dict[str, list], adv_total: dict[str, list], title: str, name_header: str,
+) -> None:
+    """Same shape as _print_card_value_table, minus the n_adopted column -- rest_site/event_choice
+    stats only come from group replays (see _pick_stats), no trial-level adoption replay."""
+    print(f"\n-- {title}: {name_header} value, name-resolved -- 'avg_value' raw realized value "
+          f"from every option-chain that committed to this option; 'avg_vs_skip' = v_i - v0 "
+          f"against that same draft's own skip-option value (materialize.py's causal baseline), "
+          f"positive means better than not picking anything --")
+    if not total:
+        print(f"no {name_header} value data found.")
+        return
+    rows = []
+    for name, (n, val_sum) in total.items():
+        adv_n, adv_sum = adv_total.get(name, (0, 0.0))
+        vs_skip = f"{adv_sum / adv_n:+.3f}" if adv_n else "n/a"
+        rows.append((name, n, val_sum / n if n else 0.0, vs_skip))
+    rows.sort(key=lambda r: -r[2])
+    print(f"{name_header:<28} {'n_evaluated':>11} {'avg_value':>10} {'avg_vs_skip':>12}")
+    for name, n, avg, vs_skip in rows:
+        print(f"{name:<28} {n:>11} {avg:>10.3f} {vs_skip:>12}")
 
 
 def _print_card_coverage_table(coverage: dict[str, list], n_rounds_total: int, title: str) -> None:
@@ -406,8 +539,9 @@ def main() -> None:
                          help="parallel worker processes for the card-stats replay pass "
                               "(default: cpu count)")
     parser.add_argument("--no-card-stats", action="store_true",
-                         help="skip the replay-based, name-resolved card table (faster; floor/"
-                              "outcome/adoption stats only, still logged to history)")
+                         help="skip the replay-based, name-resolved card/rest_site/event_choice "
+                              "tables (faster; floor/outcome/adoption stats only, still logged "
+                              "to history)")
     parser.add_argument("--history-only", action="store_true",
                          help="just pretty-print --history-file's cumulative Summary/trend "
                               "tables and exit -- doesn't touch --raw-dir or append a new round")
@@ -465,15 +599,23 @@ def main() -> None:
 
     card_total: dict[str, list] = {}
     card_adv_total: dict[str, list] = {}
+    rest_total: dict[str, list] = {}
+    rest_adv_total: dict[str, list] = {}
+    event_total: dict[str, list] = {}
+    event_adv_total: dict[str, list] = {}
     skipped = n_units = 0
     if not args.no_card_stats:
         _import_choices_stats_deps()
         ensure_setup()
-        card_total, card_adv_total, skipped, n_units = _card_pick_stats(raw_dir, args.jobs)
+        per_kind, card_total, card_adv_total, skipped, n_units = _pick_stats(raw_dir, args.jobs)
+        rest_total, rest_adv_total = per_kind.get("rest_site", ({}, {}))
+        event_total, event_adv_total = per_kind.get("event_choice", ({}, {}))
         _print_card_value_table(card_total, card_adv_total, "This round")
+        _print_option_value_table(rest_total, rest_adv_total, "This round", "rest_site option")
+        _print_option_value_table(event_total, event_adv_total, "This round", "event option")
         if n_units:
-            print(f"(replayed {n_units - skipped}/{n_units} group(s)/trial(s) for card "
-                  f"identity; {skipped} skipped)")
+            print(f"(replayed {n_units - skipped}/{n_units} group(s)/trial(s) for card/rest/"
+                  f"event identity; {skipped} skipped)")
 
     history = _read_history(history_file)
     round_num = (args.round if args.round is not None
@@ -499,6 +641,10 @@ def main() -> None:
         "adopted_value_summary": _value_summary(adopted_values),
         "card_stats": card_total,
         "card_adv_stats": card_adv_total,
+        "rest_stats": rest_total,
+        "rest_adv_stats": rest_adv_total,
+        "event_stats": event_total,
+        "event_adv_stats": event_adv_total,
         "card_groups_total": n_units,
         "card_groups_skipped": skipped,
     }
