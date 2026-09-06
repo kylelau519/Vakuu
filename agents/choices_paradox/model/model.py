@@ -21,22 +21,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # for `common`
 from common.tokenizer import EntityVocab  # noqa: E402
 
 import sts2_path  # noqa: E402,F401  (sets sys.path to sts2-cli/python before the imports below)
-from models import CardReward, CardSelect  # noqa: E402
+from models import CardReward, CardSelect, EventChoice, RestSite  # noqa: E402
 import buffer_layout as bl  # noqa: E402
 from buffer_env import BufferDecision, decode_token  # noqa: E402
 
 # --- token types --------------------------------------------------------------------------------
 
-TOKEN_TYPES = ["PLAYER", "MODE", "DECK_CARD", "OFFER_CARD", "RELIC"]
+TOKEN_TYPES = [
+    "PLAYER", "MODE", "DECK_CARD", "OFFER_CARD", "RELIC", "REST_OPTION", "EVENT_OPTION", "BOSS",
+]
 _TYPE_TO_IDX = {t: i for i, t in enumerate(TOKEN_TYPES)}
 
 FEATURE_DIM = 4
 
-# Sized for all three from the start (not just card_reward, the only one wired through
-# facility_choices_paradox.py so far) -- see this module's docstring / the package README's Phasing section for
-# why: adding card_select's two purposes later must not resize this table and break checkpoint
-# compatibility with whatever's already been trained.
-DECISION_KINDS = ["card_reward", "card_select_remove", "card_select_upgrade"]
+DECISION_KINDS = [
+    "card_reward", "card_select_remove", "card_select_upgrade", "rest_site", "event_choice",
+]
 _KIND_TO_IDX = {k: i for i, k in enumerate(DECISION_KINDS)}
 
 
@@ -97,7 +97,10 @@ class TokenBatch:
         )
 
 
-def tokenize(decision: CardReward | CardSelect, decision_kind: str, gvocab: GlobalVocab) -> TokenBatch:
+def tokenize(
+    decision: CardReward | CardSelect | RestSite | EventChoice, decision_kind: str,
+    gvocab: GlobalVocab,
+) -> TokenBatch:
     types: list[int] = []
     ids: list[int] = []
     feats: list[list[float]] = []
@@ -130,15 +133,33 @@ def tokenize(decision: CardReward | CardSelect, decision_kind: str, gvocab: Glob
         )
 
     offer_pos: dict[int, int] = {}
-    for card in decision.cards:
-        pos = add(
-            "OFFER_CARD", gvocab.card(card.id),
-            [_log1p(card.cost), float(bool(card.upgraded)), 0.0, 0.0],
-        )
-        offer_pos[card.index] = pos
+    if decision_kind == "rest_site":
+        for option in decision.options:
+            if not option.is_enabled:
+                continue
+            pos = add("REST_OPTION", EntityVocab.PAD_IDX, [0.0] * FEATURE_DIM)
+            offer_pos[option.index] = pos
+    elif decision_kind == "event_choice":
+        for option in decision.options:
+            if option.is_locked:
+                continue
+            pos = add("EVENT_OPTION", EntityVocab.PAD_IDX, [0.0] * FEATURE_DIM)
+            offer_pos[option.index] = pos
+    else:
+        for card in decision.cards:
+            pos = add(
+                "OFFER_CARD", gvocab.card(card.id),
+                [_log1p(card.cost), float(bool(card.upgraded)), 0.0, 0.0],
+            )
+            offer_pos[card.index] = pos
 
     for relic in player.relics:
         add("RELIC", gvocab.entity("relic", relic.id), [0.0, 0.0, _log1p(relic.counter), 0.0])
+
+    # No BOSS token here -- unlike tokenize_from_buffer(), none of CardReward/CardSelect/RestSite/
+    # EventChoice carry a RunContext (act boss info lives only in the buffer protocol's always-
+    # present RUN_CONTEXT section, read via bl.run_context()). Not wired through the pydantic/JSON
+    # path since materialize.py/training only ever uses tokenize_from_buffer() -- see there.
 
     return TokenBatch(
         type_ids=torch.tensor(types, dtype=torch.long),
@@ -188,21 +209,38 @@ def tokenize_from_buffer(buf: BufferDecision, decision_kind: str, gvocab: Global
             [_log1p(slot[bl.CARD_COST]), float(bool(slot[bl.CARD_UPGRADED])), 0.0, 0.0],
         )
 
-    if decision_kind == "card_reward":
-        offer_iter = (
-            bl.event_card_reward_cards(arr) if buf.decision == "event_card_reward"
-            else bl.reward_cards(arr)
-        )
-    else:
-        offer_iter = bl.select_cards(arr)
     offer_pos: dict[int, int] = {}
-    for idx, slot in offer_iter:
-        entry = decode_token(bl.card_token(slot))
-        pos = add(
-            "OFFER_CARD", gvocab.entity("card", entry),
-            [_log1p(slot[bl.CARD_COST]), float(bool(slot[bl.CARD_UPGRADED])), 0.0, 0.0],
-        )
-        offer_pos[idx] = pos
+    if decision_kind == "rest_site":
+        # No option-id-equivalent token in the buffer protocol yet (see tokenize()'s matching
+        # comment and model/README.md's Open questions) -- identity-less REST_OPTION tokens,
+        # positional offer_pos only.
+        for i, slot in bl.rest_options(arr):
+            if int(slot[1]) != 1:
+                continue
+            pos = add("REST_OPTION", EntityVocab.PAD_IDX, [0.0] * FEATURE_DIM)
+            offer_pos[i] = pos
+    elif decision_kind == "event_choice":
+        # Same identity-less reasoning -- no per-option id/title/vars in the buffer either.
+        for i, is_locked in bl.event_options(arr):
+            if is_locked:
+                continue
+            pos = add("EVENT_OPTION", EntityVocab.PAD_IDX, [0.0] * FEATURE_DIM)
+            offer_pos[i] = pos
+    else:
+        if decision_kind == "card_reward":
+            offer_iter = (
+                bl.event_card_reward_cards(arr) if buf.decision == "event_card_reward"
+                else bl.reward_cards(arr)
+            )
+        else:
+            offer_iter = bl.select_cards(arr)
+        for idx, slot in offer_iter:
+            entry = decode_token(bl.card_token(slot))
+            pos = add(
+                "OFFER_CARD", gvocab.entity("card", entry),
+                [_log1p(slot[bl.CARD_COST]), float(bool(slot[bl.CARD_UPGRADED])), 0.0, 0.0],
+            )
+            offer_pos[idx] = pos
 
     for _, slot in bl.player_relics(arr):
         entry = decode_token(int(slot[bl.RELIC_TOKEN]))
@@ -211,6 +249,18 @@ def tokenize_from_buffer(buf: BufferDecision, decision_kind: str, gvocab: Global
             "RELIC", gvocab.entity("relic", entry),
             [0.0, 0.0, _log1p(counter if counter != -1 else None), 0.0],
         )
+
+    # RUN_CONTEXT is written regardless of decision type (same as PlayerSummary), so this act's
+    # boss encounter(s) are available at every decision, not just rest_site's -- deck-building and
+    # rest/upgrade choices can both reasonably depend on what's coming. boss2 is most acts' "NONE"
+    # (a real sentinel string, not an absent slot -- RunSimulator.cs always writes it), which
+    # decode_token/gvocab.entity resolve to the same UNKNOWN_IDX as any other unrecognized id, no
+    # special-casing needed. The feature flags which of the two this token is (irrelevant for
+    # single-boss acts, since boss2 is UNKNOWN anyway).
+    ctx = bl.run_context(arr)
+    for key, is_primary in (("boss1_token", 1.0), ("boss2_token", 0.0)):
+        entry = decode_token(ctx[key])
+        add("BOSS", gvocab.entity("encounter", entry), [is_primary, 0.0, 0.0, 0.0])
 
     return TokenBatch(
         type_ids=torch.tensor(types, dtype=torch.long),
@@ -226,13 +276,30 @@ def tokenize_from_buffer(buf: BufferDecision, decision_kind: str, gvocab: Global
 # --- legal options (the policy head's action space) -----------------------------------------------
 
 
-def legal_options(decision: CardReward | CardSelect, decision_kind: str) -> list[tuple[str, dict]]:
+def legal_options(
+    decision: CardReward | CardSelect | RestSite | EventChoice, decision_kind: str
+) -> list[tuple[str, dict]]:
     if decision_kind == "card_reward":
         options: list[tuple[str, dict]] = [
             ("select_card_reward", {"card_index": c.index}) for c in decision.cards
         ]
         if decision.can_skip:
             options.append(("skip_card_reward", {}))
+        return options
+
+    if decision_kind == "rest_site":
+        options = [
+            ("choose_option", {"option_index": o.index}) for o in decision.options if o.is_enabled
+        ]
+        options.append(("leave_room", {}))
+        return options
+
+    if decision_kind == "event_choice":
+        options = [
+            ("choose_option", {"option_index": o.index}) for o in decision.options
+            if not o.is_locked
+        ]
+        options.append(("leave_room", {}))
         return options
 
     options = [("select_cards", {"indices": [c.index]}) for c in decision.cards]
@@ -244,6 +311,20 @@ def legal_options(decision: CardReward | CardSelect, decision_kind: str) -> list
 def legal_options_from_buffer(buf: BufferDecision, decision_kind: str) -> list[tuple[str, dict]]:
     """Buffer counterpart to legal_options() -- same enumeration, read off buf.arr. """
     arr = buf.arr
+    if decision_kind == "rest_site":
+        options: list[tuple[str, dict]] = [
+            ("choose_option", {"option_index": i}) for i, slot in bl.rest_options(arr)
+            if int(slot[1]) == 1
+        ]
+        options.append(("leave_room", {}))
+        return options
+    if decision_kind == "event_choice":
+        options = [
+            ("choose_option", {"option_index": i}) for i, is_locked in bl.event_options(arr)
+            if not is_locked
+        ]
+        options.append(("leave_room", {}))
+        return options
     if decision_kind == "card_reward":
         if buf.decision == "event_card_reward":
             options: list[tuple[str, dict]] = [
@@ -265,6 +346,29 @@ def legal_options_from_buffer(buf: BufferDecision, decision_kind: str) -> list[t
     if bl.min_select(arr) == 0:
         options.append(("skip_select", {}))
     return options
+
+
+def load_state_dict_allowing_growth(net: nn.Module, state_dict: dict) -> None:
+    """Loads a checkpoint saved before TOKEN_TYPES/DECISION_KINDS grew (e.g. rest_site added to
+    an already-training-in-production card_reward-only model, adding REST_OPTION to TOKEN_TYPES
+    and rest_site to DECISION_KINDS). A brand-new feat_proj.<TYPE> entry is simply absent from an
+    old checkpoint -- strict=False already tolerates that as a missing key, leaving it at its
+    fresh random init. type_emb.weight/mode_emb.weight are different: they're still PRESENT keys,
+    just with fewer rows than this process's TOKEN_TYPES/DECISION_KINDS now expects, which a plain
+    load_state_dict (or a bare strict=False) hard-fails on as a shape mismatch rather than
+    tolerating. This preserves every old row in place and leaves new ones at the net's own random
+    init, so growing either list never discards a live training run's accumulated weights."""
+    own = net.state_dict()
+    to_load = dict(state_dict)
+    for key in ("type_emb.weight", "mode_emb.weight"):
+        saved = to_load.get(key)
+        if saved is None or saved.shape == own[key].shape:
+            continue
+        n = min(saved.shape[0], own[key].shape[0])
+        with torch.no_grad():
+            own[key][:n] = saved[:n]
+        del to_load[key]
+    net.load_state_dict(to_load, strict=False)
 
 
 # --- network -------------------------------------------------------------------------------------
@@ -296,7 +400,7 @@ class ChoicesParadoxNet(nn.Module):
     def from_checkpoint(cls, path: str, **kwargs) -> "ChoicesParadoxNet":
         """Loads a train.py-saved state_dict against a freshly loaded vocab."""
         net = cls(GlobalVocab(EntityVocab.load()), **kwargs)
-        net.load_state_dict(torch.load(path, weights_only=True))
+        load_state_dict_allowing_growth(net, torch.load(path, weights_only=True))
         net.eval()
         return net
 
@@ -372,12 +476,14 @@ class ChoicesParadoxNet(nn.Module):
         h = self.encode(batch)
         queries = []
         for action, args in options:
-            if action in ("skip_card_reward", "skip_select"):
+            if action in ("skip_card_reward", "skip_select", "leave_room"):
                 q = self.skip_query + h[batch.player_pos]
             elif action == "select_card_reward":
                 q = h[batch.offer_pos[args["card_index"]]]
             elif action == "select_cards":
                 q = h[batch.offer_pos[args["indices"][0]]]
+            elif action == "choose_option":
+                q = h[batch.offer_pos[args["option_index"]]]
             else:
                 raise ValueError(f"unhandled meta action {action!r}")
             queries.append(q)
@@ -390,7 +496,9 @@ class ChoicesParadoxNet(nn.Module):
         return logits, value
 
     def forward(
-        self, decision: CardReward | CardSelect | BufferDecision, decision_kind: str
+        self,
+        decision: CardReward | CardSelect | RestSite | EventChoice | BufferDecision,
+        decision_kind: str,
     ) -> tuple[list[tuple[str, dict]], torch.Tensor, torch.Tensor]:
         if isinstance(decision, BufferDecision):
             batch = tokenize_from_buffer(decision, decision_kind, self.gvocab)

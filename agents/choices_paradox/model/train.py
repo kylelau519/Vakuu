@@ -41,7 +41,9 @@ torch.set_num_threads(1)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # for `common`
 from common.tokenizer import EntityVocab  # noqa: E402
 
-from model import ChoicesParadoxNet, GlobalVocab, TokenBatch  # noqa: E402
+from model import (  # noqa: E402
+    ChoicesParadoxNet, GlobalVocab, TokenBatch, load_state_dict_allowing_growth,
+)
 
 _LOGP_FLOOR = -6.0  # ~0.25% probability -- see module docstring for why this exists
 
@@ -136,7 +138,7 @@ def main() -> None:
 
     if args.init:
         net = ChoicesParadoxNet(GlobalVocab(EntityVocab.load()))
-        net.load_state_dict(torch.load(args.init, weights_only=True))
+        load_state_dict_allowing_growth(net, torch.load(args.init, weights_only=True))
         print(f"resumed from {args.init}")
     elif args.warm_start_from:
         net = ChoicesParadoxNet.warm_started_from(args.warm_start_from)

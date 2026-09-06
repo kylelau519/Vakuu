@@ -206,8 +206,13 @@ class FacilityConfig:
     raw_dir: str = "data/raw"
     verbose: bool = False  
     stall_timeout_s: float = 300.0
-    # Meta-decision (card_reward, eventually card_select) branching 
+    # Meta-decision (card_reward, rest_site, eventually card_select) branching
     meta_branches_per_trial: int | None = 0  # 0 = disabled; None = unlimited
+    # None = play each option-chain to natural death (original behavior); a positive int caps
+    # how many combats a chain plays past its own commit before it's scored on whatever
+    # total_value it's accumulated so far -- see _run_meta_option_job. No terminal penalty either
+    # way, same reasoning as the unbounded case: cutting a chain off early isn't a loss.
+    meta_horizon_combats: int | None = None
 
 
 def _bypass_card_reward(session) -> None:
@@ -291,7 +296,7 @@ def _clean_actions(actions: list[dict]) -> list[dict]:
     ]
 
 
-META_ELIGIBLE_DECISIONS = frozenset({"card_reward"})
+META_ELIGIBLE_DECISIONS = frozenset({"card_reward", "rest_site", "event_choice"})
 _META_DRAIN_TIMEOUT = 30.0
 
 
@@ -360,9 +365,21 @@ class _TrialState:
     checkpoint_dir: str
     meta_budget: int | None
     combat_checkpoint_path: str | None = None
-    # Native checkpoint (and its entry action's position in action_log)
-    last_combat_checkpoint_path: str | None = None
-    last_combat_entry_index: int | None = None
+    # Native checkpoint (and its entry action's position in action_log) taken before the most
+    # recently entered room, of ANY type -- not just combat. Meta-decision reconstruction
+    # (_resolve_meta_decision/_run_meta_option_job) needs this fast-path replay base for
+    # rest_site/event_choice divergences exactly as much as it does for a card_reward one right
+    # after a combat; see room_index below for why the checkpoint file itself can't be keyed off
+    # combat_index the way it used to be.
+    last_room_checkpoint_path: str | None = None
+    last_room_entry_index: int | None = None
+    # Increments once per select_map_node, regardless of what room it leads into -- combat_index
+    # (a _play_trial local, not tracked here) only increments for actual combats, so keying the
+    # checkpoint filename off it collided whenever two non-combat rooms (e.g. a rest_site then an
+    # event_choice) were entered before the next real combat: both would compute the same
+    # "combat_index + 1" and silently overwrite each other's checkpoint file out from under any
+    # branch job still reading the first one.
+    room_index: int = 0
     pending_purpose: str | None = None  # threaded through choose_action -- see its docstring
     divergence_index: int = 0
     checkpoint_paths_this_trial: list = field(default_factory=list)
@@ -396,8 +413,6 @@ def _play_trial(
     while decision.decision != "game_over":
         if decision.decision == "combat_play":
             combat_index += 1
-            state.last_combat_checkpoint_path = state.combat_checkpoint_path
-            state.last_combat_entry_index = len(state.session.action_log) - 1
             state.session, decision, combat_outcome = combat_resolver(
                 job_queue_priority, results_queue, main_worker_index, cfg, recorder,
                 state.session, decision, character, seed, main_id, combat_index, stop_event,
@@ -427,7 +442,7 @@ def _play_trial(
                 job_queue, results_queue, meta_results_queue, main_worker_index, cfg,
                 recorder, state.session, decision, character, seed, main_id,
                 decision.decision, state.divergence_index, stop_event, queue_manager,
-                state.last_combat_checkpoint_path, state.last_combat_entry_index,
+                state.last_room_checkpoint_path, state.last_room_entry_index,
             )
             for meta_id, ckpt_path, is_adopted, commit_step in new_pending:
                 state.pending_meta_jobs[meta_id] = (ckpt_path, is_adopted, commit_step)
@@ -456,15 +471,19 @@ def _play_trial(
                 None,
             )
             state.pending_map_step_types.append(chosen.type if chosen is not None else None)
+            state.room_index += 1
             checkpoint_path = os.path.join(
-                state.checkpoint_dir, f"{main_id}_c{combat_index + 1:03d}.json"
+                state.checkpoint_dir, f"{main_id}_r{state.room_index:03d}.json"
             )
             os.makedirs(state.checkpoint_dir, exist_ok=True)
             state.session.save(checkpoint_path)
             state.checkpoint_paths_this_trial.append(checkpoint_path)
         decision = state.session.step(name, **kwargs)
-        if name == "select_map_node" and decision.decision == "combat_play":
-            state.combat_checkpoint_path = checkpoint_path
+        if name == "select_map_node":
+            state.last_room_checkpoint_path = checkpoint_path
+            state.last_room_entry_index = len(state.session.action_log) - 1
+            if decision.decision == "combat_play":
+                state.combat_checkpoint_path = checkpoint_path
 
     return ("won" if decision.victory else "lost"), decision
 
@@ -511,16 +530,18 @@ def main_worker_loop(
 
     meta_resolver(job_queue, results_queue, meta_results_queue, main_worker_index, cfg, recorder,
     session, decision, character, seed, main_id, decision_kind, divergence_index, stop_event,
-    queue_manager, last_combat_checkpoint_path, last_combat_entry_index) -> (decision,
+    queue_manager, last_room_checkpoint_path, last_room_entry_index) -> (decision,
     pending_meta_jobs): called whenever decision.decision is META_ELIGIBLE and this trial's
     meta-branch budget (cfg.meta_branches_per_trial) allows it. pending_meta_jobs is a list of
     (meta_id, checkpoint_path, is_adopted, commit_step) tuples for jobs just dispatched onto
     job_queue. None (facility_claws.py's case) means meta-eligible decisions just fall through to
-    choose_action(). last_combat_checkpoint_path/entry_index (may be None pre-first-combat) locate
-    the most recently entered combat's checkpoint and its entry point in action_log -- a
+    choose_action(). last_room_checkpoint_path/entry_index (may be None pre-first-room) locate the
+    most recently entered room's checkpoint (of ANY room type, not just combat -- a card_reward
+    right after combat, a rest_site, an event_choice, ... may all share the same one if no fresh
+    select_map_node happened in between) and its entry action's position in action_log -- a
     checkpoint taken directly at the pending decision does NOT work for reconstructing "right
-    after that combat" (confirmed by hand: save/load_save doesn't preserve a pending decision
-    screen).
+    after entering this room" (confirmed by hand: save/load_save doesn't preserve a pending
+    decision screen).
 
     manager_address/manager_authkey: (address, authkey) to reconnect to the Facility's own
     multiprocessing.Manager() via SyncManager(...).connect() -- this worker is daemonic and can't

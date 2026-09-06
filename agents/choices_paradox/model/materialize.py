@@ -73,7 +73,7 @@ class _Group:
     members: list[dict] = field(default_factory=list)
 
 
-_SKIP_ACTIONS = frozenset({"skip_card_reward", "skip_select"})
+_SKIP_ACTIONS = frozenset({"skip_card_reward", "skip_select", "leave_room"})
 
 
 def _group_baseline(group: _Group) -> float | None:
@@ -156,7 +156,9 @@ def materialize_group(
     decision = session.start(group.character, group.seed, group.ascension)
     for entry in group.prefix_actions:
         decision = session.step(entry["action"], **entry.get("args", {}))
-    if decision.decision not in ("card_reward", "event_card_reward", "card_select"):
+    if decision.decision not in (
+        "card_reward", "event_card_reward", "card_select", "rest_site", "event_choice"
+    ):
         return []  # defensive -- a meta-branch checkpoint should always land on one of these.
         # event_card_reward is the blessing-triggered buffer-side variant of a "card_reward"
         # decision_kind (STS2's JSON protocol unifies both under one "card_reward" literal, but
@@ -221,16 +223,19 @@ def materialize_main_and_groups(
         # of a meta-branch group whose prefix is the trial's ENTIRE action log.
         entry = actions[i] if i < len(actions) else None
         is_policy_point = (
-            entry is not None and decision.decision in ("card_reward", "event_card_reward")
+            entry is not None
+            and decision.decision in (
+                "card_reward", "event_card_reward", "rest_site", "event_choice"
+            )
             and "policy" in entry
         )
         if is_policy_point:
-            # decision_kind passed down is always "card_reward" -- matches what
-            # _resolve_meta_decision recorded on the main line (mirroring the JSON protocol's own
-            # unified literal), even when this buffer-side replay shows the blessing-triggered
-            # "event_card_reward" kind.
-            options = legal_options_from_buffer(decision, "card_reward")
-            batch = tokenize_from_buffer(decision, "card_reward", gvocab)
+            decision_kind = (
+                "card_reward" if decision.decision in ("card_reward", "event_card_reward")
+                else decision.decision
+            )
+            options = legal_options_from_buffer(decision, decision_kind)
+            batch = tokenize_from_buffer(decision, decision_kind, gvocab)
             examples.append({
                 "type_ids": batch.type_ids,
                 "global_ids": batch.global_ids,
@@ -247,7 +252,9 @@ def materialize_main_and_groups(
             })
 
         groups_here = groups_by_len.get(i, [])
-        if groups_here and decision.decision in ("card_reward", "event_card_reward", "card_select"):
+        if groups_here and decision.decision in (
+            "card_reward", "event_card_reward", "card_select", "rest_site", "event_choice"
+        ):
             # All groups sharing one (main_id, prefix) key share one decision_kind -- same
             # assumption materialize_group itself makes (there's only one real game decision at
             # this exact point in this exact trial).

@@ -61,6 +61,12 @@ def _choose_meta_option_claws(decision, decision_kind: str, options: list[tuple[
 
     net = _load_choices_paradox_net()
     if net is None:
+        if decision_kind != "card_reward":
+            # No pre-net heuristic wired up for rest_site yet (its buffer-side option slots carry
+            # no identity to prefer HEAL over SMITH by -- see model.py's tokenize_from_buffer),
+            # and no card_select one either -- uniform random until a checkpoint exists, same
+            # "reasonable, not trained" spirit as choices_paradox/policy.py's own placeholders.
+            return random.randrange(len(options))
         index = _choices_paradox_policy.choose_card_reward(
             decision.cards, decision.can_skip, decision.player.deck_size or 0
         )
@@ -98,12 +104,14 @@ def _run_meta_option_job(cfg: FacilityConfig, job: MetaOptionJob, results_queue)
     outcome = None
     try:
         try:
-            # Fast load from checkpoint
-            if job.last_combat_checkpoint_path is not None and job.last_combat_entry_index is not None:
-                entry_action = job.prefix[job.last_combat_entry_index]
-                in_combat_actions = job.prefix[job.last_combat_entry_index + 1:]
+            # Fast load from checkpoint -- the checkpoint taken before whichever room was most
+            # recently entered (combat, rest_site, event_choice, ...; see _TrialState.room_index),
+            # not necessarily a combat's own.
+            if job.last_room_checkpoint_path is not None and job.last_room_entry_index is not None:
+                entry_action = job.prefix[job.last_room_entry_index]
+                room_actions = job.prefix[job.last_room_entry_index + 1:]
                 decision = session.load_and_resume_combat(
-                    job.last_combat_checkpoint_path, entry_action, in_combat_actions
+                    job.last_room_checkpoint_path, entry_action, room_actions
                 )
             else:
                 decision = session.open_from_checkpoint(
@@ -118,6 +126,7 @@ def _run_meta_option_job(cfg: FacilityConfig, job: MetaOptionJob, results_queue)
             random.seed(job.walk_seed)
             torch.manual_seed(job.walk_seed)
 
+            combats_resolved = 0
             while decision.decision != "game_over":
                 if decision.decision == "combat_play":
                     combat_hp_before, combat_max_hp = decision.player_hp, decision.player_max_hp
@@ -133,6 +142,14 @@ def _run_meta_option_job(cfg: FacilityConfig, job: MetaOptionJob, results_queue)
                     total_value += _WIN_BONUS + _combat_value(
                         CombatOutcome(decision.player_hp, decision.player_max_hp)
                     )
+                    combats_resolved += 1
+                    if job.horizon_combats is not None and combats_resolved >= job.horizon_combats:
+                        # Bounded-horizon cutoff -- not a loss, just stop measuring here. Same "no
+                        # terminal penalty" reasoning as the natural-death case: total_value is
+                        # whatever this chain accumulated up to the cutoff, no bonus or penalty
+                        # for what would have happened past it.
+                        outcome = "horizon"
+                        break
                     continue
 
                 # card_reward_dirichlet_noise=False: any card_reward this chain hits past its own
@@ -170,7 +187,7 @@ def _resolve_meta_decision(
     job_queue, results_queue, meta_results_queue, main_worker_index: int, cfg: FacilityConfig,
     recorder: CompactRecorder, session, decision, character: str, seed: str, main_id: str,
     decision_kind: str, divergence_index: int, stop_event, queue_manager,
-    last_combat_checkpoint_path: str | None, last_combat_entry_index: int | None,
+    last_room_checkpoint_path: str | None, last_room_entry_index: int | None,
 ):
     """"""
     options = legal_options(decision, decision_kind)
@@ -197,16 +214,17 @@ def _resolve_meta_decision(
             main_id=main_id, character=character, seed=seed, ascension=cfg.ascension,
             decision_kind=decision_kind, divergence_index=divergence_index,
             option_index=option_index, prefix=prefix,
-            last_combat_checkpoint_path=last_combat_checkpoint_path,
-            last_combat_entry_index=last_combat_entry_index,
+            last_room_checkpoint_path=last_room_checkpoint_path,
+            last_room_entry_index=last_room_entry_index,
             commit_name=opt_name, commit_args=opt_args, walk_seed=walk_seed,
+            horizon_combats=cfg.meta_horizon_combats,
         )
         # The dispatched-to queue travels with the job itself, not looked up from a table -- see
         # branch_worker_loop's docstring. Lands on the plain (low-priority) job_queue so this
         # trial's own combat turn-branches (job_queue_priority) are never stuck behind it.
         job_queue.put((job, meta_results_queue))
         pending_meta_jobs.append(
-            (job.meta_id, last_combat_checkpoint_path, option_index == adopted_index, commit_step)
+            (job.meta_id, last_room_checkpoint_path, option_index == adopted_index, commit_step)
         )
 
     return decision, pending_meta_jobs
@@ -229,6 +247,9 @@ if __name__ == "__main__":
     parser.add_argument("--meta-branches-per-trial", type=int, default=None,
                          help="cap on how many card_reward decisions per trial actually spawn "
                               "chains (default: unlimited)")
+    parser.add_argument("--meta-horizon-combats", type=int, default=None,
+                         help="cap each option-chain at this many combats past its own commit "
+                              "instead of playing to natural death (default: unbounded)")
     args = parser.parse_args()
 
     resume = load_resume(args.resume_branch_file) if args.resume_branch_file else None
@@ -244,6 +265,7 @@ if __name__ == "__main__":
             raw_dir=args.raw_dir,
             verbose=args.verbose,
             meta_branches_per_trial=args.meta_branches_per_trial,
+            meta_horizon_combats=args.meta_horizon_combats,
         ),
         main_worker_fn=functools.partial(
             main_worker_loop, combat_resolver=_resolve_combat, meta_resolver=_resolve_meta_decision,

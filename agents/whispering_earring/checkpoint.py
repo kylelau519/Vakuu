@@ -90,11 +90,12 @@ class MetaOptionJob:
     divergence_index: int
     option_index: int
     prefix: list[dict]
-    last_combat_checkpoint_path: str | None
-    last_combat_entry_index: int | None
+    last_room_checkpoint_path: str | None
+    last_room_entry_index: int | None
     commit_name: str
     commit_args: dict
     walk_seed: int
+    horizon_combats: int | None = None  # see FacilityConfig.meta_horizon_combats
 
     @property
     def meta_id(self) -> str:
