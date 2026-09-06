@@ -1,6 +1,8 @@
 """ChoicesParadoxNet: typed-token transformer -> policy/value heads, for card_reward and (once
 Phase 2 lands) card_select's remove/upgrade purposes. Mirrors claws/model/model.py's
-tokenizer -> transformer -> per-option-query -> shared-head shape 
+tokenizer -> transformer -> per-option-query -> shared-head shape, encode_batched() included --
+see that method's docstring and train.py's _collate/_batch_step for the padded-batch training
+path; forward() (live decisions) still goes through the single-example encode().
 """
 from __future__ import annotations
 
@@ -75,8 +77,9 @@ class GlobalVocab:
 
 @dataclass
 class TokenBatch:
-    """Tokens for one card_reward/card_select decision (batch size 1, same reasoning as claws'
-    own TokenBatch -- see train.py's docstring)."""
+    """Tokens for a single decision -- forward() only ever scores one live decision at a time,
+    so no batch dimension here. Training's own batching goes through encode_batched() instead,
+    via train.py's _collate/_batch_step."""
 
     type_ids: torch.Tensor  # [N] long
     global_ids: torch.Tensor  # [N] long
@@ -387,9 +390,9 @@ class TransformerBlock(nn.Module):
             nn.Linear(dim, dim * ffn_mult), nn.GELU(), nn.Linear(dim * ffn_mult, dim)
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, key_padding_mask: torch.Tensor | None = None) -> torch.Tensor:
         h = self.ln1(x)
-        attn_out, _ = self.attn(h, h, h, need_weights=False)
+        attn_out, _ = self.attn(h, h, h, key_padding_mask=key_padding_mask, need_weights=False)
         x = x + attn_out
         x = x + self.ffn(self.ln2(x))
         return x
@@ -467,6 +470,34 @@ class ChoicesParadoxNet(nn.Module):
         for block in self.blocks:
             x = block(x)
         return self.final_ln(x).squeeze(0)
+
+    def encode_batched(
+        self, type_ids: torch.Tensor, global_ids: torch.Tensor, features: torch.Tensor,
+        pad_mask: torch.Tensor, mode_idx: torch.Tensor, mode_pos: torch.Tensor,
+    ) -> torch.Tensor:
+        """Batched, padded counterpart to encode() -- for training only (see train.py's
+        _collate/_batch_step); live decisions still go through the single-example encode()
+        above via forward(). type_ids/global_ids: [B, N] long, features: [B, N, FEATURE_DIM]
+        float, pad_mask: [B, N] bool, True marking a padded position -- passed straight through
+        as MultiheadAttention's key_padding_mask so padded rows are never attended to.
+        mode_idx/mode_pos: [B] long -- each example's DECISION_KINDS index and the token row to
+        add it to, mirroring encode()'s single-example mode_emb add. Returns [B, N, dim];
+        padded rows' own outputs are never read (every real position index recorded by
+        tokenize_from_buffer is < that example's own token count) so their content doesn't
+        matter."""
+        tok = self.id_emb(global_ids) + self.type_emb(type_ids)
+        for t in TOKEN_TYPES:
+            mask = (type_ids == _TYPE_TO_IDX[t]) & ~pad_mask
+            if mask.any():
+                tok = tok.clone()
+                tok[mask] = tok[mask] + self.feat_proj[t](features[mask])
+        b_idx = torch.arange(tok.shape[0])
+        tok = tok.clone()
+        tok[b_idx, mode_pos] = tok[b_idx, mode_pos] + self.mode_emb(mode_idx)
+        x = tok
+        for block in self.blocks:
+            x = block(x, key_padding_mask=pad_mask)
+        return self.final_ln(x)
 
     def score(
         self, batch: TokenBatch, options: list[tuple[str, dict]]
