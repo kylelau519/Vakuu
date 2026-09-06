@@ -1,0 +1,8 @@
+# Runtime deps for agents/. sts2_path.py (used by every subsystem) puts sts2-cli's python/
+# on sys.path at import time, so that repo's own requirements are needed in the same
+# interpreter -- checked out as a sibling of this repo (see sts2_path.py's STS2_CLI_ROOT
+# default), or set STS2_CLI_ROOT if it lives elsewhere.
+-r ../sts2-cli/requirements.txt
+
+torch==2.13.0
+numpy==2.4.3
