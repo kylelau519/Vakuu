@@ -40,7 +40,7 @@ _LOW_HP_SLOPE = 3.0
 # potential-differences (telescope to a fixed total over the whole combat regardless of which
 # turn the damage happened on), so weighting them the same doesn't bake in a fixed HP-for-damage
 # trade rate; it only densifies credit assignment turn-by-turn.
-_HP_WEIGHT = 0.6
+_HP_WEIGHT = 0.75
 
 # Boss-fight (act-final combat) reward shaping. At ascension 2+, winning an act heals 80% of
 # missing HP, so leftover HP is worth much less there than in a normal fight
@@ -261,9 +261,9 @@ def _play_turn_only(
         if bypass_reward_on_win:
             _bypass_card_reward(session)
         outcome = "won"
-        turn_value = _combat_value(
+        turn_value = min(1.0, _combat_value(
             CombatOutcome(decision.player_hp, combat_max_hp, is_last_of_act)
-        )
+        ) + 1.0)
     elif decision.decision == "game_over":
         outcome = "lost"
         turn_value = -1.0
