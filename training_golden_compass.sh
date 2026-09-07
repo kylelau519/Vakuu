@@ -1,10 +1,23 @@
 #!/bin/bash
 
+# See training_alternating.sh's matching line for the full explanation: materialize.py's parent
+# process accumulates one open file-descriptor-backed shm segment per tensor handed back from a
+# worker, never closed until the run finishes -- confirmed by hand to exhaust the default 1024
+# soft limit and wedge every worker mid-handoff once a round's dataset grows large enough.
+ulimit -n 65536
+
 export vakuu="/home/kylelau519/Programming/Vakuu"
 
 # Caps torch's per-process intra-op thread pool -- see training_claws.sh's own comment; same
 # reasoning here (materialize.py/train.py this script runs are also torch processes).
 export OMP_NUM_THREADS=1
+
+# See training_alternating.sh's matching line for the full explanation: each materialize worker
+# also loads its own in-process CoreCLR (Sts2BufferSession), built with Server GC (one GC thread
+# per logical core, per process) -- confirmed by hand to roughly balloon thread counts (50 -> 30
+# per worker with this set) once many workers run concurrently. Overrides sts2-cli's build-time
+# runtimeconfig.json at process start; no rebuild needed.
+export DOTNET_gcServer=0
 
 ROUND=1
 # This loop runs no facility of its own -- every select_map_node decision on ANY facility's main

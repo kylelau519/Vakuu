@@ -27,6 +27,12 @@ cleanup_stragglers() {
     # own process group, so a plain group-kill of $pid below won't reach them -- same
     # belt-and-suspenders pkill training_claws.sh already does after every round.
     pkill -9 -f "multiprocessing.spawn"
+    # Python 3.14 switched Linux's default multiprocessing start method from "spawn" to
+    # "forkserver" -- see training_alternating.sh's matching line for the full explanation.
+    # Without this, this is exactly the hang this watchdog exists to route around: the group
+    # kill above misses these (confirmed by hand: they end up outside $pid's process group),
+    # so the stale "spawn"-only pattern left them idling for 10+ hours across restarts.
+    pkill -9 -f "multiprocessing.forkserver"
     pkill -9 -f "sts2-cli/src/Sts2Headless"
 }
 

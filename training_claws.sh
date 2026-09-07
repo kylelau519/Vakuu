@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# See training_alternating.sh's matching line for the full explanation: materialize.py's parent
+# process accumulates one open file-descriptor-backed shm segment per tensor handed back from a
+# worker, never closed until the run finishes -- confirmed by hand to exhaust the default 1024
+# soft limit and wedge every worker mid-handoff once a round's dataset grows large enough.
+ulimit -n 65536
+
 export vakuu="/home/kylelau519/Programming/Vakuu"
 
 # Every branch/main worker is its own process (policy.py imports torch and runs inference --
@@ -10,6 +16,13 @@ export vakuu="/home/kylelau519/Programming/Vakuu"
 # worker). macOS's Accelerate-backed torch build tolerates this better than Linux's
 # OpenBLAS/OMP default, which is why it only bit on Linux.
 export OMP_NUM_THREADS=1
+
+# See training_alternating.sh's matching line for the full explanation: each branch/main/
+# materialize worker also loads its own in-process CoreCLR (Sts2BufferSession), built with Server
+# GC (one GC thread per logical core, per process) -- confirmed by hand to roughly balloon thread
+# counts (50 -> 30 per worker with this set) once many workers run concurrently. Overrides
+# sts2-cli's build-time runtimeconfig.json at process start; no rebuild needed.
+export DOTNET_gcServer=0
 
 ROUND=1
 
@@ -70,6 +83,11 @@ while true; do
 
     # Deliberately kill all the python multiprocessing to avoid zombie processes
     pkill -9 -f "multiprocessing.spawn"
+    # Python 3.14 switched Linux's default multiprocessing start method from "spawn" to
+    # "forkserver" -- see training_alternating.sh's matching line for the full explanation
+    # (a wedged worker process from this pattern going stale was confirmed by hand to sit
+    # idle for 10+ hours, never reaped, while the next round's own workers piled up next to it).
+    pkill -9 -f "multiprocessing.forkserver"
     # Belt-and-suspenders for the same problem facility_common.py's Facility.stop() now handles
     # at the source (each worker is its own process group, killed via os.killpg so its `dotnet
     # run` Sts2Session children die with it) -- see training_choices.sh's matching line for the
