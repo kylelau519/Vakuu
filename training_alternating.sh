@@ -1,12 +1,43 @@
 #!/bin/bash
 shopt -s nullglob
 
-export vakuu="/Users/kylelau519/Programming/Vakuu"
+# materialize.py's ProcessPoolExecutor workers hand every tokenized example back to the parent
+# as live torch.Tensor objects; torch's default cross-process tensor sharing opens one
+# file-descriptor-backed /dev/shm segment per tensor in the RECEIVING process, and nothing ever
+# closes them until the whole run's all_examples list is done and torch.save runs. The parent's
+# default soft limit (1024 on this machine) gets eaten alive once a round's history window grows
+# past a few hundred branch groups -- confirmed by hand: parent sat at 1008/1024 open fds with
+# every worker idle, mid-handoff, unable to open one more segment. Raising the soft limit (well
+# under the 1048576 hard limit already available) buys enough headroom for this dataset's size.
+ulimit -n 65536
+
+export vakuu="/home/kylelau519/Programming/Vakuu"
+
+# Caps torch's per-process intra-op thread pool -- see training_claws.sh's own comment; same
+# reasoning here (each branch/main worker process runs policy.py's torch inference).
+export OMP_NUM_THREADS=1
+
+# Each branch/main/materialize worker loads its own in-process CoreCLR (buffer_env.py's
+# Sts2BufferSession), and sts2-cli's Sts2Headless.csproj builds it with Server GC, which spawns
+# one GC thread PER LOGICAL CORE inside every single one of those processes. With this many
+# workers running concurrently, that's dozens of processes each independently trying to use every
+# core for GC -- confirmed by hand: one worker went from 50 OS threads down to 30 with this unset
+# to 0 (Workstation GC, one GC thread total instead of one per core), and the difference scales
+# with worker count, not a fixed cost. DOTNET_gcServer overrides the build's runtimeconfig.json at
+# process start, same as any hosted CoreCLR -- no sts2-cli rebuild needed.
+export DOTNET_gcServer=0
+
 ROUND=1
 HISTORY_WINDOW=10  # how many past rounds' raw data to keep + train on, alongside the fresh round
 
 cleanup_procs() {
     pkill -9 -f "multiprocessing.spawn"
+    # Python 3.14 switched Linux's default multiprocessing start method from "spawn" to
+    # "forkserver" -- without this, a wedged round's worker processes (confirmed by hand:
+    # idle forever, near-zero CPU, after the CLR-bridge's result never makes it back to the
+    # parent) never get reaped between rounds, and each new round's materialize.py/
+    # facility_claws.py piles up alongside the stuck one instead of replacing it.
+    pkill -9 -f "multiprocessing.forkserver"
     pkill -9 -f "sts2-cli/src/Sts2Headless"
     sleep 5
 }
@@ -78,7 +109,7 @@ while true; do
         "$vakuu/agents/whispering_earring/data/raw/" \
         "$vakuu/agents/whispering_earring/data/history/claws/"*/ \
         --out "$vakuu/agents/claws/model/dataset.pt" \
-        --jobs 8
+        --jobs 5
 
     echo "[claws 5/6] Training model..."
     python "$vakuu/agents/claws/model/train.py" \
@@ -145,7 +176,8 @@ while true; do
         --out "$vakuu/agents/choices_paradox/model/choices_paradox.pt" \
         --init "$CHOICES_CHECKPOINT" \
         --warm-start-from "${CLAWS_CHECKPOINT:-}" \
-        --lr 5e-6
+        --lr 5e-6 \
+        --batch_size 64
 
     echo "[choices 6/6] Backing up checkpoint..."
     backup_dir="$vakuu/agents/choices_paradox/model/backups"
