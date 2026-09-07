@@ -8,8 +8,6 @@
 #   - Python 3.11+ with venv, and (for GPU boxes) an NVIDIA driver
 set -e
 
-git clone https://github.com/kylelau519/Vakuu.git
-git clone https://github.com/kylelau519/sts2-cli.git
 
 python3 -m venv Vakuu/.venv
 source Vakuu/.venv/bin/activate

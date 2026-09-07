@@ -1,6 +1,11 @@
 #!/bin/bash
 
-export vakuu="/Users/kylelau519/Programming/Vakuu"
+export vakuu="/home/kylelau519/Programming/Vakuu"
+
+# Caps torch's per-process intra-op thread pool -- see training_claws.sh's own comment; same
+# reasoning here (materialize.py/train.py this script runs are also torch processes).
+export OMP_NUM_THREADS=1
+
 ROUND=1
 # This loop runs no facility of its own -- every select_map_node decision on ANY facility's main
 # line (facility_claws.py's data/raw, facility_choices_paradox.py's data/raw_choices) already

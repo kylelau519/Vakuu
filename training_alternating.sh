@@ -1,7 +1,12 @@
 #!/bin/bash
 shopt -s nullglob
 
-export vakuu="/Users/kylelau519/Programming/Vakuu"
+export vakuu="/home/kylelau519/Programming/Vakuu"
+
+# Caps torch's per-process intra-op thread pool -- see training_claws.sh's own comment; same
+# reasoning here (each branch/main worker process runs policy.py's torch inference).
+export OMP_NUM_THREADS=1
+
 ROUND=1
 HISTORY_WINDOW=10  # how many past rounds' raw data to keep + train on, alongside the fresh round
 
@@ -65,7 +70,7 @@ while true; do
 
     echo "[claws 2/6] Running facility_claws.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility_claws.py" \
-        --trials 5 --branch-workers 15 --branches-per-turn 30 --main-workers 3 \
+        --trials 10 --branch-workers 15 --branches-per-turn 40 --main-workers 5 \
         --ascension 1 --raw-dir "$vakuu/agents/whispering_earring/data/raw"
 
     echo "[claws 3/6] Floor/combat stats for this round..."
@@ -123,7 +128,7 @@ while true; do
 
     echo "[choices 2/6] Running facility_choices_paradox.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility_choices_paradox.py" \
-        --trials 20 --branch-workers 3 --main-workers 10 \
+        --trials 20 --branch-workers 8 --main-workers 12 \
         --branches-per-turn 4 --meta-branches-per-trial 20\
         --ascension 1 --raw-dir "$raw_dir"
 
@@ -173,7 +178,7 @@ while true; do
 
     echo "[golden 2/2] Training model..."
     python "$vakuu/agents/golden_compass/model/train.py" \
-        "$vakuu/agents/golden_compass/model/dataset.pt" --epochs 60 \
+        "$vakuu/agents/golden_compass/model/dataset.pt" --epochs 80 \
         --out "$vakuu/agents/golden_compass/model/golden_compass.pt" \
         --init "$GOLDEN_COMPASS_CHECKPOINT_PATH"
 

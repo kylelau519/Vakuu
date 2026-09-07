@@ -36,15 +36,15 @@ driver from scratch. Whether `mod/` is still needed at all, versus `agents/` jus
 
 **Two paths outside this repo:**
 
-- `/Users/kylelau519/Programming/ChoicesParadox` — the **prototype**. A first pass at Choices Paradox:
+- `/home/kylelau519/Programming/ChoicesParadox` — the **prototype**. A first pass at Choices Paradox:
   per-character XGBoost hurdle models trained on scraped run histories. Kyle has said it "has
   problems" and expects to redesign it; parts may be reused, but it is "just an idea." Treat it as
   prior art, not architecture. Don't carry over its structure, config layout, or feature engineering
   by default, and don't propose work whose value depends on keeping it.
-- `/Users/kylelau519/Programming/sts2-decompiled` — read-only decompiled game source. **Never copy it
+- `/home/kylelau519/Programming/sts2-decompiled` — read-only decompiled game source. **Never copy it
   into this repo and never commit any of it**; it's derived from a copyrighted game and Vakuu has a
   public remote. Reference it in place.
-- `/Users/kylelau519/Programming/sts2-cli` — a **third-party headless driver**, not a Vakuu subsystem.
+- `/home/kylelau519/Programming/sts2-cli` — a **third-party headless driver**, not a Vakuu subsystem.
   It runs `sts2.dll` directly on bare .NET with **no Godot process at all** — `src/GodotStubs/`
   replaces `GodotSharp.dll` with no-op types, and `setup.sh` IL-patches `sts2.dll` (Mono.Cecil) so
   async waits, tweens, and `Cmd.Wait` resolve instantly instead of blocking on a renderer that isn't

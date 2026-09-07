@@ -1,7 +1,7 @@
 # mod
 
 The C# Godot mod. Was scoped as two jobs — **extract game state** and **drive headless trials** —
-but `/Users/kylelau519/Programming/sts2-cli` (outside this repo) now does the headless-driving job
+but `/home/kylelau519/Programming/sts2-cli` (outside this repo) now does the headless-driving job
 without a mod at all, and covers a good chunk of state extraction as a byproduct of its JSON
 protocol. See `.claude/skills/vakuu/SKILL.md`'s "Current phase" section for specifics on what it
 covers and what it doesn't, and `docs/README.md` for the open question of whether `mod/` is still

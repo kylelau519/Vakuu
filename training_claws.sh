@@ -1,6 +1,16 @@
 #!/bin/bash
 
-export vakuu="/Users/kylelau519/Programming/Vakuu"
+export vakuu="/home/kylelau519/Programming/Vakuu"
+
+# Every branch/main worker is its own process (policy.py imports torch and runs inference --
+# softmax/Dirichlet/multinomial -- in each one). Without this, each process defaults to one
+# intra-op thread per core, so branch-workers x cores threads fight over the same cores --
+# pure contention, no extra throughput (same thread-pool-sync-overhead effect
+# claws/model/train.py's docstring found for a single process, just multiplied across every
+# worker). macOS's Accelerate-backed torch build tolerates this better than Linux's
+# OpenBLAS/OMP default, which is why it only bit on Linux.
+export OMP_NUM_THREADS=1
+
 ROUND=1
 
 while true; do

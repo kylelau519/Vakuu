@@ -17,7 +17,7 @@ set -m  # job control on, so the backgrounded script becomes its own process gro
 # script fails immediately and the loop spins doing nothing.
 export PATH="/opt/homebrew/Caskroom/miniconda/base/envs/sts2/bin:$PATH"
 
-vakuu="/Users/kylelau519/Programming/Vakuu"
+vakuu="/home/kylelau519/Programming/Vakuu"
 SCRIPT="${1:-$vakuu/training_alternating.sh}"
 TIMEOUT="${2:-${WATCHDOG_TIMEOUT:-1800}}"
 LOG="$vakuu/watchdog_$(basename "$SCRIPT" .sh)_$(date +%Y%m%d_%H%M%S).log"

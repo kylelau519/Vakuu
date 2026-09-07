@@ -1,6 +1,11 @@
 #!/bin/bash
 
-export vakuu="/Users/kylelau519/Programming/Vakuu"
+export vakuu="/home/kylelau519/Programming/Vakuu"
+
+# Caps torch's per-process intra-op thread pool -- see training_claws.sh's own comment; same
+# reasoning here (each branch/main worker process runs policy.py's torch inference).
+export OMP_NUM_THREADS=1
+
 ROUND=1
 
 while true; do

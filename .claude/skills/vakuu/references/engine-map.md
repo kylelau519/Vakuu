@@ -1,10 +1,10 @@
 # STS2 decompiled source map
 
-Root: `/Users/kylelau519/Programming/sts2-decompiled` (read-only). Directories are namespace names,
+Root: `/home/kylelau519/Programming/sts2-decompiled` (read-only). Directories are namespace names,
 so `MegaCrit.Sts2.Core.Combat/CombatState.cs` is the whole path. Verified against the build present
 as of 2026-08-12 — re-check after game updates.
 
-Always check `/Users/kylelau519/Programming/sts2-cli` before digging into the decompiled codes to save tokens.
+Always check `/home/kylelau519/Programming/sts2-cli` before digging into the decompiled codes to save tokens.
 
 ## Combat
 
@@ -75,7 +75,7 @@ actions.
 
 ## Headless / AutoSlay
 
-**Superseded by `/Users/kylelau519/Programming/sts2-cli`** (outside this repo) for the headless-driver
+**Superseded by `/home/kylelau519/Programming/sts2-cli`** (outside this repo) for the headless-driver
 problem — it doesn't launch `NGame`/Godot at all, so none of this is on the path for that route. See
 `../SKILL.md`'s "Current phase" section. Kept here as a compressed pointer, not a live plan, in case a
 mod-based driver is ever revisited:
