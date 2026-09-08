@@ -11,10 +11,16 @@ aren't clearly ahead of "untrained", something's wrong with the round, not just 
 
 policy.py reads CLAWS_CHECKPOINT (and loads the net) once at import time and caches it for the
 rest of the process, so comparing multiple checkpoints can't happen in one process -- this script
-is its own driver: the no-args/--checkpoints invocation spawns itself once per checkpoint as a
-subprocess (each with its own CLAWS_CHECKPOINT in the environment), collects each subprocess's
-results, and prints the comparison. CHOICES_PARADOX_CHECKPOINT/GOLDEN_COMPASS_CHECKPOINT are left
-alone (inherited from the parent environment) so Claws is the only thing varying between columns.
+is its own driver: the no-args/--checkpoints invocation spawns itself once per (checkpoint, seed)
+pair as a subprocess (each with its own CLAWS_CHECKPOINT in the environment), all launched at once
+rather than one at a time -- a single line has no branching to hide the cost of the plain
+Sts2Session replay every combat needs (see _resolve_combat_single_line's docstring), so running
+the whole matrix serially would take checkpoints x seeds times as long as one rollout; this way it
+takes about as long as the single slowest one. CHOICES_PARADOX_CHECKPOINT/GOLDEN_COMPASS_CHECKPOINT
+are left alone (inherited from the parent environment) so Claws is the only thing varying between
+columns. Each subprocess's engine output goes to its own log file under a temp dir (worth keeping
+around on failure, so it's only cleaned up when everything succeeds) rather than the shared
+terminal -- concurrent processes' raw [SIM]/[INFO] lines would otherwise interleave into a mess.
 
 Usage:
     python eval_claws.py --checkpoints current=claws.pt previous=claws_prev.pt untrained=claws_untrained.pt
@@ -24,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -160,8 +167,7 @@ def _run_worker(args) -> None:
         json.dump(results, f)
 
 
-def _print_comparison(label_results: dict[str, list[dict]]) -> None:
-    seeds = [r["seed"] for r in next(iter(label_results.values()))]
+def _print_comparison(label_results: dict[str, list[dict | None]], seeds: list[str]) -> None:
     col_w = 24
     print("\n=== Claws single-rollout comparison (unbranched, fixed seeds) ===")
     print(f"{'seed':<16}" + "".join(f"{label:>{col_w}}" for label in label_results))
@@ -169,38 +175,78 @@ def _print_comparison(label_results: dict[str, list[dict]]) -> None:
         row = f"{seed:<16}"
         for results in label_results.values():
             r = results[i]
-            floor_str = (f"act{r['final_act']}f{r['final_floor']}"
-                         if r["final_floor"] is not None else "no-combat")
-            cell = f"{r['outcome']} {floor_str} {r['combats_won']}/{r['combats_total']}"
+            if r is None:
+                cell = "FAILED (see log)"
+            else:
+                floor_str = (f"act{r['final_act']}f{r['final_floor']}"
+                             if r["final_floor"] is not None else "no-combat")
+                cell = f"{r['outcome']} {floor_str} {r['combats_won']}/{r['combats_total']}"
             row += f"{cell:>{col_w}}"
         print(row)
     print()
     for label, results in label_results.items():
-        wins = sum(1 for r in results if r["outcome"] == "won")
-        avg_won = sum(r["combats_won"] for r in results) / len(results)
-        print(f"{label:<12} {wins}/{len(results)} run(s) won, avg {avg_won:.1f} combats won/run")
+        ok = [r for r in results if r is not None]
+        wins = sum(1 for r in ok if r["outcome"] == "won")
+        n_failed = len(results) - len(ok)
+        if ok:
+            avg_won = sum(r["combats_won"] for r in ok) / len(ok)
+            suffix = f", {n_failed} failed" if n_failed else ""
+            print(f"{label:<12} {wins}/{len(ok)} run(s) won, avg {avg_won:.1f} combats won/run{suffix}")
+        else:
+            print(f"{label:<12} all {n_failed} run(s) failed")
     print()
 
 
 def _run_driver(args) -> None:
     checkpoints = dict(kv.split("=", 1) for kv in args.checkpoints)
-    label_results: dict[str, list[dict]] = {}
-    with tempfile.TemporaryDirectory(prefix="claws_eval_driver_") as tmpdir:
-        for label, path in checkpoints.items():
-            out_path = os.path.join(tmpdir, f"{label}.json")
-            env = dict(os.environ)
-            env["CLAWS_CHECKPOINT"] = path
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    tmpdir = tempfile.mkdtemp(prefix="claws_eval_driver_")
+
+    jobs = []  # (label, seed, proc, out_path, log_path, log_file)
+    for label, path in checkpoints.items():
+        env = dict(os.environ)
+        env["CLAWS_CHECKPOINT"] = path
+        for seed in args.seeds:
+            tag = f"{label}__{seed}"
+            out_path = os.path.join(tmpdir, f"{tag}.json")
+            log_path = os.path.join(tmpdir, f"{tag}.log")
             cmd = [
                 sys.executable, __file__, "--worker",
                 "--label", label, "--character", args.character,
                 "--ascension", str(args.ascension), "--out", out_path,
-                "--seeds", *args.seeds,
+                "--seeds", seed,
             ]
-            print(f"--- Claws single-rollout: '{label}' ({path}) ---")
-            subprocess.run(cmd, env=env, check=True, cwd=os.path.dirname(os.path.abspath(__file__)))
-            with open(out_path) as f:
-                label_results[label] = json.load(f)
-    _print_comparison(label_results)
+            log_file = open(log_path, "w")
+            proc = subprocess.Popen(cmd, env=env, cwd=script_dir, stdout=log_file, stderr=subprocess.STDOUT)
+            jobs.append((label, seed, proc, out_path, log_path, log_file))
+
+    print(f"--- Running {len(jobs)} single-line rollout(s) in parallel "
+          f"({len(checkpoints)} checkpoint(s) x {len(args.seeds)} seed(s)) ---")
+
+    seed_index = {seed: i for i, seed in enumerate(args.seeds)}
+    label_results: dict[str, list[dict | None]] = {label: [None] * len(args.seeds) for label in checkpoints}
+    failed_logs = []
+    for label, seed, proc, out_path, log_path, log_file in jobs:
+        ret = proc.wait()
+        log_file.close()
+        if ret != 0:
+            failed_logs.append((label, seed, log_path))
+            continue
+        with open(out_path) as f:
+            (result,) = json.load(f)
+        label_results[label][seed_index[seed]] = result
+        print(f"[{label}] seed={seed} -> {result['outcome']} "
+              f"(act {result['final_act']} floor {result['final_floor']}, "
+              f"{result['combats_won']}/{result['combats_total']} combats won)")
+
+    if failed_logs:
+        print("\nFailed rollout(s) -- logs kept for inspection:")
+        for label, seed, log_path in failed_logs:
+            print(f"  [{label}] seed={seed}: {log_path}")
+    else:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    _print_comparison(label_results, args.seeds)
 
 
 if __name__ == "__main__":
