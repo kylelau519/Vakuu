@@ -18,7 +18,7 @@ _CLAWS_CHECKPOINT = os.environ.get("CLAWS_CHECKPOINT")
 _claws_net = None  # lazy-loaded once per worker process, on first combat decision -- see below
 
 _DIRICHLET_EPS = 0.15  # fraction of root probability mass replaced by noise -- AlphaZero's own
-_COMBAT_DIRICHLET_EPS = 0.30
+_COMBAT_DIRICHLET_EPS = 0.25
 _DIRICHLET_ALPHA_SCALE = 10.0  # concentration = this / n_legal_options
 
 # Loading choices_paradox.policy
