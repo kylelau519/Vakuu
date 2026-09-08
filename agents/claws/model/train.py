@@ -55,6 +55,14 @@ import torch.nn.functional as F
 # Measured on this machine's actual dataset (6616 examples, 1 epoch): batch 32 takes 3.5s single-
 # threaded vs 4.0s at 8 threads, and single-threaded batch 32 is itself ~8x faster than the old
 # batch-size-1 loop's 28.9s -- the real win is from batching, not the thread count.
+#
+# CPU vs. GPU crossover (measured on the 61783-example dataset, this machine's RTX 3060 Mobile):
+# batch 32 CPU beats GPU (29.8s vs 38.5s -- kernel-launch/transfer overhead dominates at this
+# size), but CPU cost grows ~quadratically with batch size (padding every example in a batch up
+# to that batch's own max length inflates the attention cost) while GPU absorbs it -- batch 256
+# is roughly a tie, batch 1024 favors GPU 2x (27.3s vs 61.3s), batch 4096 favors GPU 6x. Note the
+# per-example Python loop in _batch_step that builds each option's query is a fixed ~27s/epoch
+# cost regardless of device or batch size, so GPU plateaus there rather than keeps improving.
 torch.set_num_threads(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # for `common`
@@ -100,7 +108,7 @@ def _collate(examples: list[dict]) -> tuple[torch.Tensor, torch.Tensor, torch.Te
 
 
 def _batch_step(
-    examples: list[dict], net: ClawsNet, value_only: bool,
+    examples: list[dict], net: ClawsNet, value_only: bool, device: torch.device,
 ) -> tuple[torch.Tensor, float, float, int]:
     """One batch's loss, built with exactly two real matmul-bearing calls -- one
     encode_batched() for every example's tokens and one policy_mlp() call for every option
@@ -111,6 +119,9 @@ def _batch_step(
     Returns (loss, total_policy_loss, total_value_loss, n_real) -- the last three are floats/int
     for the caller's running epoch totals, not part of the backward graph."""
     type_ids, global_ids, features, pad_mask = _collate(examples)
+    type_ids, global_ids, features, pad_mask = (
+        type_ids.to(device), global_ids.to(device), features.to(device), pad_mask.to(device)
+    )
     h = net.encode_batched(type_ids, global_ids, features, pad_mask)  # [B, N, dim]
 
     queries = []
@@ -138,7 +149,7 @@ def _batch_step(
     player_h = torch.stack([h[b, ex["player_pos"]] for b, ex in enumerate(examples)])
     values = torch.tanh(net.value_mlp(player_h).squeeze(-1))  # [B]
 
-    loss = torch.zeros(())
+    loss = torch.zeros((), device=device)
     total_policy = total_value = 0.0
     n_real = 0
     for b, ex in enumerate(examples):
@@ -193,9 +204,10 @@ def _l2_delta(before: dict[str, torch.Tensor], after: dict[str, torch.Tensor]) -
 
 def train(
     examples: list[dict], net: ClawsNet, epochs: int, lr: float, seed: int = 0,
-    value_only: bool = False, batch_size: int = 64,
+    value_only: bool = False, batch_size: int = 64, device: torch.device = torch.device("cpu"),
 ) -> None:
     _normalize_advantages(examples)
+    net.to(device)
     opt = torch.optim.Adam(net.parameters(), lr=lr)
     rng = random.Random(seed)
     before = _snapshot(net)
@@ -208,7 +220,9 @@ def train(
 
         for start in range(0, len(order), batch_size):
             batch = [examples[i] for i in order[start:start + batch_size]]
-            loss, batch_policy, batch_value, batch_n_real = _batch_step(batch, net, value_only)
+            loss, batch_policy, batch_value, batch_n_real = _batch_step(
+                batch, net, value_only, device
+            )
 
             opt.zero_grad()
             loss.backward()
@@ -238,7 +252,12 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-5)
     parser.add_argument("--batch-size", type=int, default=32,
-                         help="examples per padded batch (see module docstring)")
+                         help="examples per padded batch (see module docstring). See module "
+                              "docstring's CPU/GPU crossover note before raising this -- past "
+                              "~256 it's only a win with --device cuda, and the learning rate "
+                              "should scale roughly with sqrt(batch_size) for Adam")
+    parser.add_argument("--device", default=None, choices=["cpu", "cuda"],
+                         help="default: cuda if available, else cpu")
     parser.add_argument("--out", default="claws.pt")
     parser.add_argument("--init", default=None,
                          help="resume from an existing checkpoint, or pass \"\" to train from "
@@ -248,6 +267,8 @@ def main() -> None:
                               "examples -- normally only non-policy_real (noisy placeholder) "
                               "examples skip it automatically (see module docstring)")
     args = parser.parse_args()
+    device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    print(f"training on {device}")
     if args.init is None:
         raise SystemExit("--init is required -- pass a checkpoint path to resume from, or \"\" "
                           "to intentionally train from a random init (e.g. round 1). There is "
@@ -276,10 +297,11 @@ def main() -> None:
             raise SystemExit("no examples loaded -- pass a dataset, or --epochs 0 to just save "
                               "an untrained init checkpoint")
         train(examples, net, epochs=args.epochs, lr=args.lr, value_only=args.value_only,
-              batch_size=args.batch_size)
+              batch_size=args.batch_size, device=device)
     else:
         print("--epochs 0: skipping training, saving weights as-is")
 
+    net.to("cpu")  # checkpoints stay device-agnostic regardless of what trained them
     torch.save(net.state_dict(), args.out)
     print(f"wrote {args.out}")
 

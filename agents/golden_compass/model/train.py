@@ -3,7 +3,9 @@ choices_paradox/model/train.py -- same loss formula, same reasoning -- pointed a
 network. See materialize.py's module docstring for where `value`/`advantage` come from (this
 trial's own terminal run outcome, no sibling-branch baseline).
 
-Batch size 1, no padding: each example has a different token count and option count.
+Real padded batching (see claws/model/train.py's own module docstring for the padding/masking
+reasoning): each example has a different token count and option count, padded up to the batch's
+own max length.
 
 Policy loss is an advantage-weighted log-likelihood, not cross-entropy against a fitted target
 distribution: `policy_loss = -advantage * log_prob(action_index).clamp(min=_LOGP_FLOOR)`. A
@@ -32,14 +34,14 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")  # see model.py's top -- t
 import torch
 import torch.nn.functional as F
 
-# Batch size 1, tiny per-example tensors -- see claws/model/train.py's docstring for the
-# measured single-thread-vs-default speedup this is copied from.
+# Tiny per-example tensors -- see claws/model/train.py's docstring for the measured
+# single-thread-vs-default speedup this is copied from.
 torch.set_num_threads(1)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # for `common`
 from common.tokenizer import EntityVocab  # noqa: E402
 
-from model import GoldenCompassNet, GlobalVocab, TokenBatch  # noqa: E402
+from model import GoldenCompassNet, GlobalVocab, FEATURE_DIM  # noqa: E402
 
 _LOGP_FLOOR = -6.0  # ~0.25% probability -- see module docstring for why this exists
 
@@ -57,6 +59,68 @@ def _normalize_advantages(examples: list[dict]) -> None:
     for ex in examples:
         if ex.get("policy_real", False):
             ex["advantage"] = (ex["advantage"] - mean) / std
+
+
+def _collate(examples: list[dict]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Pads a list of examples' token tensors up to the batch's own max token count -- see
+    claws/model/train.py's own _collate, identical reasoning."""
+    lens = [ex["type_ids"].shape[0] for ex in examples]
+    max_len = max(lens)
+    b = len(examples)
+    type_ids = torch.zeros(b, max_len, dtype=torch.long)
+    global_ids = torch.zeros(b, max_len, dtype=torch.long)
+    features = torch.zeros(b, max_len, FEATURE_DIM)
+    pad_mask = torch.ones(b, max_len, dtype=torch.bool)
+    for i, (ex, n) in enumerate(zip(examples, lens)):
+        type_ids[i, :n] = ex["type_ids"]
+        global_ids[i, :n] = ex["global_ids"]
+        features[i, :n] = ex["features"]
+        pad_mask[i, :n] = False
+    return type_ids, global_ids, features, pad_mask
+
+
+def _batch_step(
+    examples: list[dict], net: GoldenCompassNet, value_only: bool,
+) -> tuple[torch.Tensor, float, float, int]:
+    """One batch's loss -- see claws/model/train.py's own _batch_step, identical reasoning
+    (one encode_batched() call for every example's tokens, one policy_mlp() call for every
+    option across the whole batch)."""
+    type_ids, global_ids, features, pad_mask = _collate(examples)
+    h = net.encode_batched(type_ids, global_ids, features, pad_mask)  # [B, N, dim]
+
+    queries = []
+    spans: list[tuple[int, int]] = []
+    for b, ex in enumerate(examples):
+        start = len(queries)
+        hb = h[b]
+        for i in range(ex["n_options"]):
+            queries.append(hb[ex["option_pos"][i]])
+        spans.append((start, len(queries) - start))
+
+    all_logits = net.policy_mlp(torch.stack(queries)).squeeze(-1)  # [total options in batch]
+    player_h = torch.stack([h[b, ex["player_pos"]] for b, ex in enumerate(examples)])
+    values = torch.tanh(net.value_mlp(player_h).squeeze(-1))  # [B]
+
+    loss = torch.zeros(())
+    total_policy = total_value = 0.0
+    n_real = 0
+    for b, ex in enumerate(examples):
+        value_loss = (values[b] - ex["value"]) ** 2
+        train_policy = ex.get("policy_real", False) and not value_only
+
+        if train_policy:
+            start, count = spans[b]
+            log_probs = F.log_softmax(all_logits[start:start + count], dim=-1)
+            log_prob = log_probs[ex["action_index"]].clamp(min=_LOGP_FLOOR)
+            policy_loss = -ex["advantage"] * log_prob
+            loss = loss + policy_loss + value_loss
+            total_policy += policy_loss.item()
+            n_real += 1
+        else:
+            loss = loss + value_loss
+        total_value += value_loss.item()
+
+    return loss / len(examples), total_policy, total_value, n_real
 
 
 def _snapshot(net: GoldenCompassNet) -> dict[str, torch.Tensor]:
@@ -92,7 +156,7 @@ def _l2_delta(before: dict[str, torch.Tensor], after: dict[str, torch.Tensor]) -
 
 def train(
     examples: list[dict], net: GoldenCompassNet, epochs: int, lr: float, seed: int = 0,
-    value_only: bool = False,
+    value_only: bool = False, batch_size: int = 32,
 ) -> None:
     _normalize_advantages(examples)
     opt = torch.optim.Adam(net.parameters(), lr=lr)
@@ -105,29 +169,17 @@ def train(
         total_policy = total_value = 0.0
         n_real = 0
 
-        for i in order:
-            ex = examples[i]
-            batch = TokenBatch.from_saved(ex)
-            logits, value = net.score(batch, ex["n_options"])
-            value_loss = (value - ex["value"]) ** 2
-            train_policy = ex.get("policy_real", False) and not value_only
-
-            if train_policy:
-                log_probs = F.log_softmax(logits, dim=-1)
-                log_prob = log_probs[ex["action_index"]].clamp(min=_LOGP_FLOOR)
-                policy_loss = -ex["advantage"] * log_prob
-                loss = policy_loss + value_loss
-            else:
-                loss = value_loss
+        for start in range(0, len(order), batch_size):
+            batch = [examples[i] for i in order[start:start + batch_size]]
+            loss, batch_policy, batch_value, batch_n_real = _batch_step(batch, net, value_only)
 
             opt.zero_grad()
             loss.backward()
             opt.step()
 
-            if train_policy:
-                total_policy += policy_loss.item()
-                n_real += 1
-            total_value += value_loss.item()
+            total_policy += batch_policy
+            total_value += batch_value
+            n_real += batch_n_real
 
         n = len(examples)
         policy_avg = f"{total_policy / n_real:.4f} (n={n_real} real)" if n_real else "n/a"
@@ -148,6 +200,8 @@ def main() -> None:
                               "(omit with --epochs 0 to just save an untrained init checkpoint)")
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-5)
+    parser.add_argument("--batch-size", type=int, default=32,
+                         help="examples per padded batch (see module docstring)")
     parser.add_argument("--out", default="golden_compass.pt")
     parser.add_argument("--init", default=None,
                          help="resume from an existing checkpoint, or pass \"\" to train from a "
@@ -180,7 +234,8 @@ def main() -> None:
         if not examples:
             raise SystemExit("no examples loaded -- pass a dataset, or --epochs 0 to just save "
                               "an untrained init checkpoint")
-        train(examples, net, epochs=args.epochs, lr=args.lr, value_only=args.value_only)
+        train(examples, net, epochs=args.epochs, lr=args.lr, value_only=args.value_only,
+              batch_size=args.batch_size)
     else:
         print("--epochs 0: skipping training, saving weights as-is")
 

@@ -228,6 +228,9 @@ def materialize_main_and_groups(
                 "card_reward", "event_card_reward", "rest_site", "event_choice"
             )
             and "policy" in entry
+            and "value" in entry  # a meta-decision's commit step is scored asynchronously once
+            # its adopted branch's job reports back (see recorder.py's mark_step docstring) --
+            # missing here means that job never resolved, not that the outcome was 0.
         )
         if is_policy_point:
             decision_kind = (
@@ -245,7 +248,7 @@ def materialize_main_and_groups(
                 "mode_pos": batch.mode_pos,
                 "offer_pos": batch.offer_pos,
                 "options": options,
-                "value": entry.get("value", 0.0),
+                "value": entry["value"],
                 "action_index": None,
                 "advantage": 0.0,
                 "policy_real": False,
