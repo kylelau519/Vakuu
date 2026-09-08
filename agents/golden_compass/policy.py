@@ -84,3 +84,71 @@ def choose_next_node(map_json: dict[str, Any], hp_frac: float) -> Coord | None:
     values = _best_path_values(map_json, hp_frac)
     best = max(children, key=lambda c: values.get(_coord(c), 0.0))
     return _coord(best)
+
+
+# --- buffer-protocol counterpart --------------------------------------------------------------
+#
+# sts2-cli's Sts2BufferSession (the session type both facility_claws.py's and
+# facility_choices_paradox.py's main lines actually run on) has no GetFullMap()-shaped JSON to
+# read -- the map lives in the flat buffer_layout.MAP grid instead (buffer_layout.map_points()/
+# map_point_children()/map_point_type()). Same DP-backward-from-boss reasoning as above, just
+# reading that wire format instead of the pydantic one.
+
+
+def _current_children_from_buffer(arr) -> list[Coord]:
+    """Physical one-hop children reachable from the map's current position. Falls back to every
+    row-0 point when nothing is marked current yet (the very first move of an act -- the buffer
+    protocol has no null current_coord signal the way GetFullMap()'s JSON does, so this is the
+    buffer-side equivalent of choose_next_node's own `current is None` case), and to the (-1, -1)
+    boss sentinel (see facility_common._map_point_type_at) when the current node has no real
+    children left: map_point_children() can never yield that sentinel itself -- a genuinely absent
+    child slot and "child is the boss" are both encoded as the same (-1, -1) padding, so that
+    function's own filter drops both alike -- this infers "boss" from "no real children remain"
+    instead."""
+    import buffer_layout as bl
+
+    current_children = None
+    for _row, _col, slot in bl.map_points(arr):
+        if int(slot[2]) == 1:  # MAP_POINT_SIZE layout: type, visited, current, then children
+            current_children = list(bl.map_point_children(slot))
+            break
+    if current_children is None:
+        current_children = [(col, row) for row, col, _slot in bl.map_points(arr) if row == 0]
+    return current_children or [(-1, -1)]
+
+
+def _best_path_values_from_buffer(arr, hp_frac: float) -> dict[Coord, float]:
+    """Buffer-array counterpart to _best_path_values -- same reverse-topological-order reasoning
+    (children always sit one row past their parent), read off buffer_layout.map_points() instead
+    of GetFullMap()'s JSON `rows`."""
+    import buffer_layout as bl
+
+    nodes: dict[Coord, tuple[str | None, list[Coord]]] = {}
+    max_row = -1
+    for row, col, slot in bl.map_points(arr):
+        if row == -1:
+            continue  # boss point itself -- contributes 0 either way (_NODE_VALUE["Boss"] == 0.0)
+        nodes[(col, row)] = (bl.map_point_type(slot), list(bl.map_point_children(slot)))
+        max_row = max(max_row, row)
+
+    values: dict[Coord, float] = {}
+    for row in range(max_row, -1, -1):
+        for coord, (node_type, children) in nodes.items():
+            if coord[1] != row:
+                continue
+            best_child = max((values[c] for c in children if c in values), default=0.0)
+            values[coord] = _node_value(node_type, hp_frac) + best_child
+    return values
+
+
+def choose_next_node_from_buffer(arr, hp_frac: float) -> tuple[Coord, list[Coord]]:
+    """Buffer-array counterpart to choose_next_node -- returns (best_child, all_children) rather
+    than just the best pick, since facility_common._resolve_map_decision needs the full sibling
+    list too (to branch over every option, not just adopt the best one), not only whispering_
+    earring/policy.py's _choose_map_action_from_buffer (which only wants the pick)."""
+    children = _current_children_from_buffer(arr)
+    if len(children) == 1:
+        return children[0], children
+    values = _best_path_values_from_buffer(arr, hp_frac)
+    best = max(children, key=lambda c: values.get(c, 0.0))
+    return best, children

@@ -95,9 +95,16 @@ while true; do
     find "$vakuu/agents/whispering_earring/data/raw/checkpoints/" -maxdepth 1 -name '*.json' -delete
 
     echo "[claws 2/7] Running facility_claws.py (Data Generation)..."
+    # --map-branches-per-trial -1 (unlimited): every select_map_node decision spawns a
+    # MapOptionJob per sibling for golden_compass -- see agents/golden_compass/model/README.md.
+    # These land on the shared branch-worker pool's low-priority queue behind combat turn-
+    # branches, so they can't starve/slow combat's own correctness, only opportunistically use
+    # whatever worker time is left over. Dial down to a positive cap here if rounds start taking
+    # noticeably longer than before.
     python "$vakuu/agents/whispering_earring/facility_claws.py" \
         --trials 10 --branch-workers 15 --branches-per-turn 40 --main-workers 5 \
-        --ascension 1 --raw-dir "$vakuu/agents/whispering_earring/data/raw"
+        --ascension 1 --raw-dir "$vakuu/agents/whispering_earring/data/raw" \
+        --map-branches-per-trial -1 --map-room-horizon 1
 
     echo "[claws 3/7] Floor/combat stats for this round..."
     python "$vakuu/agents/whispering_earring/stats.py" \
@@ -175,10 +182,14 @@ while true; do
     find "$raw_dir/checkpoints/" -maxdepth 1 -name '*.json' -delete
 
     echo "[choices 2/6] Running facility_choices_paradox.py (Data Generation)..."
+    # --map-branches-per-trial -1: same golden_compass MapOptionJob branching as the claws round
+    # above, sharing this facility's own branch-worker pool with its meta-decision chains --
+    # both land on the same low-priority queue behind combat turn-branches.
     python "$vakuu/agents/whispering_earring/facility_choices_paradox.py" \
         --trials 40 --branch-workers 8 --main-workers 12 \
         --branches-per-turn 4 --meta-branches-per-trial 20\
-        --ascension 1 --raw-dir "$raw_dir"
+        --ascension 1 --raw-dir "$raw_dir" \
+        --map-branches-per-trial -1 --map-room-horizon 1
 
     echo "[choices 3/6] Meta-decision stats for this round..."
     python "$vakuu/agents/whispering_earring/stats_choices.py" \
@@ -214,11 +225,10 @@ while true; do
     echo " Training Golden Compass: Round $ROUND"
     echo "==========================================="
 
-    # No dedicated facility run -- every select_map_node decision on this round's own claws +
-    # choices main lines already carries its own trial's +1/-1 terminal outcome via
-    # facility_common.py's pending_map_steps wiring, so this just materializes off the raw data
-    # both phases above already produced this round -- see
-    # agents/golden_compass/model/README.md's Design section.
+    # No dedicated facility run -- both phases above already spawn MapOptionJob branches per
+    # select_map_node decision (--map-branches-per-trial), landing in the same raw dirs as their
+    # own main-line/meta-branch files, so this just materializes off the raw data both phases
+    # already produced this round -- see agents/golden_compass/model/README.md's Design section.
     echo "[golden 1/2] Materializing dataset from claws + choices raw data..."
     python "$vakuu/agents/golden_compass/model/materialize.py" \
         "$vakuu/agents/whispering_earring/data/raw/" \

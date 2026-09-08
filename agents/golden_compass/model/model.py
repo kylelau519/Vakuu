@@ -1,37 +1,34 @@
 """GoldenCompassNet: typed-token transformer -> policy/value heads, for map_select.
 
-This net does NOT score "which physical node to walk into next." It scores COMBINATIONS: for
-every path reachable within _LOOKAHEAD_HORIZON floors of the current position -- pooled across
-ALL of map_select's one-hop `choices`, not kept separate per branch -- compute that path's own
-per-room-type count histogram (_path_combination), then group paths that produce the identical
-histogram into one candidate (combination_options). Two paths through completely different
-physical nodes that happen to pass the same rooms (2 Elites + a Shop, say) are literally the same
-candidate to this net; a candidate with a unique histogram is its own singleton group. The network
-scores each DISTINCT combination once (one token, one logit) -- how many physical paths happen to
-share it is invisible to it by design.
+Scores map_select's own physical one-hop `choices` DIRECTLY -- one token, one logit, per real
+child coordinate. This replaces an earlier design that scored pooled multi-floor per-room-type
+histograms instead (see git history / golden_compass/model/README.md's Design section for why
+that was dropped): it discarded exactly the signal that matters most for judging a path -- an
+Elite two floors ahead at 90% HP and the same Elite at 20% HP produced the identical token, so the
+net had no way to learn the HP-vs-risk tradeoff golden_compass/policy.py's DP heuristic already
+hard-codes via _ELITE_HP_FLOOR. Now that map_select decisions are scored via MapOptionJob branch
+walks (facility_common.py's _run_map_option_job/_resolve_map_decision) instead of whole-trajectory
+tagging, there's no need for this net to enumerate several floors of hypothetical futures itself --
+the branch walk *is* the lookahead, played out for real against the live combat/meta policy stack,
+so scoring the literal one-hop children directly is both simpler and strictly more informative.
 
-Once a combination is picked (sampled from the softmax, at decision time), it has to be resolved
-back to a real engine action: pick any one of the paths that produced it (they're interchangeable
-to the net -- see resolve_combination_action) and walk ONLY that path's first hop. The rest of the
-path is thrown away on purpose: this is re-planned from scratch at every single map_select, not
-committed to upfront (facility_common.py's main_worker_loop already calls into this fresh at every
-map_select on its own, so "walk one hop, replan" falls out of the existing control flow for free
--- nothing there needs to change). That also means WHICH combination was actually chosen has to be
-recorded explicitly (see _choose_map_action_net's policy["chosen"] in whispering_earring/policy.py)
--- the resolved (col, row) alone doesn't disambiguate it, since more than one combination can
-share a first hop.
+Mirrors choices_paradox/model/model.py's shape: forward() dispatches on isinstance(decision,
+BufferDecision) between the pydantic and buffer-protocol tokenizers/option-enumerators, returning
+(options, logits, value) with options as (action_name, args) tuples -- same convention
+legal_options()/legal_options_from_buffer() use there, so policy.py's callers don't need to know
+which decision type they got.
 
-
-
-Value head IS tanh-bounded, this net's training target is the run's own
-terminal reward (+1 win / -1 death, plus a local Elite/Boss-win shaping bonus -- see
-facility_common.py's pending_map_steps / recorder.set_value wiring), not a growing per-chain sum.
+Value head has NO tanh (same reasoning as ChoicesParadoxNet's own): the training target is a
+MapOptionJob branch's own terminal state score (_combat_value's hp-fraction-shaped output, or
+-1.0 on death within the branch's room horizon -- see facility_common.py's _run_map_option_job),
+not a fixed +1/-1. That target rarely strays far outside roughly [-1, 1], but nothing guarantees
+it never will, and tanh's asymptotic squash bought nothing here beyond saturated gradients for a
+target the earlier design didn't actually keep in range either.
 """
 from __future__ import annotations
 
 import math
 import os
-import random
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,28 +44,49 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # for `common`
 from common.tokenizer import EntityVocab  # noqa: E402
 
 import sts2_path  # noqa: E402,F401  (sets sys.path to sts2-cli/python before the imports below)
-from env import Sts2Session  # noqa: E402
+import buffer_layout as bl  # noqa: E402
+from buffer_env import BufferDecision, decode_token  # noqa: E402
 from models import MapSelect  # noqa: E402
 
+# Loading golden_compass/policy.py by path, same importlib shim whispering_earring/policy.py uses
+# to reach this same file -- a bare `import policy` would collide with claws'/choices_paradox's
+# own sibling-named policy.py modules depending on sys.path order.
+import importlib.util  # noqa: E402
+
+_golden_compass_policy_path = Path(__file__).resolve().parents[1] / "policy.py"
+_spec = importlib.util.spec_from_file_location("golden_compass_policy", _golden_compass_policy_path)
+assert _spec is not None and _spec.loader is not None
+golden_compass_policy = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(golden_compass_policy)
+
 Coord = tuple[int, int]
-Combination = tuple[float, ...]
 
 # --- token types --------------------------------------------------------------------------------
 
 TOKEN_TYPES = ["PLAYER", "OPTION", "RELIC"]
 _TYPE_TO_IDX = {t: i for i, t in enumerate(TOKEN_TYPES)}
 
-# MapPointType strings as returned by MapChoice.type -- same set golden_compass/policy.py's own
-# _NODE_VALUE heuristic keys off.
+# MapPointType strings as returned by MapChoice.type / buffer_layout.map_point_type -- same set
+# golden_compass/policy.py's own _NODE_VALUE heuristic keys off.
 NODE_TYPES = ["Monster", "Elite", "RestSite", "Shop", "Unknown", "Treasure", "Ancient", "Boss"]
+_NODE_TYPE_TO_IDX = {t: i for i, t in enumerate(NODE_TYPES)}
 FEATURE_DIM = len(NODE_TYPES)
-_LOOKAHEAD_HORIZON = 5
 
 
 def _log1p(x: float | int | None) -> float:
     """Signed log1p -- some of what feeds this can go negative (e.g. a relic counter reset)."""
     x = float(x or 0)
     return math.copysign(math.log1p(abs(x)), x)
+
+
+def _type_feature(node_type: str | None) -> list[float]:
+    """One node's own type as a one-hot-ish FEATURE_DIM vector (log1p(1) at its own slot, 0
+    elsewhere) -- same encoding the old design used for a "just this node" singleton combination,
+    now the ONLY encoding, since every OPTION token is exactly one physical node."""
+    feat = [0.0] * FEATURE_DIM
+    if node_type in _NODE_TYPE_TO_IDX:
+        feat[_NODE_TYPE_TO_IDX[node_type]] = _log1p(1)
+    return feat
 
 
 # --- global id space -----------------------------------------------------------------------------
@@ -93,85 +111,29 @@ class GlobalVocab:
         return self.id_for(category, self.vocab.encode_id(category, raw_id))
 
 
-# --- map lookahead: path enumeration + combination pooling ---------------------------------------
+# --- one-hop option enumeration ------------------------------------------------------------------
 
 
-def _map_node_index(map_json: dict) -> dict[Coord, dict]:
-    """(col, row) -> node dict. Same `map` shape golden_compass/policy.py's own DP heuristic
-    already walks (RunSimulator.GetFullMap) -- see that module's docstring. `boss` is reported as
-    its own top-level key, not one of `rows`' own entries (see that module's _best_path_values) --
-    folded in here too, so a path reaching it is walked/counted like any other room."""
-    index = {(n["col"], n["row"]): n for row in map_json["rows"] for n in row}
-    boss = map_json.get("boss")
-    if boss is not None:
-        index[(boss["col"], boss["row"])] = boss
-    return index
+def legal_options(decision: MapSelect) -> list[tuple[str, dict]]:
+    return [("select_map_node", {"col": c.col, "row": c.row}) for c in decision.choices]
 
 
-def _enumerate_paths(
-    coord: Coord, node_index: dict[Coord, dict], horizon: int = _LOOKAHEAD_HORIZON,
-) -> list[list[Coord]]:
-    """Every coordinate path starting at `coord`, walking the map's own `children` adjacency, up
-    to `horizon` floors deep -- terminating early wherever a path dead-ends (Boss, or no
-    children) before that."""
-    node = node_index.get(coord)
-    if node is None:
-        return [[coord]]
-    children = node.get("children") or []
-    if node.get("type") == "Boss" or not children or horizon <= 0:
-        return [[coord]]
-    paths: list[list[Coord]] = []
-    for child in children:
-        c = (child["col"], child["row"])
-        for rest in _enumerate_paths(c, node_index, horizon - 1):
-            paths.append([coord] + rest)
-    return paths
+def legal_options_from_buffer(decision: BufferDecision) -> list[tuple[str, dict]]:
+    """Buffer counterpart to legal_options() -- see golden_compass/policy.py's
+    _current_children_from_buffer for the same enumeration (children of the current position, or
+    every row-0 point pre-act-entry, or the (-1, -1) boss sentinel at a childless junction)."""
+    children = golden_compass_policy._current_children_from_buffer(decision.arr)
+    return [("select_map_node", {"col": c, "row": r}) for c, r in children]
 
 
-def _path_combination(path: list[Coord], node_index: dict[Coord, dict]) -> Combination:
-    """log1p-compressed per-type room count along one path."""
-    counts = {t: 0 for t in NODE_TYPES}
-    for c in path:
-        node = node_index.get(c)
-        if node is not None and node.get("type") in counts:
-            counts[node["type"]] += 1
-    return tuple(_log1p(counts[t]) for t in NODE_TYPES)
+def _node_type_at(col: int, row: int, decision: MapSelect) -> str | None:
+    chosen = next((c for c in decision.choices if (c.col, c.row) == (col, row)), None)
+    return chosen.type if chosen is not None else None
 
 
-def combination_options(
-    decision: MapSelect, node_index: dict[Coord, dict] | None, horizon: int = _LOOKAHEAD_HORIZON,
-) -> dict[Combination, list[list[Coord]]]:
-    """combination -> [paths that produce it], pooled across EVERY one-hop `choices` candidate's
-    own subtree -- this dict IS the network's action space: the
-    ordered list of its keys is what tokenize()/GoldenCompassNet score, one token per distinct
-    combination, and the dict itself is how a chosen combination resolves back to a real action
-    (see resolve_combination_action)."""
-    combos: dict[Combination, list[list[Coord]]] = {}
-    for choice in decision.choices:
-        coord = (choice.col, choice.row)
-        if node_index is not None:
-            paths = _enumerate_paths(coord, node_index, horizon)
-            for path in paths:
-                combo = _path_combination(path, node_index)
-                combos.setdefault(combo, []).append(path)
-        else:
-            counts = {t: 0 for t in NODE_TYPES}
-            if choice.type in counts:
-                counts[choice.type] += 1
-            combo = tuple(_log1p(counts[t]) for t in NODE_TYPES)
-            combos.setdefault(combo, []).append([coord])
-    return combos
-
-
-def resolve_combination_action(
-    combo: Combination, combo_paths: dict[Combination, list[list[Coord]]],
-    rng: random.Random | None = None,
-) -> tuple[str, dict]:
-    """Any path sharing the chosen combination is equally valid to this net by construction"""
-    paths = combo_paths[combo]
-    path = (rng or random).choice(paths)
-    coord = path[0]
-    return "select_map_node", {"col": coord[0], "row": coord[1]}
+def _node_type_at_buffer(col: int, row: int, arr) -> str | None:
+    slot = bl.map_boss_point(arr) if (col, row) == (-1, -1) else bl.map_point_slot(arr, row, col)
+    return bl.map_point_type(slot)
 
 
 # --- tokenizer -------------------------------------------------------------------------------------
@@ -186,7 +148,7 @@ class TokenBatch:
     global_ids: torch.Tensor  # [N] long
     features: torch.Tensor  # [N, FEATURE_DIM] float
     player_pos: int
-    option_pos: dict[int, int] = field(default_factory=dict)  # combos-list index -> token row
+    option_pos: dict[int, int] = field(default_factory=dict)  # options-list index -> token row
 
     @classmethod
     def from_saved(cls, d: dict) -> "TokenBatch":
@@ -198,25 +160,12 @@ class TokenBatch:
         )
 
 
-def tokenize(
-    decision: MapSelect, gvocab: GlobalVocab, session: Sts2Session | None = None,
-    combos: list[Combination] | None = None,
+def _tokenize_common(
+    gvocab: GlobalVocab, hp: float, max_hp: float, gold: float, deck_size: float, floor: float,
+    relics: list[tuple[str | None, float]], option_types: list[str | None],
 ) -> TokenBatch:
-    """`session`, when given (and `combos` isn't already supplied), is used for one `get_map()`
-    call (cheap -- see env.py's own _map_cache) to build combination_options(); without it, a
-    candidate degrades to a singleton "just this node's own type" combination (see
-    combination_options' own docstring) -- so callers with no live session (e.g. this module's own
-    __main__ smoke test, replaying an isolated fixture) still get a valid batch.
-
-    `combos` lets a caller that already computed combination_options() (materialize.py, replaying
-    a saved trial and needing the SAME ordering to recover which index was actually chosen) pass
-    its ordered keys straight in instead of recomputing them here.
-
-    PLAYER's and RELIC's own feature vectors are shorter than FEATURE_DIM (which is sized for
-    OPTION's own per-type-count histogram, see that constant's comment) -- zero-padded in the
-    unused trailing slots, same "pad rather than resize per type" convention `feat_proj`
-    (GoldenCompassNet.encode) already assumes by sharing one Linear width across all three token
-    types."""
+    """Shared by tokenize()/tokenize_from_buffer() -- both just extract these plain values from
+    their own decision shape first."""
     types: list[int] = []
     ids: list[int] = []
     feats: list[list[float]] = []
@@ -229,31 +178,26 @@ def tokenize(
         feats.append(feature)
         return pos
 
-    player = decision.player
     player_pos = add(
         "PLAYER",
         EntityVocab.PAD_IDX,  # no id space of its own -- global row 0 is always a zero vector
         [
-            player.hp / player.max_hp if player.max_hp else 0.0,
-            _log1p(player.gold),
-            _log1p(player.deck_size),
-            decision.floor / 50.0,  # rough run-progress scale, same order of magnitude as
+            hp / max_hp if max_hp else 0.0,
+            _log1p(gold),
+            _log1p(deck_size),
+            floor / 50.0,  # rough run-progress scale, same order of magnitude as
             # sts2-rl-agent's own OBS_TOTAL_FLOOR_SCALE
         ] + [0.0] * (FEATURE_DIM - 4),
     )
 
-    if combos is None:
-        node_index = _map_node_index(session.get_map()) if session is not None else None
-        combos = list(combination_options(decision, node_index).keys())
-
     option_pos: dict[int, int] = {}
-    for i, combo in enumerate(combos):
-        option_pos[i] = add("OPTION", EntityVocab.PAD_IDX, list(combo))
+    for i, node_type in enumerate(option_types):
+        option_pos[i] = add("OPTION", EntityVocab.PAD_IDX, _type_feature(node_type))
 
-    for relic in player.relics:
+    for raw_id, counter in relics:
         add(
-            "RELIC", gvocab.entity("relic", relic.id),
-            [0.0, 0.0, _log1p(relic.counter), 0.0] + [0.0] * (FEATURE_DIM - 4),
+            "RELIC", gvocab.entity("relic", raw_id),
+            [0.0, 0.0, _log1p(counter), 0.0] + [0.0] * (FEATURE_DIM - 4),
         )
 
     return TokenBatch(
@@ -262,6 +206,40 @@ def tokenize(
         features=torch.tensor(feats, dtype=torch.float),
         player_pos=player_pos,
         option_pos=option_pos,
+    )
+
+
+def tokenize(
+    decision: MapSelect, gvocab: GlobalVocab, options: list[tuple[str, dict]] | None = None,
+) -> TokenBatch:
+    """`options`, when given (materialize.py replaying a saved trial), must be legal_options()'s
+    own output for this same decision -- lets a caller that already computed it once reuse the
+    same ordering rather than recomputing here."""
+    if options is None:
+        options = legal_options(decision)
+    option_types = [_node_type_at(a["col"], a["row"], decision) for _, a in options]
+    player = decision.player
+    return _tokenize_common(
+        gvocab, player.hp, player.max_hp, player.gold, player.deck_size, decision.floor,
+        [(r.id, r.counter) for r in player.relics], option_types,
+    )
+
+
+def tokenize_from_buffer(
+    decision: BufferDecision, gvocab: GlobalVocab, options: list[tuple[str, dict]] | None = None,
+) -> TokenBatch:
+    arr = decision.arr
+    if options is None:
+        options = legal_options_from_buffer(decision)
+    option_types = [_node_type_at_buffer(a["col"], a["row"], arr) for _, a in options]
+    relics = []
+    for _, slot in bl.player_relics(arr):
+        entry = decode_token(int(slot[bl.RELIC_TOKEN]))
+        counter = slot[bl.RELIC_COUNTER]
+        relics.append((entry, counter if counter != -1 else None))
+    return _tokenize_common(
+        gvocab, bl.player_hp(arr), bl.player_max_hp(arr), bl.player_gold(arr),
+        bl.player_deck_size(arr), bl.run_context(arr)["floor"], relics, option_types,
     )
 
 
@@ -355,25 +333,23 @@ class GoldenCompassNet(nn.Module):
         h = self.encode(batch)
         queries = [h[batch.option_pos[i]] for i in range(n_options)]
         logits = self.policy_mlp(torch.stack(queries)).squeeze(-1)
-        # tanh-bounded: the training target is the run's own terminal +1/-1 reward, not an
-        # unbounded sum -- see this module's docstring.
-        value = torch.tanh(self.value_mlp(h[batch.player_pos]).squeeze(-1))
+        value = self.value_mlp(h[batch.player_pos]).squeeze(-1)  # no tanh -- see module docstring
         return logits, value
 
     def forward(
-        self, decision: MapSelect, session: Sts2Session | None = None,
-    ) -> tuple[list[Combination], torch.Tensor, torch.Tensor, dict[Combination, list[list[Coord]]]]:
-        """Returns (combinations, logits, value, combo_paths) -- combinations/logits are index-
-        aligned (softmax index i <-> combinations[i]); combo_paths resolves a chosen combination
-        back to a real action (see resolve_combination_action). `session` is passed straight
-        through to combination_options() -- see tokenize()'s own docstring for why it's optional
-        here too."""
-        node_index = _map_node_index(session.get_map()) if session is not None else None
-        combo_paths = combination_options(decision, node_index)
-        combos = list(combo_paths.keys())
-        batch = tokenize(decision, self.gvocab, combos=combos)
-        logits, value = self.score(batch, len(combos))
-        return combos, logits, value, combo_paths
+        self, decision: MapSelect | BufferDecision,
+    ) -> tuple[list[tuple[str, dict]], torch.Tensor, torch.Tensor]:
+        """Returns (options, logits, value) -- options/logits are index-aligned (softmax index i
+        <-> options[i]), each option a plain (action_name, args) tuple ready to hand to
+        session.step(), same convention ChoicesParadoxNet.forward uses."""
+        if isinstance(decision, BufferDecision):
+            options = legal_options_from_buffer(decision)
+            batch = tokenize_from_buffer(decision, self.gvocab, options=options)
+        else:
+            options = legal_options(decision)
+            batch = tokenize(decision, self.gvocab, options=options)
+        logits, value = self.score(batch, len(options))
+        return options, logits, value
 
 
 # --- smoke test ------------------------------------------------------------------------------------
@@ -400,10 +376,9 @@ if __name__ == "__main__":
     gvocab = GlobalVocab(vocab)
     net = GoldenCompassNet(gvocab)
 
-    combos, logits, value, combo_paths = net(decision)
+    options, logits, value = net(decision)
     probs = torch.softmax(logits, dim=-1)
 
-    print(f"{len(combos)} distinct combinations, value={value.item():+.3f}")
-    for combo, p in itertools.islice(zip(combos, probs.tolist()), 8):
-        readable = {t: c for t, c in zip(NODE_TYPES, combo) if c > 0}
-        print(f"  {p:5.3f}  {readable}  ({len(combo_paths[combo])} path(s))")
+    print(f"{len(options)} options, value={value.item():+.3f}")
+    for (name, args), p in itertools.islice(zip(options, probs.tolist()), 8):
+        print(f"  {p:5.3f}  {name} {args}")

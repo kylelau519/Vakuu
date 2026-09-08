@@ -2,126 +2,163 @@
 
 Design doc for training Golden Compass the way `claws/model` and `choices_paradox/model` train
 their own subsystems -- self-play, not supervised learning -- adapted for map_select's own
-terminal, whole-run reward (now with a local Elite/Boss-win shaping bonus layered on top, see
-below) rather than a purely local/shaped one.
+decision shape. This is the **second** design (see git history for the first, whole-trajectory
+terminal-reward one) -- replaced once it became clear the terminal signal was degenerate at the
+self-play facility's actual win rate. See "Why the first design was replaced" below before
+assuming anything about a `+1`/`-1` terminal tag or a `combination`-pooled action space; neither
+exists anymore.
 
-## Why self-play, and why this reward
+## Why the first design was replaced
 
-`agents/golden_compass/policy.py`'s DP heuristic already routes reasonably around HP and node
-type, but it's static: no relic/deck awareness, a hard elite-HP cliff, and no way to improve from
-experience. The reward that actually matters for a map choice is whether the *run* is eventually
-won -- so training targets the run's own terminal outcome directly: **+1 for winning the run, -1
-for dying, and no example at all for a step whose trial ended in `"error"`** (no signal either
-way, not a 0 -- see `materialize.py`).
+The original design tagged every `select_map_node` step on a trial's own main line with that
+trial's own terminal outcome (`+1` win / `-1` death), plus a local Elite/Boss-win shaping bonus.
+That's a fine idea in principle, but it turned out to be nearly useless in practice: at the self-
+play facility's actual measured win rate (0% across every round sampled in production so far --
+Claws isn't good enough at combat yet to win a run), a trial dies whether it took the safe route or
+the risky one, so the terminal tag carries almost no information about path *quality* -- it's
+±1 regardless of the choice. Loaded the live checkpoint trained under that design and replayed a
+real trial through it: the policy had collapsed to near-one-hot (entropy ~0.000-0.1 nats out of a
+max of ~1.4) at essentially every decision, and the value head had converged to predicting roughly
+the dataset's mean outcome (~-0.8) everywhere, independent of state -- both symptoms of a REINFORCE
+signal with real variance concentrated in a handful of rare outlier trajectories (an Elite win here
+and there) dominating training, rather than a stable win/loss distinction tied to the actual
+choice made.
 
-That flat terminal tag alone is a weak signal, though: a decision at floor 3 gets the exact same
-±1 as one at floor 49, so credit assignment is smeared across the whole run instead of pointing at
-what a choice actually led to. `facility_common.py`'s `main_worker_loop` layers a local shaping
-bonus on top -- **+2 for a won Elite fight, +3 for winning the boss** -- backward-discounted
-across `select_map_node` steps (`_GOLDEN_COMPASS_GAMMA`, ~0.9, a ~6.6-decision half-life) so a
-choice a few floors before a win gets a real nudge instead of a flat fraction of credit. The flat
-±1 term is kept, not replaced: without it, a trial that beats a couple of Elites (+2 each) and
-then still dies (-1) would net positive, which would train the policy to chase risky Elites over
-safe clears. This is standard potential-based reward shaping -- densifying the signal, not
-overriding the underlying win/loss objective.
+Separately (found while diagnosing the above): the **live main line's map_select decisions were
+never actually driven by any of this** -- `whispering_earring/policy.py`'s buffer-side dispatch
+(`_choose_map_action_from_buffer`) called `random.choice` unconditionally, never consulting
+`golden_compass/policy.py`'s DP heuristic or a trained net, because both `facility_claws.py`'s and
+`facility_choices_paradox.py`'s main lines run on `Sts2BufferSession`, not the plain `Sts2Session`
+the pydantic-side `_choose_map_action` was written against. Fixed as part of this redesign --
+`_choose_map_action_from_buffer` now delegates to `golden_compass.choose_next_node_from_buffer`.
 
-## Design: whole-trajectory tagging, no branching
+## Design: per-choice branching, not whole-trajectory tagging
 
-Choices Paradox needs `MetaOptionJob`-style branching (replay the same prefix under each sibling
-option) because a card pick's value depends on downstream deckbuilding that can't be read off the
-pick itself. A map choice's *true* value is mostly "did this run end up won" -- already known,
-exactly once, at the end of the very same trial that made the choice -- plus the Elite/Boss
-shaping bonus described above, which is also fully known by trial end (every combat this trial
-ever fought has already resolved). So Golden Compass needs no branching at all: every
-`select_map_node` decision on a trial's own main line gets tagged with its value once it's known,
-via `recorder.mark_step()` at the decision and `recorder.set_value()` at trial end (see
-`facility_common.py`'s `pending_map_steps`). This also means training data comes for free from
-*any* facility run (`facility_claws.py`, `facility_choices_paradox.py`, ...) -- no dedicated
-Golden Compass facility script needed, and even round-1 heuristic-driven trials produce usable
-examples (see `materialize.py`'s module docstring).
+Map decisions are now scored the same way Choices Paradox scores its own card_reward/rest_site/
+event_choice decisions: branch every sibling option at the decision point (`MapOptionJob`,
+`checkpoint.py`), play each one forward independently on the shared branch-worker pool
+(`facility_common.py`'s `_resolve_map_decision`/`_run_map_option_job`), and score the walk
+directly -- no whole-run outcome required. This is available and meaningful regardless of the
+underlying win rate, since it's a *local* comparison between siblings from an identical starting
+state, not "did the whole run eventually win."
 
-The tradeoff: no counterfactual baseline to subtract (no sibling branches to compare against), so
-`advantage` is just the realized `+1`/`-1` terminal outcome plus the discounted shaping bonus,
-normalized (zero-mean/unit-std) across the dataset by `train.py` -- plain REINFORCE on a shaped
-trajectory return, not advantage-over-baseline. Noisier than Choices Paradox's causal-baseline
-signal, but requires no new async job infrastructure and is a reasonable place to start; the
-shaping bonus is itself a partial answer to that noise (see the reward section above).
+**Reward**: each `MapOptionJob` plays forward `cfg.map_room_horizon` further `select_map_node`
+decisions past its own commit (default 1 -- resolve the committed sibling's own room, whatever it
+is, then stop the instant the walk is back at the map for a further junction) and scores:
 
-## Architecture: scoring combinations, not nodes
+- **`-1.0`** if the walk died within that horizon.
+- **Otherwise, `_combat_value`'s hp-fraction-shaped read of the walk's HP at the cutoff** --
+  `facility_common.py`'s existing >=50%-HP-vs-below-50%-HP-with-a-3x-penalty-slope shaping,
+  already used elsewhere for per-turn/per-combat scoring, reused here as-is.
 
-`GoldenCompassNet` (`model.py`) does **not** score `map_select`'s physical one-hop `choices`
-directly. For every path reachable within `_LOOKAHEAD_HORIZON` (5) floors -- pooled across ALL of
-`choices`' own branches, not kept separate per branch -- it computes that path's own per-room-type
-count histogram (`_path_combination`, walking the same full `map` graph
-`golden_compass/policy.py`'s DP heuristic reads via `session.get_map()`), then groups every path
-that produces the identical histogram into one candidate (`combination_options`). Two paths
-through completely different physical nodes that happen to pass the same rooms (2 Elites + a
-Shop, say) are literally the same candidate to this net; a network with only 2 physical branches
-can end up choosing among 3 candidates if one branch forks internally into two different
-histograms, or among 1 if both branches happen to lead to the same combination. Order/exact
-distance within a path is thrown away on purpose -- a plain per-type count, not per-node
-distance -- trading that signal for a representation simple enough for this net's still-small
-dataset to actually learn from.
+This is deliberately **not** a flat per-combat-win bonus (`_run_meta_option_job`'s own
+`_WIN_BONUS` scheme for card_reward chains) despite being otherwise structurally identical to
+that job. A card_reward pick can't affect whether a fight happens at all, so rewarding a chain for
+every combat it happens to win along the way is a fine, non-gameable signal there. A map choice's
+entire *job* is deciding whether to walk into a fight -- a flat win bonus would reward packing in
+extra optional risk (chase an additional winnable fight, net a higher flat bonus) with no matching
+downside, exactly the "chase risky Elites" failure mode the first design's flat terminal term was
+built to guard against, just relocated to a local horizon instead of the whole trajectory. Scoring
+by terminal HP fraction instead means an extra fight only pays off if the walk is still healthier
+for it, and a route through a Rest Site (or around an optional Monster) scores on its own HP
+merits -- no special-cased "avoid combat" term needed.
 
-Once a combination is sampled from the softmax, it's resolved back to a real engine action by
-picking any ONE of the (possibly several) paths that produced it (`resolve_combination_action`)
-and walking only that path's first hop -- the rest of the path is discarded. This is re-planned
-from scratch at the very next `map_select`, not committed to upfront: `facility_common.py`'s
-`main_worker_loop` already calls into policy selection fresh at every `map_select` on its own, so
-"walk one hop, replan" falls out of the existing control flow for free. Because more than one
-combination can share a first hop, the resolved `(col, row)` alone doesn't tell you which
-combination was actually picked -- `whispering_earring/policy.py`'s `_choose_map_action_net`
-stashes the sampled index as `policy["chosen"]` (alongside the full distribution) specifically so
-`materialize.py` can recover the real label when replaying a saved trial, rather than re-deriving
-it ambiguously from the taken coordinate.
+**Baseline**: a decision's siblings are dispatched with a shared `walk_seed` (common random
+numbers, same variance-reduction `_run_meta_option_job`'s chains already use), and
+`golden_compass/model/materialize.py` baselines each sibling's value against its own group's mean
+-- a real causal comparison from an identical starting state, not the whole-trajectory design's
+un-baselined raw terminal tag. There's no natural "skip" reference option the way card_reward has
+`skip_card_reward` (every physical map child is a real move), so this uses the group mean rather
+than choices_paradox's own skip-relative baseline.
 
-Value head is `tanh`-bounded (matching `ClawsNet`'s convention), unlike `ChoicesParadoxNet`'s
-unbounded one -- the training target here is a `+1`/`-1` terminal outcome (now with a shaping
-bonus added on top, so its magnitude can exceed 1 -- see the reward section above), not a growing
-sum. A target outside `[-1, 1]` just pushes the head further into saturation than a pure `+1`/`-1`
-target would; still fine for a policy-gradient sign/magnitude signal (see Open questions below).
+## Architecture: scoring physical nodes directly
+
+`GoldenCompassNet` (`model.py`) scores `map_select`'s own one-hop `choices` **directly** -- one
+token, one logit, per real child coordinate (`legal_options`/`legal_options_from_buffer`). The
+first design pooled every path reachable within a 5-floor lookahead into per-room-type-count
+histograms and scored the histograms instead, specifically to give the net some visibility past
+the immediate node without branching. That's no longer needed now that map decisions are branched:
+the branch walk itself *is* the lookahead, played out for real against the live combat/meta policy
+stack, so the histogram encoding just threw away signal for no remaining benefit -- worse, it
+actively discarded exactly the HP-vs-risk tradeoff that matters most for judging a path (an Elite
+at 90% HP and the same Elite at 20% HP produced an identical token under the old scheme, though the
+old encoding wasn't why the trained policy collapsed -- see "Why the first design was replaced"
+above; that was the reward, not the representation. Still worth fixing regardless).
+
+Both a pydantic (`tokenize`/`legal_options`, off `MapSelect`) and a buffer-protocol
+(`tokenize_from_buffer`/`legal_options_from_buffer`, off `BufferDecision`/`buffer_layout`) path
+exist -- `forward()` dispatches on `isinstance(decision, BufferDecision)`, same convention
+`ChoicesParadoxNet.forward` uses. This closes the "Phase 1" gap the first design's own Phasing
+section flagged (no buffer-side tokenizer existed at all, so `_choose_map_action_from_buffer`
+"currently pure-random" had nowhere to delegate to even once fixed) as part of this same redesign.
+
+Value head has **no `tanh`** (matching `ChoicesParadoxNet`'s own convention, unlike the first
+design's `tanh`-bounded head): the training target is a `MapOptionJob` walk's own terminal score
+(roughly `[-1, 1]`-ish but not hard-bounded there), not a fixed `+1`/`-1`. `tanh`'s asymptotic
+squash bought nothing here beyond saturated gradients whenever a target strayed outside its range,
+which the first design's shaped terminal reward did routinely (confirmed: `value_loss` stuck
+around 2.7-4.35 for dozens of epochs in production logs).
 
 ## Data
 
-Pydantic-only: `combination_options()`/`tokenize()` work off `MapSelect`/`MapChoice` and
-`session.get_map()` directly. There is no buffer-side counterpart yet, so `materialize.py` replays
-trial JSON through the plain pydantic `Sts2Session`, not the faster `Sts2BufferSession`
-claws'/choices_paradox's own materialize scripts use. Slower per trial; a deliberate v1 tradeoff
-(see Phasing). Replaying a saved trial recomputes `combination_options()` fresh against the same
-decision/map -- its key order is deterministic, so an index recorded live (`policy["chosen"]`)
-still lines up correctly against the recomputed list (see `materialize.py`'s `_action_index`).
+`golden_compass/model/materialize.py` reads `MapOptionJob` branch files directly (grouped by
+`(main_id, divergence_index)`, both recorded explicitly in each branch file's own metadata --
+no prefix-action matching needed the way `choices_paradox/model/materialize.py`'s own grouping
+does, since its meta-branch files predate carrying `divergence_index` explicitly). No
+main-trial-fusion optimization yet (`choices_paradox/model/materialize.py`'s
+`materialize_main_and_groups` counterpart) -- every group replays its own recorded prefix once
+from scratch, a deliberate v1 tradeoff; worth revisiting if materialize throughput becomes a
+bottleneck.
+
+Map branching is **off by default** (`--map-branches-per-trial 0` in both `facility_claws.py` and
+`facility_choices_paradox.py`) -- pass `--map-branches-per-trial -1` (unlimited) or a positive cap,
+plus `--map-room-horizon` to adjust the walk depth, to actually generate `MapOptionJob` training
+data. The main line still commits via `golden_compass.choose_next_node_from_buffer`'s DP heuristic
+either way (see below) -- branching only adds the training signal on top, it doesn't change what
+the main line itself does when no trained net is loaded.
+
+## What drives the live main line today
+
+No trained net is wired into the live buffer path yet -- `_resolve_map_decision` adopts via
+`golden_compass/policy.py`'s DP heuristic (`choose_next_node`/`choose_next_node_from_buffer`),
+same "reasonable, not trained" bootstrap every other subsystem here starts from. Once
+`MapOptionJob` data trains a checkpoint under this package's simplified one-hop action space,
+`_resolve_map_decision` (and `whispering_earring/policy.py`'s `_choose_map_action`/
+`_choose_map_action_net` for the pydantic path) are the places that need to change to sample from
+it instead -- `GOLDEN_COMPASS_CHECKPOINT` is already threaded through
+`training_alternating.sh`/`policy.py`'s `_load_golden_compass_net`, but nothing currently points
+the live buffer-side decision at it.
+
+**Do not warm-start a fresh training run from an old `golden_compass.pt`/its backups** -- those
+were trained under the previous combination-pooled action space and whole-trajectory reward; the
+state_dict shapes happen to still match (same token types, same `FEATURE_DIM`), so `train.py --init`
+would silently *load* an old checkpoint, but the OPTION token's meaning changed (one physical node,
+not a pooled histogram) and the reward scale changed too -- start from `--init ""` instead.
 
 ## Open questions
 
-- No counterfactual baseline (see Design above) means higher-variance policy gradients than
-  Choices Paradox's causal-baseline signal. Worth watching whether training is noisy enough in
-  practice to warrant adding `MetaOptionJob`-style per-choice branching later.
-- `tanh`'s value target is exactly `+1`/`-1` at the edges of its range, which the MLP can only
-  approach asymptotically -- fine for a policy-gradient sign/magnitude signal, but means the raw
-  value head output should be read as "how confident," not literally saturating.
+- No main-trial-fusion replay path yet for `materialize.py` (see Data above) -- purely a throughput
+  concern, not a correctness one.
+- `map_room_horizon`'s default (1) is an untested first guess, not measured against training
+  outcomes yet -- worth revisiting once there's enough branch data to tell whether a deeper walk
+  (2+ rooms) meaningfully changes what the net learns to prefer.
 - Should Golden Compass eventually consume Claws' own value head as an input feature (a
   win-probability estimate) rather than only relic/deck/HP counts? Deferred -- see
   `agents/README.md`'s note on the three subsystems potentially converging.
-- `_GOLDEN_COMPASS_GAMMA`/`_GOLDEN_COMPASS_ELITE_BONUS`/`_GOLDEN_COMPASS_BOSS_BONUS`
-  (`facility_common.py`) are untuned first guesses, not measured against training outcomes yet --
-  worth revisiting once there's enough round-over-round data to tell whether the shaping bonus is
-  actually reducing policy-gradient variance in practice.
-- Round-1 (heuristic-driven) steps have no recorded `policy["chosen"]`, so `materialize.py`'s
-  `_action_index` falls back to the first combination (in `combination_options()`'s own
-  deterministic key order) whose path set starts at the taken `(col, row)` -- an arbitrary but
-  consistent tie-break when more than one combination shares that first hop, since the DP
-  heuristic never reasoned in terms of combinations to begin with. Only matters for round-1
-  bootstrap data; once a net is training itself, every step it drives carries the real index.
+- Once Claws' win rate is meaningfully above 0%, is it worth blending a small whole-trajectory
+  terminal term back in on top of the branch-derived signal, so Golden Compass also learns to
+  value "paths that historically led to actual wins," not just locally healthy ones? The
+  `pending_map_steps`/`_apply_golden_compass_rewards` machinery from the first design is still
+  intact in `facility_common.py` (it just naturally stops firing once `map_resolver` handles a
+  trial's map decisions instead of the generic path) if this turns out to be worth reviving.
 
 ## Phasing
 
-- **Phase 0 (this)**: whole-trajectory terminal-reward tagging on the main line only, pydantic-only
-  tokenizer, no branching, no buffer-side replay path, no warm-start.
-- **Phase 1**: buffer-side `tokenize_from_buffer`/`legal_options_from_buffer`, so a `MetaOptionJob`
-  chain's own horizon walk (`_choose_map_action_from_buffer`, currently pure-random) can delegate
-  to a trained net too, instead of adding pure noise to every chain that happens to cross a
-  map_select.
-  Also gives `materialize.py` a fast replay path.
-- **Phase 2**: if Phase 0's no-baseline variance turns out to matter, add `MetaOptionJob`-style
-  per-choice branching (map_select added to `META_ELIGIBLE_DECISIONS`) for a causal baseline, same
-  shape as Choices Paradox's own.
+- **Phase 0 (superseded)**: whole-trajectory terminal-reward tagging, combination-pooled action
+  space, no branching. See git history.
+- **Phase 1 (this)**: per-choice `MapOptionJob` branching, causal group-mean baseline, one-hop
+  action space (pydantic + buffer), buffer-side main-line fix (DP heuristic instead of
+  `random.choice`). No trained net wired into the live path yet.
+- **Phase 2**: wire a trained checkpoint into `_resolve_map_decision`'s live adoption (sampling
+  from the net instead of always the DP heuristic), same "upgrade once a checkpoint exists" pattern
+  `_choose_card_reward_decision`/`_load_choices_paradox_net` already follow.

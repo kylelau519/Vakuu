@@ -25,11 +25,12 @@ from typing import Callable
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imports below)
 import buffer_layout as bl
 from env import Sts2ActionError, Sts2EngineTimeoutError, Sts2Session
-from buffer_env import Sts2BufferSession, decode_token
+from buffer_env import Sts2BufferSession, BufferDecision, decode_token
 from installation import ensure_setup
 
-from policy import choose_action, get_claws_net
+from policy import choose_action, get_claws_net, golden_compass, _gc_model
 from recorder import CompactRecorder
+from checkpoint import MapOptionJob
 
 _SEED_WORDS = ["falcon", "ember", "wolf", "raven", "thorn", "comet", "storm", "harbor"]
 
@@ -227,6 +228,15 @@ class FacilityConfig:
     # total_value it's accumulated so far -- see _run_meta_option_job. No terminal penalty either
     # way, same reasoning as the unbounded case: cutting a chain off early isn't a loss.
     meta_horizon_combats: int | None = None
+    # select_map_node branching (agents/golden_compass) -- see _resolve_map_decision/
+    # _run_map_option_job. 0 = disabled (main line still commits via golden_compass's own DP
+    # heuristic, just with no branch-derived training signal); None = unlimited.
+    map_branches_per_trial: int | None = 0
+    # How many further select_map_node decisions a MapOptionJob walk plays past its own commit
+    # before scoring -- see _run_map_option_job's docstring for why this is rooms, not combats,
+    # and why the default is 1 (score the committed sibling's own room, stop the instant the walk
+    # is back at the map for a further junction).
+    map_room_horizon: int = 1
 
 
 def _bypass_card_reward(session) -> None:
@@ -419,12 +429,14 @@ class _TrialState:
     pending_meta_jobs: dict = field(default_factory=dict)
     checkpoint_refcount: dict = field(default_factory=dict)
 
+    map_budget: int | None = 0  # see FacilityConfig.map_branches_per_trial
+
 
 def _play_trial(
     cfg: FacilityConfig, job_queue_priority: mp.Queue, job_queue: mp.Queue, results_queue,
     meta_results_queue, main_worker_index: int, recorder, character: str, seed: str, main_id: str,
     this_trial_resume: dict | None, stop_event, queue_manager, combat_resolver: Callable,
-    meta_resolver: Callable | None, state: _TrialState,
+    meta_resolver: Callable | None, map_resolver: Callable | None, state: _TrialState,
 ) -> tuple[str, object]:
     """Plays one trial's decisions from the first through game_over, or through an ending combat
     outcome ("lost"/"error"). Returns (outcome, final decision); any exception propagates to the
@@ -486,11 +498,32 @@ def _play_trial(
             )
             continue
 
-        name, kwargs, policy, state.pending_purpose = choose_action(
-            decision, state.session, state.pending_purpose
-        )
-        if policy is not None:
-            recorder.attach_policy(policy)
+        if (map_resolver is not None and state.map_budget != 0
+                and decision.decision == "map_select"):
+            state.divergence_index += 1
+            if state.map_budget is not None:
+                state.map_budget -= 1
+            name, kwargs, new_pending = map_resolver(
+                job_queue, meta_results_queue, cfg, recorder, state.session, decision,
+                character, seed, main_id, state.divergence_index,
+                state.last_room_checkpoint_path, state.last_room_entry_index,
+            )
+            for meta_id, ckpt_path, is_adopted, commit_step in new_pending:
+                state.pending_meta_jobs[meta_id] = (ckpt_path, is_adopted, commit_step)
+                if ckpt_path is not None:
+                    state.checkpoint_refcount[ckpt_path] = (
+                        state.checkpoint_refcount.get(ckpt_path, 0) + 1
+                    )
+            _drain_meta_results_nowait(
+                meta_results_queue, state.pending_meta_jobs, state.checkpoint_refcount, recorder
+            )
+        else:
+            name, kwargs, policy, state.pending_purpose = choose_action(
+                decision, state.session, state.pending_purpose
+            )
+            if policy is not None:
+                recorder.attach_policy(policy)
+
         if name == "select_map_node":
             state.pending_map_steps.append(recorder.mark_step())
             state.pending_map_step_types.append(
@@ -530,13 +563,183 @@ def _apply_golden_compass_rewards(recorder, outcome: str, state: _TrialState) ->
         recorder.set_value(step, map_reward + bonus)
 
 
+def _run_map_option_job(cfg: FacilityConfig, job: MapOptionJob, results_queue) -> None:
+    """branch_worker_loop's MapOptionJob handler -- reconstructs to job.commit_args's sibling,
+    plays forward up to job.room_horizon further select_map_node decisions (fighting whatever
+    combat that leads into via _play_turn_only, same unbranched single-line playout
+    _run_meta_option_job uses for its own chains -- no further turn-branching), then scores the
+    walk's TERMINAL state: -1.0 if it died along the way, else _combat_value's hp-fraction-shaped
+    read of however healthy the walk arrived at its own cutoff.
+
+    Deliberately NOT a flat per-combat win bonus (_run_meta_option_job's own `_WIN_BONUS` scheme,
+    which this is otherwise structurally identical to): that formula never penalizes a chain for
+    seeking a fight out, only for losing one it started, which is a fine incentive for a
+    card_reward pick that can't affect whether combat happens at all -- but a map choice's whole
+    job IS deciding whether to walk into one, so a flat bonus per win rewards packing in
+    additional risky fights the same walk didn't need to take. Scoring by terminal HP fraction
+    instead means an extra fight only pays off if it's still net-positive for survivability, and a
+    route through a Rest Site (or around an optional Monster) scores on its own merits -- no
+    special-cased "avoid combat" term needed, since _combat_value's own >=50%-HP-vs-below-50%-HP
+    shaping already treats "won, but limped out at 10% HP" as nearly as bad as losing outright."""
+    import torch
+
+    recorder = CompactRecorder({
+        "character": job.character, "seed": job.seed, "ascension": job.ascension,
+        "main_id": job.main_id, "role": "branch", "branch_kind": "map",
+        "divergence_index": job.divergence_index, "option_index": job.option_index,
+        "prefix_len": len(job.prefix),
+    }, start_step=len(job.prefix))
+    session = Sts2BufferSession(logger=recorder)
+    value = None
+    outcome = None
+    pending_purpose = None
+    try:
+        try:
+            if job.last_room_checkpoint_path is not None and job.last_room_entry_index is not None:
+                entry_action = job.prefix[job.last_room_entry_index]
+                room_actions = job.prefix[job.last_room_entry_index + 1:]
+                decision = session.load_and_resume_combat(
+                    job.last_room_checkpoint_path, entry_action, room_actions
+                )
+            else:
+                decision = session.open_from_checkpoint(
+                    job.character, job.seed, job.ascension, job.prefix
+                )
+            session.action_log = list(job.prefix)
+            commit_step = recorder.mark_step()
+            decision = session.step(job.commit_name, **job.commit_args)
+            # Reseed AFTER committing, same reasoning as _run_meta_option_job's own walk_seed --
+            # every sibling option's post-commit policy draws start from the identical stream.
+            random.seed(job.walk_seed)
+            torch.manual_seed(job.walk_seed)
+
+            rooms_walked = 0
+            while decision.decision != "game_over":
+                if decision.decision == "combat_play":
+                    combat_hp_before, combat_max_hp = decision.player_hp, decision.player_max_hp
+                    turn_outcome = "continue"
+                    while turn_outcome == "continue":
+                        turn_outcome, decision = _play_turn_only(
+                            session, decision, combat_hp_before, combat_max_hp,
+                            bypass_reward_on_win=False,
+                        )
+                    if turn_outcome == "lost":
+                        outcome = "lost"
+                        break
+                    continue
+
+                # card_reward_dirichlet_noise=False: any card_reward this walk hits past its own
+                # commit would otherwise pick up extra sampling variance on top of the sibling
+                # comparison this whole job exists to measure -- same reasoning as
+                # _run_meta_option_job's own chains.
+                name, kwargs, policy, pending_purpose = choose_action(
+                    decision, session, pending_purpose, card_reward_dirichlet_noise=False,
+                )
+                if policy is not None:
+                    recorder.attach_policy(policy)
+                decision = session.step(name, **kwargs)
+                if name == "select_map_node":
+                    rooms_walked += 1
+                    if rooms_walked >= job.room_horizon:
+                        outcome = "horizon"
+                        break
+
+            if outcome is None:
+                outcome = "won" if decision.victory else "lost"
+
+            if outcome == "lost":
+                value = -1.0
+            else:
+                value = _combat_value(CombatOutcome(decision.player_hp, decision.player_max_hp))
+        except Exception as e:
+            recorder.log_error(f"{type(e).__name__}: {e}")
+            outcome = "error"
+
+        if outcome != "error":
+            recorder.set_value(commit_step, value)
+        try:
+            recorder.save(f"{cfg.raw_dir}/{job.map_id}.json", session.action_log, outcome=outcome)
+        except Exception as e:
+            recorder.log_error(f"save failed: {type(e).__name__}: {e}")
+    finally:
+        session.close()
+        random.seed(os.urandom(16))
+        torch.seed()
+        results_queue.put((job.map_id, None if outcome == "error" else value))
+
+
+def _resolve_map_decision(
+    job_queue, meta_results_queue, cfg: FacilityConfig, recorder: CompactRecorder, session, decision,
+    character: str, seed: str, main_id: str, divergence_index: int,
+    last_room_checkpoint_path: str | None, last_room_entry_index: int | None,
+) -> tuple[str, dict, list]:
+    """_play_trial's map_resolver: picks which sibling the main line commits to, then dispatches a
+    MapOptionJob for every sibling (including the adopted one) to the shared branch-worker pool
+    for real per-choice scoring (see _run_map_option_job) -- golden_compass/model/materialize.py
+    reads these branch files directly, grouped by (main_id, divergence_index) and baselined
+    against their own sibling group's mean, not any value tagged onto the main line's own trial
+    file (this resolver never calls recorder.set_value itself -- unlike _resolve_meta_decision,
+    there's no "adopted option's value" to backfill into the main line, since materialize.py reads
+    every sibling equally either way).
+
+    Returns (name, kwargs, pending) -- NOT a stepped decision, unlike _resolve_meta_decision:
+    select_map_node's own checkpoint-take/step already has one shared home in _play_trial's own
+    generic tail (used for every select_map_node regardless of which chooser picked it), so this
+    only decides what to commit to and what to branch, leaving the actual session.step() there.
+
+    Adopts via golden_compass's own DP heuristic for now, same "reasonable, not trained" bootstrap
+    every other subsystem here starts from -- no trained net is wired into this live path yet (see
+    golden_compass/model/README.md); once MapOptionJob data trains one under the simplified
+    one-hop action space (golden_compass/model/model.py), this is the one place that needs to
+    change to sample from it instead."""
+    if isinstance(decision, BufferDecision):
+        options = _gc_model.legal_options_from_buffer(decision)
+    else:
+        options = _gc_model.legal_options(decision)
+    if len(options) < 2:
+        name, args = options[0]
+        return name, args, []
+
+    if isinstance(decision, BufferDecision):
+        hp_frac = decision.player_hp / decision.player_max_hp if decision.player_max_hp else 1.0
+        adopted_coord, _children = golden_compass.choose_next_node_from_buffer(decision.arr, hp_frac)
+    else:
+        hp_frac = decision.player.hp / decision.player.max_hp if decision.player.max_hp else 1.0
+        adopted_coord = golden_compass.choose_next_node(session.get_map(), hp_frac)
+
+    adopted_index = next(
+        (i for i, (_, a) in enumerate(options) if (a["col"], a["row"]) == adopted_coord), 0
+    )
+    name, args = options[adopted_index]
+
+    prefix = list(session.action_log)
+    walk_seed = random.getrandbits(64)
+
+    pending: list[tuple[str, str | None, bool, int | None]] = []
+    for option_index, (opt_name, opt_args) in enumerate(options):
+        job = MapOptionJob(
+            main_id=main_id, character=character, seed=seed, ascension=cfg.ascension,
+            divergence_index=divergence_index, option_index=option_index, prefix=prefix,
+            last_room_checkpoint_path=last_room_checkpoint_path,
+            last_room_entry_index=last_room_entry_index,
+            commit_name=opt_name, commit_args=opt_args, walk_seed=walk_seed,
+            room_horizon=cfg.map_room_horizon,
+        )
+        # is_adopted is always False here -- see this function's own docstring on why no value
+        # ever gets backfilled into the main line's recorder for a map decision.
+        job_queue.put((job, meta_results_queue))
+        pending.append((job.map_id, last_room_checkpoint_path, False, None))
+
+    return name, args, pending
+
+
 def main_worker_loop(
     cfg: FacilityConfig, job_queue: mp.Queue, job_queue_priority: mp.Queue, log_queue: mp.Queue,
     results_queue, main_worker_index: int, stop_event, trial_counter=None,
     resume: dict | None = None, manager_address=None, manager_authkey: bytes | None = None,
     meta_results_queue=None, *,
     combat_resolver: Callable, meta_resolver: Callable | None = None,
-    session_factory: Callable = Sts2Session,
+    map_resolver: Callable | None = None, session_factory: Callable = Sts2Session,
 ) -> None:
     """Runs main-line trials (via _play_trial) until stop_event fires or cfg.n_main_trials is
     reached.
@@ -585,7 +788,19 @@ def main_worker_loop(
     default) or Sts2BufferSession (in-process CLR, faster but see the Sts2EngineTimeoutError
     handling below). combat_resolver/meta_resolver must tolerate whichever one this worker was
     built with -- facility_claws._resolve_combat and this module's _map_point_type_at both branch
-    on hasattr(decision, "arr") for exactly this reason."""
+    on hasattr(decision, "arr") for exactly this reason.
+
+    map_resolver(job_queue, meta_results_queue, cfg, recorder, session, decision, character, seed,
+    main_id, divergence_index, last_room_checkpoint_path, last_room_entry_index) -> (name, kwargs,
+    pending_map_jobs): called whenever decision.decision == "map_select" and this trial's map-
+    branch budget (cfg.map_branches_per_trial) allows it, instead of choose_action(). Returns the
+    action to commit to (not a stepped decision -- select_map_node's own checkpoint-take/step
+    stays centralized in _play_trial's own generic tail) plus a (map_id, checkpoint_path,
+    is_adopted, commit_step) tuple per MapOptionJob just dispatched, same shape meta_resolver's own
+    pending_meta_jobs uses (see _resolve_map_decision) -- shares pending_meta_jobs/
+    checkpoint_refcount bookkeeping with meta_resolver's jobs rather than tracking its own. None
+    (facility_claws.py's/facility_choices_paradox.py's case when map branching is off) means
+    map_select falls through to choose_action() same as before."""
     _tag_worker_stderr("main", main_worker_index, log_queue, cfg.verbose)
     # New process group -- Facility.stop()'s force-kill uses os.killpg on it (see there for why:
     # combat_resolver's dotnet-run subprocesses need to die with it, not be orphaned).
@@ -624,6 +839,7 @@ def main_worker_loop(
             session=session_factory(logger=recorder),
             checkpoint_dir=os.path.join(cfg.raw_dir, "checkpoints"),
             meta_budget=cfg.meta_branches_per_trial,
+            map_budget=cfg.map_branches_per_trial,
         )
         outcome = None
         poisoned = False
@@ -632,7 +848,7 @@ def main_worker_loop(
                 outcome, _ = _play_trial(
                     cfg, job_queue_priority, job_queue, results_queue, meta_results_queue,
                     main_worker_index, recorder, character, seed, main_id, this_trial_resume,
-                    stop_event, queue_manager, combat_resolver, meta_resolver, state,
+                    stop_event, queue_manager, combat_resolver, meta_resolver, map_resolver, state,
                 )
             except Sts2EngineTimeoutError as e:
                 recorder.log_error(f"{type(e).__name__}: {e}")

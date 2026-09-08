@@ -100,3 +100,38 @@ class MetaOptionJob:
     @property
     def meta_id(self) -> str:
         return f"{self.main_id}_m{self.divergence_index:03d}_o{self.option_index:02d}"
+
+
+@dataclass
+class MapOptionJob:
+    """One select_map_node sibling's bounded evaluation walk (agents/golden_compass), dispatched
+    to the shared branch-worker pool -- structurally identical to MetaOptionJob (reconstructed
+    once via load_and_resume_combat/open_from_checkpoint, then played unbranched on its own
+    Sts2BufferSession/CoreCLR in its own OS process), but scored differently: see
+    facility_common._run_map_option_job's docstring for why this walks a fixed number of ROOMS
+    (not combats) and scores by terminal HP fraction (not accumulated per-combat win bonuses) --
+    the reward-design writeup in golden_compass/model/README.md's Design section covers why a flat
+    per-win bonus is the wrong incentive for a decision that gets to choose whether to fight at
+    all, unlike a card_reward pick.
+
+    prefix/last_room_checkpoint_path/last_room_entry_index/commit_name/commit_args/walk_seed all
+    mean exactly what they mean on MetaOptionJob -- see that dataclass's own docstring. room_horizon
+    is this job's counterpart to MetaOptionJob.horizon_combats: how many further select_map_node
+    decisions (rooms) this walk plays past its own commit before scoring, win or lose."""
+    main_id: str
+    character: str
+    seed: str
+    ascension: int
+    divergence_index: int
+    option_index: int
+    prefix: list[dict]
+    last_room_checkpoint_path: str | None
+    last_room_entry_index: int | None
+    commit_name: str
+    commit_args: dict
+    walk_seed: int
+    room_horizon: int = 2
+
+    @property
+    def map_id(self) -> str:
+        return f"{self.main_id}_g{self.divergence_index:03d}_o{self.option_index:02d}"

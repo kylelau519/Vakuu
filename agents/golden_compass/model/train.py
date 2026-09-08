@@ -1,7 +1,8 @@
 """Trains GoldenCompassNet on materialize.py's output. Near-verbatim copy of
 choices_paradox/model/train.py -- same loss formula, same reasoning -- pointed at this package's
-network. See materialize.py's module docstring for where `value`/`advantage` come from (this
-trial's own terminal run outcome, no sibling-branch baseline).
+network. See materialize.py's module docstring for where `value`/`advantage` come from: each
+select_map_node sibling's own bounded MapOptionJob branch walk, baselined against its sibling
+group's own mean (no natural "skip" option to baseline against the way choices_paradox has).
 
 Real padded batching (see claws/model/train.py's own module docstring for the padding/masking
 reasoning): each example has a different token count and option count, padded up to the batch's
@@ -9,8 +10,8 @@ own max length.
 
 Policy loss is an advantage-weighted log-likelihood, not cross-entropy against a fitted target
 distribution: `policy_loss = -advantage * log_prob(action_index).clamp(min=_LOGP_FLOOR)`. A
-positive advantage (won the run) pushes that map choice's probability up on minimization; a
-negative one (died) pushes it down. The log_prob floor exists for the same reason
+positive advantage (this sibling scored above its group's mean) pushes that choice's probability
+up on minimization; a negative one pushes it down. The log_prob floor exists for the same reason
 claws/model/train.py's does: a fixed dataset replayed over many epochs has no equilibrium on the
 push-down side (log_prob -> -inf as prob -> 0), so clamping it gives a floor past which the
 gradient zeroes out instead of chasing probability to exactly 0.
@@ -99,7 +100,7 @@ def _batch_step(
 
     all_logits = net.policy_mlp(torch.stack(queries)).squeeze(-1)  # [total options in batch]
     player_h = torch.stack([h[b, ex["player_pos"]] for b, ex in enumerate(examples)])
-    values = torch.tanh(net.value_mlp(player_h).squeeze(-1))  # [B]
+    values = net.value_mlp(player_h).squeeze(-1)  # [B] -- no tanh, see model.py's score()
 
     loss = torch.zeros(())
     total_policy = total_value = 0.0

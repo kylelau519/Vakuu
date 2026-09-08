@@ -12,10 +12,11 @@ import buffer_layout as bl
 from env import Sts2Session
 from buffer_env import Sts2BufferSession, decode_token
 
-from checkpoint import BranchJob
+from checkpoint import BranchJob, MapOptionJob
 from recorder import CompactRecorder
 from facility_common import (
     Facility, FacilityConfig, _clean_actions, _play_turn_only,
+    _resolve_map_decision, _run_map_option_job,
     add_common_cli_args, branch_worker_loop, load_resume, main_worker_loop,
 )
 
@@ -311,9 +312,17 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the Whispering Earring self-play facility (combat turn-branching)")
     add_common_cli_args(parser)
     parser.add_argument("--branches-per-turn", type=int, default=3)
+    parser.add_argument("--map-branches-per-trial", type=int, default=0,
+                         help="cap on how many select_map_node decisions per trial spawn "
+                              "MapOptionJob branches for golden_compass (default: 0, disabled; "
+                              "pass -1 for unlimited)")
+    parser.add_argument("--map-room-horizon", type=int, default=1,
+                         help="rooms a MapOptionJob branch walks past its own commit before "
+                              "scoring (default: 1 -- see facility_common._run_map_option_job)")
     args = parser.parse_args()
 
     resume = load_resume(args.resume_branch_file) if args.resume_branch_file else None
+    map_branches_per_trial = None if args.map_branches_per_trial < 0 else args.map_branches_per_trial
 
     facility = Facility(
         FacilityConfig(
@@ -325,11 +334,17 @@ if __name__ == "__main__":
             n_main_trials=args.trials,
             raw_dir=args.raw_dir,
             verbose=args.verbose,
+            map_branches_per_trial=map_branches_per_trial,
+            map_room_horizon=args.map_room_horizon,
         ),
         main_worker_fn=functools.partial(
-            main_worker_loop, combat_resolver=_resolve_combat, session_factory=Sts2BufferSession
+            main_worker_loop, combat_resolver=_resolve_combat, map_resolver=_resolve_map_decision,
+            session_factory=Sts2BufferSession,
         ),
-        branch_worker_fn=functools.partial(branch_worker_loop, handlers={BranchJob: _run_branch_job}),
+        branch_worker_fn=functools.partial(
+            branch_worker_loop,
+            handlers={BranchJob: _run_branch_job, MapOptionJob: _run_map_option_job},
+        ),
         resume=resume,
     )
     facility.run()

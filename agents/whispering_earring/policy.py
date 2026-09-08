@@ -122,24 +122,22 @@ def _load_golden_compass_net():
 
 
 def _choose_map_action_net(
-    decision, session: Sts2Session, net, dirichlet_noise: bool = True,
+    decision, net, dirichlet_noise: bool = True,
 ) -> tuple[str, dict, dict]:
-    """ Samples (not argmax) from GoldenCompassNet's own softmax for the best room combinations"""
+    """Samples (not argmax) from GoldenCompassNet's own softmax over decision's literal one-hop
+    `choices` -- same shape as _choose_combat_action_claws's own sampling."""
 
-    combos, logits, _value, combo_paths = net.forward(decision, session)
+    options, logits, _value = net.forward(decision)
     probs = torch.softmax(logits, dim=-1)
     if dirichlet_noise:
-        alpha = _DIRICHLET_ALPHA_SCALE / len(combos)
-        noise = torch.distributions.Dirichlet(torch.full((len(combos),), alpha)).sample()
+        alpha = _DIRICHLET_ALPHA_SCALE / len(options)
+        noise = torch.distributions.Dirichlet(torch.full((len(options),), alpha)).sample()
         probs = (1 - _DIRICHLET_EPS) * probs + _DIRICHLET_EPS * noise
     idx = int(torch.multinomial(probs, 1).item())
-    policy = {
-        "combinations": [
-            {"combo": list(c), "prob": p} for c, p in zip(combos, probs.tolist())
-        ],
-        "chosen": idx,
-    }
-    name, args = _gc_model.resolve_combination_action(combos[idx], combo_paths)
+    policy = [
+        {"action": a, "args": args, "prob": p} for (a, args), p in zip(options, probs.tolist())
+    ]
+    name, args = options[idx]
     return name, args, policy
 
 
@@ -340,16 +338,15 @@ def _choose_generic_action_from_buffer(
 
 
 def _choose_map_action_from_buffer(arr) -> tuple[str, dict]:
-    current_children = None
-    for _row, _col, slot in bl.map_points(arr):
-        if int(slot[2]) == 1:  # MAP_POINT_SIZE layout: type, visited, current, then children
-            current_children = list(bl.map_point_children(slot))
-            break
-    if current_children is None:
-        # No point is marked current yet -- the very first move of the act, offered from every
-        # row-0 point (map_points() yields (row, col, slot) for every real point on the grid).
-        current_children = [(col, row) for row, col, _slot in bl.map_points(arr) if row == 0]
-    col, row = random.choice(current_children)
+    """Was `random.choice` over the physical children -- golden_compass's DP heuristic (and any
+    trained net) never actually ran on the buffer path, since both facility_claws.py's and
+    facility_choices_paradox.py's main lines run on Sts2BufferSession, not the plain Sts2Session
+    _choose_map_action itself is written against. Delegates to golden_compass's own buffer-side DP
+    heuristic instead now -- see choose_next_node_from_buffer's docstring."""
+    hp = bl.player_hp(arr)
+    max_hp = bl.player_max_hp(arr)
+    hp_frac = hp / max_hp if max_hp else 1.0
+    (col, row), _children = golden_compass.choose_next_node_from_buffer(arr, hp_frac)
     return "select_map_node", {"col": col, "row": row}
 
 
@@ -412,7 +409,7 @@ def _choose_map_action(
     """Samples from a trained GoldenCompassNet, fallback to a heuristic if no net is loaded. """
     net = _load_golden_compass_net()
     if net is not None:
-        name, kwargs, policy = _choose_map_action_net(decision, session, net, map_dirichlet_noise)
+        name, kwargs, policy = _choose_map_action_net(decision, net, map_dirichlet_noise)
         return name, kwargs, policy
 
     hp_frac = decision.player.hp / decision.player.max_hp if decision.player.max_hp else 1.0
