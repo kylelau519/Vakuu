@@ -116,7 +116,8 @@ while true; do
         "$vakuu/agents/claws/model/dataset.pt" --epochs 40 \
         --out "$vakuu/agents/claws/model/claws.pt" \
         --init "${CLAWS_CHECKPOINT:-}" \
-        --lr 5e-6
+        --lr 6.0e-5 \
+        --batch-size 1024
 
     echo "[claws 6/7] Backing up checkpoint..."
     backup_dir="$vakuu/agents/claws/model/backups"
@@ -198,7 +199,7 @@ while true; do
         --out "$vakuu/agents/choices_paradox/model/choices_paradox.pt" \
         --init "$CHOICES_CHECKPOINT" \
         --warm-start-from "${CLAWS_CHECKPOINT:-}" \
-        --lr 5e-6 \
+        --lr 7e-6 \
         --batch_size 64
 
     echo "[choices 6/6] Backing up checkpoint..."
@@ -229,7 +230,8 @@ while true; do
     python "$vakuu/agents/golden_compass/model/train.py" \
         "$vakuu/agents/golden_compass/model/dataset.pt" --epochs 80 \
         --out "$vakuu/agents/golden_compass/model/golden_compass.pt" \
-        --init "$GOLDEN_COMPASS_CHECKPOINT_PATH"
+        --init "$GOLDEN_COMPASS_CHECKPOINT_PATH" \
+        --batch-size 32
 
     echo "Backing up Golden Compass checkpoint..."
     backup_dir="$vakuu/agents/golden_compass/model/backups"
