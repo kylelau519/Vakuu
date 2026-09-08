@@ -89,40 +89,61 @@ while true; do
 
     cleanup_procs
     
-    echo "[claws 1/6] Archiving previous round's raw data (keeping last $HISTORY_WINDOW rounds)..."
+    echo "[claws 1/7] Archiving previous round's raw data (keeping last $HISTORY_WINDOW rounds)..."
     archive_round_data "$vakuu/agents/whispering_earring/data/raw" \
         "$vakuu/agents/whispering_earring/data/history/claws" "$HISTORY_WINDOW"
     find "$vakuu/agents/whispering_earring/data/raw/checkpoints/" -maxdepth 1 -name '*.json' -delete
 
-    echo "[claws 2/6] Running facility_claws.py (Data Generation)..."
+    echo "[claws 2/7] Running facility_claws.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility_claws.py" \
         --trials 5 --branch-workers 15 --branches-per-turn 30 --main-workers 3 \
         --ascension 1 --raw-dir "$vakuu/agents/whispering_earring/data/raw"
 
-    echo "[claws 3/6] Floor/combat stats for this round..."
+    echo "[claws 3/7] Floor/combat stats for this round..."
     python "$vakuu/agents/whispering_earring/stats.py" \
         --raw-dir "$vakuu/agents/whispering_earring/data/raw" \
         --round "$ROUND" --no-card-stats
 
-    echo "[claws 4/6] Materializing dataset (this round + up to $HISTORY_WINDOW archived rounds)..."
+    echo "[claws 4/7] Materializing dataset (this round + up to $HISTORY_WINDOW archived rounds)..."
     python "$vakuu/agents/claws/model/materialize.py" \
         "$vakuu/agents/whispering_earring/data/raw/" \
         "$vakuu/agents/whispering_earring/data/history/claws/"*/ \
         --out "$vakuu/agents/claws/model/dataset.pt" \
         --jobs 5
 
-    echo "[claws 5/6] Training model..."
+    echo "[claws 5/7] Training model..."
     python "$vakuu/agents/claws/model/train.py" \
         "$vakuu/agents/claws/model/dataset.pt" --epochs 40 \
         --out "$vakuu/agents/claws/model/claws.pt" \
         --init "${CLAWS_CHECKPOINT:-}" \
         --lr 5e-6
 
-    echo "[claws 6/6] Backing up checkpoint..."
+    echo "[claws 6/7] Backing up checkpoint..."
     backup_dir="$vakuu/agents/claws/model/backups"
     mkdir -p "$backup_dir"
     cp "$vakuu/agents/claws/model/claws.pt" \
         "$backup_dir/claws_$(date +%Y%m%d_%H%M%S).pt"
+
+    echo "[claws 7/7] Single-rollout comparison (current vs previous round vs untrained init)..."
+    # Frozen random-init baseline, generated once and reused every round -- train.py refuses to
+    # overwrite an existing --out, so this only ever runs on the very first round.
+    UNTRAINED_CLAWS_CHECKPOINT="$vakuu/agents/claws/model/claws_untrained.pt"
+    if [ ! -f "$UNTRAINED_CLAWS_CHECKPOINT" ]; then
+        python "$vakuu/agents/claws/model/train.py" \
+            --epochs 0 --init "" --out "$UNTRAINED_CLAWS_CHECKPOINT"
+    fi
+    # The backup dir's newest file is the one just copied above (this round's post-training
+    # checkpoint); the second-newest is last round's -- claws.pt itself already got overwritten
+    # by --out above, so this is the only place last round's weights still exist.
+    PREVIOUS_CLAWS_CHECKPOINT=$(ls -t "$backup_dir"/claws_*.pt 2>/dev/null | sed -n '2p')
+    eval_args=(
+        "current=$vakuu/agents/claws/model/claws.pt"
+        "untrained=$UNTRAINED_CLAWS_CHECKPOINT"
+    )
+    [ -n "$PREVIOUS_CLAWS_CHECKPOINT" ] && eval_args+=("previous=$PREVIOUS_CLAWS_CHECKPOINT")
+    python "$vakuu/agents/whispering_earring/eval_claws.py" \
+        --checkpoints "${eval_args[@]}" \
+        --ascension 1
 
     cleanup_procs
 
@@ -161,7 +182,8 @@ while true; do
     echo "[choices 3/6] Meta-decision stats for this round..."
     python "$vakuu/agents/whispering_earring/stats_choices.py" \
         --raw-dir "$raw_dir" \
-        --round "$ROUND"
+        --round "$ROUND" \
+        --jobs 6
 
     echo "[choices 4/6] Materializing dataset (this round + up to $HISTORY_WINDOW archived rounds)..."
     python "$vakuu/agents/choices_paradox/model/materialize.py" \
