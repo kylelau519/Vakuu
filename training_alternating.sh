@@ -28,7 +28,7 @@ export OMP_NUM_THREADS=1
 export DOTNET_gcServer=0
 
 ROUND=1
-HISTORY_WINDOW=10  # how many past rounds' raw data to keep + train on, alongside the fresh round
+HISTORY_WINDOW=5  # how many past rounds' raw data to keep + train on, alongside the fresh round
 
 cleanup_procs() {
     pkill -9 -f "multiprocessing.spawn"
@@ -117,7 +117,7 @@ while true; do
         --out "$vakuu/agents/claws/model/claws.pt" \
         --init "${CLAWS_CHECKPOINT:-}" \
         --lr 6.0e-5 \
-        --batch-size 1024
+        --batch-size 512
 
     echo "[claws 6/7] Backing up checkpoint..."
     backup_dir="$vakuu/agents/claws/model/backups"
@@ -176,7 +176,7 @@ while true; do
 
     echo "[choices 2/6] Running facility_choices_paradox.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility_choices_paradox.py" \
-        --trials 20 --branch-workers 8 --main-workers 12 \
+        --trials 40 --branch-workers 8 --main-workers 12 \
         --branches-per-turn 4 --meta-branches-per-trial 20\
         --ascension 1 --raw-dir "$raw_dir"
 
@@ -200,7 +200,7 @@ while true; do
         --init "$CHOICES_CHECKPOINT" \
         --warm-start-from "${CLAWS_CHECKPOINT:-}" \
         --lr 7e-6 \
-        --batch_size 64
+        --batch-size 64
 
     echo "[choices 6/6] Backing up checkpoint..."
     backup_dir="$vakuu/agents/choices_paradox/model/backups"
