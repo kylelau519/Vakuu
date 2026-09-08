@@ -8,8 +8,9 @@ import time
 from queue import Empty
 
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imports below)
+import buffer_layout as bl
 from env import Sts2Session
-from buffer_env import Sts2BufferSession
+from buffer_env import Sts2BufferSession, decode_token
 
 from checkpoint import BranchJob
 from recorder import CompactRecorder
@@ -153,7 +154,7 @@ def _absorb_actions(recorder: CompactRecorder, full_actions: list[dict], prefix_
 
 def _resolve_turn(
     job_queue, results_queue, main_worker_index: int, cfg: FacilityConfig, recorder: CompactRecorder,
-    session: Sts2Session, character: str, seed: str, main_id: str, act: int, floor: int, combat_index: int,
+    session: Sts2Session | Sts2BufferSession, character: str, seed: str, main_id: str, act: int, floor: int, combat_index: int,
     turn_index: int, combat_hp_before: int, combat_max_hp: int, stop_event,
     checkpoint_path: str | None, combat_start_index: int, is_last_of_act: bool = False,
     enemy_ids: frozenset[str] = frozenset(), enemy_max_hp: int = 0,
@@ -190,25 +191,57 @@ def _resolve_turn(
         # Rare (only the very first combat of a run lacks a checkpoint) and not covered by
         # debug_verify_session_reuse.py's testing (that only exercised load_save reuse, not
         # repeated start_run on one live session) -- kept as a fresh respawn rather than extending
-        # the reuse optimization somewhere it hasn't actually been verified.
+        # the reuse optimization somewhere it hasn't actually been verified. type(session), not a
+        # hardcoded class, so this respawns the same kind of session (Sts2Session or
+        # Sts2BufferSession) the caller's main line is actually running on -- see
+        # main_worker_loop's session_factory.
         session.close()
-        session = Sts2Session(logger=recorder)
+        session = type(session)(logger=recorder)
         new_decision = session.open_from_checkpoint(character, seed, cfg.ascension, cleaned)
     return session, new_decision, adopted.get("outcome")  # "continue" | "won" | "lost"
 
 
-def _resolve_combat(
-    job_queue, results_queue, main_worker_index: int, cfg: FacilityConfig, recorder: CompactRecorder,
-    session: Sts2Session, decision, character: str, seed: str, main_id: str, combat_index: int, stop_event,
-    checkpoint_path: str | None,
-):
-    """Drives _resolve_turn turn-by-turn until the combat actually ends.  """
-    act = decision.context.act
-    floor = decision.context.floor
-    is_last_of_act = decision.context.room_type == "Boss"
+def _combat_context(decision):
+    """(act, floor, is_last_of_act, enemy_ids, enemy_max_hp, combat_hp_before, combat_max_hp) at
+    combat entry, from either decision type -- _resolve_combat is shared by facility_claws.py's
+    own main line (Sts2BufferSession) and facility_choices_paradox.py's (still Sts2Session), which
+    can run on different session types, so this can't assume one shape.
+
+    is_last_of_act is derived by checking whether any of this combat's enemies IS the act's boss
+    (run_context's boss1/boss2 tokens), rather than comparing a "room_type" string -- the buffer
+    protocol's RunContext section has no room_type field to compare against (see
+    buffer_layout.py's RUN_CONTEXT_* comment), and this is the more direct mechanistic check
+    either way: a "Boss" room_type is itself just a label for this fight's enemies including the
+    act's designated boss."""
+    if hasattr(decision, "arr"):  # BufferDecision
+        arr = decision.arr
+        ctx = bl.run_context(arr)
+        boss_ids = {decode_token(ctx["boss1_token"]), decode_token(ctx["boss2_token"])} - {None}
+        enemy_slots = list(bl.enemies(arr))
+        enemy_ids = frozenset(
+            tok for _, slot in enemy_slots for tok in [decode_token(bl.enemy_token(slot))] if tok
+        )
+        enemy_max_hp = sum(bl.enemy_max_hp(slot) for _, slot in enemy_slots)
+        return (
+            ctx["act_index"], ctx["floor"], bool(enemy_ids & boss_ids),
+            enemy_ids, enemy_max_hp, decision.player_hp, decision.player_max_hp,
+        )
     enemy_ids = frozenset(e.id for e in decision.enemies if e.id)
     enemy_max_hp = sum(e.max_hp for e in decision.enemies if e.id in enemy_ids)
-    combat_hp_before, combat_max_hp = decision.player.hp, decision.player.max_hp
+    return (
+        decision.context.act, decision.context.floor, decision.context.room_type == "Boss",
+        enemy_ids, enemy_max_hp, decision.player.hp, decision.player.max_hp,
+    )
+
+
+def _resolve_combat(
+    job_queue, results_queue, main_worker_index: int, cfg: FacilityConfig, recorder: CompactRecorder,
+    session: Sts2Session | Sts2BufferSession, decision, character: str, seed: str, main_id: str,
+    combat_index: int, stop_event, checkpoint_path: str | None,
+):
+    """Drives _resolve_turn turn-by-turn until the combat actually ends.  """
+    (act, floor, is_last_of_act, enemy_ids, enemy_max_hp,
+     combat_hp_before, combat_max_hp) = _combat_context(decision)
     combat_start_index = len(session.action_log) - 1
     turn_index = 0
     while True:
@@ -293,7 +326,9 @@ if __name__ == "__main__":
             raw_dir=args.raw_dir,
             verbose=args.verbose,
         ),
-        main_worker_fn=functools.partial(main_worker_loop, combat_resolver=_resolve_combat),
+        main_worker_fn=functools.partial(
+            main_worker_loop, combat_resolver=_resolve_combat, session_factory=Sts2BufferSession
+        ),
         branch_worker_fn=functools.partial(branch_worker_loop, handlers={BranchJob: _run_branch_job}),
         resume=resume,
     )

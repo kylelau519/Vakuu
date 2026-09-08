@@ -24,8 +24,8 @@ from typing import Callable
 
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imports below)
 import buffer_layout as bl
-from env import Sts2ActionError, Sts2Session
-from buffer_env import decode_token
+from env import Sts2ActionError, Sts2EngineTimeoutError, Sts2Session
+from buffer_env import Sts2BufferSession, decode_token
 from installation import ensure_setup
 
 from policy import choose_action, get_claws_net
@@ -184,6 +184,20 @@ def _combat_value(outcome: CombatOutcome) -> float:
     return _HEALTHY_HP_FRACTION - shortfall * _LOW_HP_SLOPE
 
 
+def _map_point_type_at(decision, col: int, row: int) -> str | None:
+    """The MapPointType (as a string, e.g. "Elite"/"Boss") of the map node at (col, row) --
+    used only for Golden Compass's Elite/Boss shaping bonus (see _play_trial's select_map_node
+    branch). BufferDecision has no `.choices` list to match against like the pydantic Decision
+    does, but the same data is directly readable off the map grid via buffer_layout, keyed by
+    (row, col) -- row/col -1 is map_points'/GetFullMap()'s shared sentinel for the boss node,
+    which lives outside the row/col grid on both sides."""
+    if hasattr(decision, "arr"):
+        slot = bl.map_boss_point(decision.arr) if row == -1 else bl.map_point_slot(decision.arr, row, col)
+        return bl.map_point_type(slot)
+    chosen = next((c for c in decision.choices if (c.col, c.row) == (col, row)), None)
+    return chosen.type if chosen is not None else None
+
+
 def _tracked_enemy_hp(arr, enemy_ids: frozenset[str]) -> int:
     """Sums current HP across only the enemy slots whose decoded token is in enemy_ids -- anything
     summoned mid-fight (not in the set captured at combat entry) is silently not counted."""
@@ -296,6 +310,14 @@ def _clean_actions(actions: list[dict]) -> list[dict]:
     ]
 
 
+# NOTE: on a BufferDecision, a blessing/event-triggered card reward reports decision.decision ==
+# "event_card_reward", not "card_reward" (buffer_layout.decision_name distinguishes the two
+# sections; the pydantic side unifies both under "card_reward" -- see policy.py's
+# _choose_card_reward_from_buffer). Since that string isn't in this set, an event-triggered card
+# reward on a buffer-session main line falls through to choose_action() same as any other
+# unbranched decision, rather than getting the meta-option branching an ordinary post-combat
+# card_reward gets -- a real but narrow coverage gap from running the main line on
+# Sts2BufferSession, not a bug (gameplay still proceeds correctly either way).
 META_ELIGIBLE_DECISIONS = frozenset({"card_reward", "rest_site", "event_choice"})
 # Raised from 30.0: MetaOptionJobs land on the low-priority half of the shared branch-worker
 # queue (combat turn-branches always go first, see facility_choices_paradox.py's dispatch), so
@@ -366,8 +388,8 @@ class _TrialState:
     """Mutable per-trial bookkeeping threaded through _play_trial (see main_worker_loop).
     `session` lives here rather than as a plain local so a mid-combat exception still leaves the
     caller's finally-block session.close() pointed at the live session -- combat_resolver rebinds
-    it in place whenever it enters a fresh Sts2Session."""
-    session: Sts2Session
+    it in place whenever it enters a fresh session."""
+    session: Sts2Session | Sts2BufferSession
     checkpoint_dir: str
     meta_budget: int | None
     combat_checkpoint_path: str | None = None
@@ -471,12 +493,9 @@ def _play_trial(
             recorder.attach_policy(policy)
         if name == "select_map_node":
             state.pending_map_steps.append(recorder.mark_step())
-            chosen = next(
-                (c for c in decision.choices
-                 if (c.col, c.row) == (kwargs["col"], kwargs["row"])),
-                None,
+            state.pending_map_step_types.append(
+                _map_point_type_at(decision, kwargs["col"], kwargs["row"])
             )
-            state.pending_map_step_types.append(chosen.type if chosen is not None else None)
             state.room_index += 1
             checkpoint_path = os.path.join(
                 state.checkpoint_dir, f"{main_id}_r{state.room_index:03d}.json"
@@ -517,6 +536,7 @@ def main_worker_loop(
     resume: dict | None = None, manager_address=None, manager_authkey: bytes | None = None,
     meta_results_queue=None, *,
     combat_resolver: Callable, meta_resolver: Callable | None = None,
+    session_factory: Callable = Sts2Session,
 ) -> None:
     """Runs main-line trials (via _play_trial) until stop_event fires or cfg.n_main_trials is
     reached.
@@ -559,7 +579,13 @@ def main_worker_loop(
     starting fresh -- for recovering a trial that was progressing normally when the facility was
     killed before it reached game_over. Keys: character, seed, main_id, combat_index (combats
     already resolved), actions (full action log up to the resume point, same shape a branch/trial
-    JSON's own "actions" field has)."""
+    JSON's own "actions" field has).
+
+    session_factory(logger=recorder) -> a fresh main-line session: Sts2Session (subprocess, the
+    default) or Sts2BufferSession (in-process CLR, faster but see the Sts2EngineTimeoutError
+    handling below). combat_resolver/meta_resolver must tolerate whichever one this worker was
+    built with -- facility_claws._resolve_combat and this module's _map_point_type_at both branch
+    on hasattr(decision, "arr") for exactly this reason."""
     _tag_worker_stderr("main", main_worker_index, log_queue, cfg.verbose)
     # New process group -- Facility.stop()'s force-kill uses os.killpg on it (see there for why:
     # combat_resolver's dotnet-run subprocesses need to die with it, not be orphaned).
@@ -595,11 +621,12 @@ def main_worker_loop(
             "main_id": main_id, "role": "main",
         })
         state = _TrialState(
-            session=Sts2Session(logger=recorder),
+            session=session_factory(logger=recorder),
             checkpoint_dir=os.path.join(cfg.raw_dir, "checkpoints"),
             meta_budget=cfg.meta_branches_per_trial,
         )
         outcome = None
+        poisoned = False
         try:
             try:
                 outcome, _ = _play_trial(
@@ -607,6 +634,21 @@ def main_worker_loop(
                     main_worker_index, recorder, character, seed, main_id, this_trial_resume,
                     stop_event, queue_manager, combat_resolver, meta_resolver, state,
                 )
+            except Sts2EngineTimeoutError as e:
+                recorder.log_error(f"{type(e).__name__}: {e}")
+                outcome = "error"
+                # buffer_env._reap_abandoned_workers() permanently poisons this whole OS process
+                # once a call is abandoned to a timeout -- the stuck CLR call keeps running
+                # forever on an abandoned thread, and every Sts2BufferSession() constructed in
+                # this process from now on (i.e. every future trial this worker would attempt)
+                # immediately re-raises this same error (see that function's docstring). Looping
+                # to the next trial the way the generic except below does would just fail
+                # identically, forever, silently burning through cfg.n_main_trials' shared budget
+                # with empty "error" trials. A subprocess-based Sts2Session has no such
+                # process-wide poisoning -- only its own subprocess needs replacing, which the
+                # next trial's fresh session_factory() call already does -- so this only forces an
+                # exit when the poisoned session was actually a buffer one.
+                poisoned = isinstance(state.session, Sts2BufferSession)
             except Exception as e:
                 recorder.log_error(f"{type(e).__name__}: {e}")
                 outcome = "error"
@@ -639,6 +681,14 @@ def main_worker_loop(
                     os.remove(path)
                 except OSError:
                     pass
+        if poisoned:
+            # Exit this worker process outright rather than looping to the top of the while --
+            # see the Sts2EngineTimeoutError handling above for why looping here can't recover.
+            # Facility doesn't respawn a dead main worker mid-round, so this trades "one fewer
+            # active main worker for the rest of this round" for "an endless stream of instant
+            # empty error trials burning the shared n_main_trials budget" -- the former is a
+            # bounded, visible loss of throughput; the latter can silently eat the whole round.
+            return
         # main line is dead -- loop restarts with a fresh seed unless the target trial count is
         # reached or stop_event is set, checked at the top of the while
 

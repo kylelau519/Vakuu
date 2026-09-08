@@ -8,11 +8,12 @@ import sys
 from pathlib import Path
 
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imports below)
-from buffer_env import Sts2BufferSession
+import buffer_layout as bl
+from buffer_env import BufferDecision, Sts2BufferSession, decode_token
 
 from checkpoint import BranchJob, MetaOptionJob
 from recorder import CompactRecorder
-from policy import choose_action
+from policy import _BufferCard, choose_action
 from facility_common import (
     CombatOutcome, Facility, FacilityConfig, _combat_value, _play_turn_only,
     add_common_cli_args, branch_worker_loop, load_resume, main_worker_loop,
@@ -24,9 +25,10 @@ _model_path = Path(__file__).resolve().parents[1] / "choices_paradox" / "model" 
 _spec = importlib.util.spec_from_file_location("choices_paradox_model", _model_path)
 assert _spec is not None and _spec.loader is not None
 _cp_model = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = _cp_model  
+sys.modules[_spec.name] = _cp_model
 _spec.loader.exec_module(_cp_model)
 legal_options = _cp_model.legal_options
+legal_options_from_buffer = _cp_model.legal_options_from_buffer
 
 _choices_paradox_policy_path = Path(__file__).resolve().parents[1] / "choices_paradox" / "policy.py"
 _spec = importlib.util.spec_from_file_location("choices_paradox_policy_module", _choices_paradox_policy_path)
@@ -67,9 +69,26 @@ def _choose_meta_option_claws(decision, decision_kind: str, options: list[tuple[
             # and no card_select one either -- uniform random until a checkpoint exists, same
             # "reasonable, not trained" spirit as choices_paradox/policy.py's own placeholders.
             return random.randrange(len(options))
-        index = _choices_paradox_policy.choose_card_reward(
-            decision.cards, decision.can_skip, decision.player.deck_size or 0
-        )
+        # Mirrors policy.py's _choose_card_reward_from_buffer -- same event_card_reward-vs-
+        # ordinary-card_reward buffer split, same _BufferCard/decode_token construction.
+        if isinstance(decision, BufferDecision):
+            arr = decision.arr
+            if bl.decision_name(arr) == "event_card_reward":
+                cards = [
+                    _BufferCard(i, decode_token(bl.card_token(slot)))
+                    for i, slot in bl.event_card_reward_cards(arr)
+                ]
+                can_skip = True
+            else:
+                cards = [
+                    _BufferCard(i, decode_token(bl.card_token(slot)))
+                    for i, slot in bl.reward_cards(arr)
+                ]
+                can_skip = bl.can_skip_reward(arr)
+            deck_size = bl.player_deck_size(arr)
+        else:
+            cards, can_skip, deck_size = decision.cards, decision.can_skip, decision.player.deck_size or 0
+        index = _choices_paradox_policy.choose_card_reward(cards, can_skip, deck_size)
         for i, (opt_name, opt_args) in enumerate(options):
             if index is None:
                 if opt_name == "skip_card_reward":
@@ -190,7 +209,11 @@ def _resolve_meta_decision(
     last_room_checkpoint_path: str | None, last_room_entry_index: int | None,
 ):
     """"""
-    options = legal_options(decision, decision_kind)
+    options = (
+        legal_options_from_buffer(decision, decision_kind)
+        if isinstance(decision, BufferDecision)
+        else legal_options(decision, decision_kind)
+    )
     if len(options) < 2:
         if not options:
             return decision, []  # defensive -- card_reward always offers skip_card_reward at least
@@ -269,6 +292,7 @@ if __name__ == "__main__":
         ),
         main_worker_fn=functools.partial(
             main_worker_loop, combat_resolver=_resolve_combat, meta_resolver=_resolve_meta_decision,
+            session_factory=Sts2BufferSession,
         ),
         branch_worker_fn=functools.partial(
             branch_worker_loop,
