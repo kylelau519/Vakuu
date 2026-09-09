@@ -116,8 +116,7 @@ while true; do
         "$vakuu/agents/whispering_earring/data/raw/" \
         "$vakuu/agents/whispering_earring/data/history/claws/"*/ \
         --out "$vakuu/agents/claws/model/dataset.pt" \
-        --jobs 5
-
+        --jobs 12
     echo "[claws 5/7] Training model..."
     python "$vakuu/agents/claws/model/train.py" \
         "$vakuu/agents/claws/model/dataset.pt" --epochs 40 \
@@ -132,26 +131,26 @@ while true; do
     cp "$vakuu/agents/claws/model/claws.pt" \
         "$backup_dir/claws_$(date +%Y%m%d_%H%M%S).pt"
 
-    echo "[claws 7/7] Single-rollout comparison (current vs previous round vs untrained init)..."
-    # Frozen random-init baseline, generated once and reused every round -- train.py refuses to
-    # overwrite an existing --out, so this only ever runs on the very first round.
-    UNTRAINED_CLAWS_CHECKPOINT="$vakuu/agents/claws/model/claws_untrained.pt"
-    if [ ! -f "$UNTRAINED_CLAWS_CHECKPOINT" ]; then
-        python "$vakuu/agents/claws/model/train.py" \
-            --epochs 0 --init "" --out "$UNTRAINED_CLAWS_CHECKPOINT"
-    fi
-    # The backup dir's newest file is the one just copied above (this round's post-training
-    # checkpoint); the second-newest is last round's -- claws.pt itself already got overwritten
-    # by --out above, so this is the only place last round's weights still exist.
-    PREVIOUS_CLAWS_CHECKPOINT=$(ls -t "$backup_dir"/claws_*.pt 2>/dev/null | sed -n '2p')
-    eval_args=(
-        "current=$vakuu/agents/claws/model/claws.pt"
-        "untrained=$UNTRAINED_CLAWS_CHECKPOINT"
-    )
-    [ -n "$PREVIOUS_CLAWS_CHECKPOINT" ] && eval_args+=("previous=$PREVIOUS_CLAWS_CHECKPOINT")
-    python "$vakuu/agents/whispering_earring/eval_claws.py" \
-        --checkpoints "${eval_args[@]}" \
-        --ascension 1
+    # echo "[claws 7/7] Single-rollout comparison (current vs previous round vs untrained init)..."
+    # # Frozen random-init baseline, generated once and reused every round -- train.py refuses to
+    # # overwrite an existing --out, so this only ever runs on the very first round.
+    # UNTRAINED_CLAWS_CHECKPOINT="$vakuu/agents/claws/model/claws_untrained.pt"
+    # if [ ! -f "$UNTRAINED_CLAWS_CHECKPOINT" ]; then
+    #     python "$vakuu/agents/claws/model/train.py" \
+    #         --epochs 0 --init "" --out "$UNTRAINED_CLAWS_CHECKPOINT"
+    # fi
+    # # The backup dir's newest file is the one just copied above (this round's post-training
+    # # checkpoint); the second-newest is last round's -- claws.pt itself already got overwritten
+    # # by --out above, so this is the only place last round's weights still exist.
+    # PREVIOUS_CLAWS_CHECKPOINT=$(ls -t "$backup_dir"/claws_*.pt 2>/dev/null | sed -n '2p')
+    # eval_args=(
+    #     "current=$vakuu/agents/claws/model/claws.pt"
+    #     "untrained=$UNTRAINED_CLAWS_CHECKPOINT"
+    # )
+    # [ -n "$PREVIOUS_CLAWS_CHECKPOINT" ] && eval_args+=("previous=$PREVIOUS_CLAWS_CHECKPOINT")
+    # python "$vakuu/agents/whispering_earring/eval_claws.py" \
+    #     --checkpoints "${eval_args[@]}" \
+    #     --ascension 1
 
     cleanup_procs
 
@@ -186,7 +185,7 @@ while true; do
     # above, sharing this facility's own branch-worker pool with its meta-decision chains --
     # both land on the same low-priority queue behind combat turn-branches.
     python "$vakuu/agents/whispering_earring/facility_choices_paradox.py" \
-        --trials 40 --branch-workers 8 --main-workers 12 \
+        --trials 40 --branch-workers 15 --main-workers 4 \
         --branches-per-turn 4 --meta-branches-per-trial 20\
         --ascension 1 --raw-dir "$raw_dir" \
         --map-branches-per-trial -1 --map-room-horizon 1
@@ -195,14 +194,14 @@ while true; do
     python "$vakuu/agents/whispering_earring/stats_choices.py" \
         --raw-dir "$raw_dir" \
         --round "$ROUND" \
-        --jobs 6
+        --jobs 12
 
     echo "[choices 4/6] Materializing dataset (this round + up to $HISTORY_WINDOW archived rounds)..."
     python "$vakuu/agents/choices_paradox/model/materialize.py" \
         "$raw_dir/" \
         "$vakuu/agents/whispering_earring/data/history/choices/"*/ \
         --out "$vakuu/agents/choices_paradox/model/dataset.pt" \
-        --jobs 8
+        --jobs 12
 
     echo "[choices 5/6] Training model..."
     python "$vakuu/agents/choices_paradox/model/train.py" \
@@ -225,18 +224,27 @@ while true; do
     echo " Training Golden Compass: Round $ROUND"
     echo "==========================================="
 
-    # No dedicated facility run -- both phases above already spawn MapOptionJob branches per
-    # select_map_node decision (--map-branches-per-trial), landing in the same raw dirs as their
-    # own main-line/meta-branch files, so this just materializes off the raw data both phases
-    # already produced this round -- see agents/golden_compass/model/README.md's Design section.
-    echo "[golden 1/2] Materializing dataset from claws + choices raw data..."
-    python "$vakuu/agents/golden_compass/model/materialize.py" \
-        "$vakuu/agents/whispering_earring/data/raw/" \
-        "$raw_dir/" \
-        --out "$vakuu/agents/golden_compass/model/dataset.pt" \
-        --jobs 8
+    compass_raw_dir="$vakuu/agents/whispering_earring/data/raw_compass"
 
-    echo "[golden 2/2] Training model..."
+    echo "[golden 1/4] Archiving previous round's raw data (keeping last $HISTORY_WINDOW rounds)..."
+    archive_round_data "$compass_raw_dir" \
+        "$vakuu/agents/whispering_earring/data/history/compass" "$HISTORY_WINDOW"
+    find "$compass_raw_dir/checkpoints/" -maxdepth 1 -name '*.json' -delete 2>/dev/null || true
+
+    echo "[golden 2/4] Running facility_compass.py (Data Generation)..."
+    python "$vakuu/agents/whispering_earring/facility_compass.py" \
+        --trials 30 --branch-workers 15 --branches-per-turn 4 --main-workers 4 \
+        --ascension 1 --raw-dir "$compass_raw_dir" \
+        --map-branches-per-trial -1 --map-room-horizon 1
+
+    echo "[golden 3/4] Materializing dataset (this round + up to $HISTORY_WINDOW archived rounds)..."
+    python "$vakuu/agents/golden_compass/model/materialize.py" \
+        "$compass_raw_dir/" \
+        "$vakuu/agents/whispering_earring/data/history/compass/"*/ \
+        --out "$vakuu/agents/golden_compass/model/dataset.pt" \
+        --jobs 12
+
+    echo "[golden 4/4] Training model..."
     python "$vakuu/agents/golden_compass/model/train.py" \
         "$vakuu/agents/golden_compass/model/dataset.pt" --epochs 80 \
         --out "$vakuu/agents/golden_compass/model/golden_compass.pt" \

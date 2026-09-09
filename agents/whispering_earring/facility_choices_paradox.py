@@ -271,7 +271,7 @@ if __name__ == "__main__":
     parser.add_argument("--meta-branches-per-trial", type=int, default=None,
                          help="cap on how many card_reward decisions per trial actually spawn "
                               "chains (default: unlimited)")
-    parser.add_argument("--meta-horizon-combats", type=int, default=None,
+    parser.add_argument("--meta-horizon-combats", type=int, default=6,
                          help="cap each option-chain at this many combats past its own commit "
                               "instead of playing to natural death (default: unbounded)")
     parser.add_argument("--map-branches-per-trial", type=int, default=0,
