@@ -11,7 +11,7 @@ shopt -s nullglob
 # under the 1048576 hard limit already available) buys enough headroom for this dataset's size.
 ulimit -n 65536
 
-export vakuu="/home/kylelau519/Programming/Vakuu"
+export vakuu="/Users/kylelau519/Programming/Vakuu"
 
 # Caps torch's per-process intra-op thread pool -- see training_claws.sh's own comment; same
 # reasoning here (each branch/main worker process runs policy.py's torch inference).
@@ -28,7 +28,7 @@ export OMP_NUM_THREADS=1
 export DOTNET_gcServer=0
 
 ROUND=1
-HISTORY_WINDOW=10  # how many past rounds' raw data to keep + train on, alongside the fresh round
+HISTORY_WINDOW=1  # how many past rounds' raw data to keep + train on, alongside the fresh round
 
 cleanup_procs() {
     pkill -9 -f "multiprocessing.spawn"
@@ -96,7 +96,7 @@ while true; do
 
     echo "[claws 2/7] Running facility_claws.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility_claws.py" \
-        --trials 5 --branch-workers 15 --branches-per-turn 30 --main-workers 3 \
+        --trials 1 --branch-workers 15 --branches-per-turn 30 --main-workers 3 \
         --ascension 1 --raw-dir "$vakuu/agents/whispering_earring/data/raw"
 
     echo "[claws 3/7] Floor/combat stats for this round..."
@@ -113,7 +113,7 @@ while true; do
 
     echo "[claws 5/7] Training model..."
     python "$vakuu/agents/claws/model/train.py" \
-        "$vakuu/agents/claws/model/dataset.pt" --epochs 40 \
+        "$vakuu/agents/claws/model/dataset.pt" --epochs 1 \
         --out "$vakuu/agents/claws/model/claws.pt" \
         --init "${CLAWS_CHECKPOINT:-}" \
         --lr 5e-6
@@ -175,7 +175,7 @@ while true; do
 
     echo "[choices 2/6] Running facility_choices_paradox.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility_choices_paradox.py" \
-        --trials 20 --branch-workers 3 --main-workers 10 \
+        --trials 1 --branch-workers 3 --main-workers 10 \
         --branches-per-turn 4 --meta-branches-per-trial 20\
         --ascension 1 --raw-dir "$raw_dir"
 
@@ -194,12 +194,12 @@ while true; do
 
     echo "[choices 5/6] Training model..."
     python "$vakuu/agents/choices_paradox/model/train.py" \
-        "$vakuu/agents/choices_paradox/model/dataset.pt" --epochs 80 \
+        "$vakuu/agents/choices_paradox/model/dataset.pt" --epochs 1 \
         --out "$vakuu/agents/choices_paradox/model/choices_paradox.pt" \
         --init "$CHOICES_CHECKPOINT" \
         --warm-start-from "${CLAWS_CHECKPOINT:-}" \
         --lr 5e-6 \
-        --batch_size 64
+        --batch-size 64
 
     echo "[choices 6/6] Backing up checkpoint..."
     backup_dir="$vakuu/agents/choices_paradox/model/backups"
@@ -227,7 +227,7 @@ while true; do
 
     echo "[golden 2/2] Training model..."
     python "$vakuu/agents/golden_compass/model/train.py" \
-        "$vakuu/agents/golden_compass/model/dataset.pt" --epochs 60 \
+        "$vakuu/agents/golden_compass/model/dataset.pt" --epochs 1 \
         --out "$vakuu/agents/golden_compass/model/golden_compass.pt" \
         --init "$GOLDEN_COMPASS_CHECKPOINT_PATH"
 
