@@ -89,7 +89,7 @@ def _resolve_combat_single_line(
         while outcome == "continue":
             outcome, buf_decision = _play_turn_only(
                 buffer_session, buf_decision, combat_hp_before, combat_max_hp, False,
-                enemy_ids, enemy_max_hp,
+                enemy_ids, enemy_max_hp, combat_dirichlet_noise=cfg.combat_dirichlet_noise,
             )
         recorder.record_combat(act, floor, combat_index, outcome)
         cleaned = _clean_actions(buffer_session.action_log)
@@ -120,7 +120,10 @@ def _run_worker(args) -> None:
     from recorder import CompactRecorder
 
     ensure_setup()
-    cfg = FacilityConfig(characters=[args.character], ascension=args.ascension)
+    cfg = FacilityConfig(
+        characters=[args.character], ascension=args.ascension,
+        combat_dirichlet_noise=not args.no_combat_dirichlet_noise,
+    )
     results = []
     for seed in args.seeds:
         recorder = CompactRecorder({
@@ -216,6 +219,8 @@ def _run_driver(args) -> None:
                 "--ascension", str(args.ascension), "--out", out_path,
                 "--seeds", seed,
             ]
+            if args.no_combat_dirichlet_noise:
+                cmd.append("--no-combat-dirichlet-noise")
             log_file = open(log_path, "w")
             proc = subprocess.Popen(cmd, env=env, cwd=script_dir, stdout=log_file, stderr=subprocess.STDOUT)
             jobs.append((label, seed, proc, out_path, log_path, log_file))
@@ -260,6 +265,11 @@ if __name__ == "__main__":
     parser.add_argument("--ascension", type=int, default=1)
     parser.add_argument("--seeds", nargs="+", default=DEFAULT_SEEDS)
     parser.add_argument("--out", default=None, help="worker mode only: where to write this checkpoint's results JSON")
+    parser.add_argument("--no-combat-dirichlet-noise", action="store_true",
+                         help="sample straight from each checkpoint's own softmax, with no root "
+                              "Dirichlet noise mixed in -- for a comparison that isn't muddied by "
+                              "per-run exploration noise (default: noise enabled, same as "
+                              "self-play training)")
     args = parser.parse_args()
 
     if args.worker:

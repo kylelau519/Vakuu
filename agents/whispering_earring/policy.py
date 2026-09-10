@@ -18,7 +18,11 @@ _CLAWS_CHECKPOINT = os.environ.get("CLAWS_CHECKPOINT")
 _claws_net = None  # lazy-loaded once per worker process, on first combat decision -- see below
 
 _DIRICHLET_EPS = 0.15  # fraction of root probability mass replaced by noise -- AlphaZero's own
-_COMBAT_DIRICHLET_EPS = 0.25
+# A symmetric Dirichlet's expected mass per option is always 1/n regardless of alpha, so a flat
+# eps gives noise-per-option that shrinks as the hand does (0.25 -> 5%/card at 5 options but
+# 12.5%/card at 2). Scale eps with n_legal_options instead, to hold noise-per-option ~constant.
+_COMBAT_DIRICHLET_EPS_PER_OPTION = 0.05  # target root-noise mass per legal option (3-5% band)
+_COMBAT_DIRICHLET_EPS_MAX = 0.75  # cap so noise can't swamp the policy when options are many
 _DIRICHLET_ALPHA_SCALE = 10.0  # concentration = this / n_legal_options
 
 # Loading choices_paradox.policy
@@ -179,7 +183,8 @@ def _choose_combat_action_claws(
     if combat_dirichlet_noise:
         alpha = _DIRICHLET_ALPHA_SCALE / len(options)
         noise = torch.distributions.Dirichlet(torch.full((len(options),), alpha)).sample()
-        probs = (1 - _COMBAT_DIRICHLET_EPS) * probs + _COMBAT_DIRICHLET_EPS * noise
+        eps = min(_COMBAT_DIRICHLET_EPS_MAX, _COMBAT_DIRICHLET_EPS_PER_OPTION * len(options))
+        probs = (1 - eps) * probs + eps * noise
     idx = int(torch.multinomial(probs, 1).item())
     policy = [
         {"action": a, "args": args, "prob": p} for (a, args), p in zip(options, probs.tolist())

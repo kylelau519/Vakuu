@@ -28,7 +28,7 @@ export OMP_NUM_THREADS=1
 export DOTNET_gcServer=0
 
 ROUND=1
-HISTORY_WINDOW=5  # how many past rounds' raw data to keep + train on, alongside the fresh round
+HISTORY_WINDOW=8  # how many past rounds' raw data to keep + train on, alongside the fresh round
 
 cleanup_procs() {
     pkill -9 -f "multiprocessing.spawn"
@@ -102,9 +102,9 @@ while true; do
     # whatever worker time is left over. Dial down to a positive cap here if rounds start taking
     # noticeably longer than before.
     python "$vakuu/agents/whispering_earring/facility_claws.py" \
-        --trials 10 --branch-workers 15 --branches-per-turn 40 --main-workers 5 \
+        --trials 20 --branch-workers 15 --branches-per-turn 40 --main-workers 5 \
         --ascension 1 --raw-dir "$vakuu/agents/whispering_earring/data/raw" \
-        --map-branches-per-trial -1 --map-room-horizon 1
+        --map-branches-per-trial -1 --map-room-horizon 1 \
 
     echo "[claws 3/7] Floor/combat stats for this round..."
     python "$vakuu/agents/whispering_earring/stats.py" \
@@ -119,10 +119,10 @@ while true; do
         --jobs 12
     echo "[claws 5/7] Training model..."
     python "$vakuu/agents/claws/model/train.py" \
-        "$vakuu/agents/claws/model/dataset.pt" --epochs 40 \
+        "$vakuu/agents/claws/model/dataset.pt" --epochs 8 \
         --out "$vakuu/agents/claws/model/claws.pt" \
         --init "${CLAWS_CHECKPOINT:-}" \
-        --lr 6.0e-5 \
+        --lr 4.0e-5 \
         --batch-size 512
 
     echo "[claws 6/7] Backing up checkpoint..."
@@ -150,7 +150,8 @@ while true; do
     # [ -n "$PREVIOUS_CLAWS_CHECKPOINT" ] && eval_args+=("previous=$PREVIOUS_CLAWS_CHECKPOINT")
     # python "$vakuu/agents/whispering_earring/eval_claws.py" \
     #     --checkpoints "${eval_args[@]}" \
-    #     --ascension 1
+    #     --ascension 1 \
+    #     --no-combat-dirichlet-noise
 
     cleanup_procs
 
@@ -205,11 +206,11 @@ while true; do
 
     echo "[choices 5/6] Training model..."
     python "$vakuu/agents/choices_paradox/model/train.py" \
-        "$vakuu/agents/choices_paradox/model/dataset.pt" --epochs 80 \
+        "$vakuu/agents/choices_paradox/model/dataset.pt" --epochs 8 \
         --out "$vakuu/agents/choices_paradox/model/choices_paradox.pt" \
         --init "$CHOICES_CHECKPOINT" \
         --warm-start-from "${CLAWS_CHECKPOINT:-}" \
-        --lr 7e-6 \
+        --lr 1.4e-5 \
         --batch-size 64
 
     echo "[choices 6/6] Backing up checkpoint..."
@@ -235,7 +236,7 @@ while true; do
     python "$vakuu/agents/whispering_earring/facility_compass.py" \
         --trials 30 --branch-workers 15 --branches-per-turn 4 --main-workers 4 \
         --ascension 1 --raw-dir "$compass_raw_dir" \
-        --map-branches-per-trial -1 --map-room-horizon 1
+        --map-branches-per-trial -1 
 
     echo "[golden 3/4] Materializing dataset (this round + up to $HISTORY_WINDOW archived rounds)..."
     python "$vakuu/agents/golden_compass/model/materialize.py" \
@@ -246,7 +247,7 @@ while true; do
 
     echo "[golden 4/4] Training model..."
     python "$vakuu/agents/golden_compass/model/train.py" \
-        "$vakuu/agents/golden_compass/model/dataset.pt" --epochs 80 \
+        "$vakuu/agents/golden_compass/model/dataset.pt" --epochs 4 \
         --out "$vakuu/agents/golden_compass/model/golden_compass.pt" \
         --init "$GOLDEN_COMPASS_CHECKPOINT_PATH" \
         --batch-size 32

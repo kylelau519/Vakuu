@@ -360,7 +360,7 @@ class ClawsNet(nn.Module):
         net.eval()
         return net
 
-    def __init__(self, gvocab: GlobalVocab, dim: int = 64, n_layers: int = 2, n_heads: int = 4):
+    def __init__(self, gvocab: GlobalVocab, dim: int = 256, n_layers: int = 6, n_heads: int = 8):
         super().__init__()
         self.gvocab = gvocab
         self.dim = dim

@@ -237,6 +237,10 @@ class FacilityConfig:
     # and why the default is 1 (score the committed sibling's own room, stop the instant the walk
     # is back at the map for a further junction).
     map_room_horizon: int = 1
+    # Root Dirichlet noise on claws combat-action sampling (policy.choose_action's
+    # combat_dirichlet_noise) -- see _play_turn_only. Off lets a run sample straight from the
+    # net's own softmax, e.g. to eval/compare a checkpoint without exploration noise skewing it.
+    combat_dirichlet_noise: bool = True
 
 
 def _bypass_card_reward(session) -> None:
@@ -250,7 +254,7 @@ def _bypass_card_reward(session) -> None:
 def _play_turn_only(
     session, decision, combat_hp_before: int, combat_max_hp: int,
     is_last_of_act: bool = False, enemy_ids: frozenset[str] = frozenset(), enemy_max_hp: int = 0,
-    bypass_reward_on_win: bool = True,
+    bypass_reward_on_win: bool = True, combat_dirichlet_noise: bool = True,
 ):
     """Plays exactly one turn (through the mid-turn card_select edge case, e.g. Power Potion/
     Brand) and scores it before returning `(outcome, decision)` -- outcome is "continue" if the
@@ -259,7 +263,8 @@ def _play_turn_only(
 
     For boss fight reward are shaped differently.
 
-    bypass_reward_on_win: For branch job to skip reward because they are irrelevant."""
+    bypass_reward_on_win: For branch job to skip reward because they are irrelevant.
+    combat_dirichlet_noise: forwarded to policy.choose_action -- see FacilityConfig.combat_dirichlet_noise."""
     hp_before_turn = decision.player_hp
     enemy_hp_before_turn = _tracked_enemy_hp(decision.arr, enemy_ids)
     session.logger.begin_turn()
@@ -268,7 +273,9 @@ def _play_turn_only(
         # purpose is never threaded here -- a mid-turn card_select (Power Potion, Brand, ...)
         # never follows a shop/rest_site pick, so it's never "remove"/"upgrade" (see
         # choose_action's docstring); the 4th return value is discarded for the same reason.
-        name, kwargs, policy, _ = choose_action(decision, session)
+        name, kwargs, policy, _ = choose_action(
+            decision, session, combat_dirichlet_noise=combat_dirichlet_noise
+        )
         if policy is not None:
             session.logger.attach_policy(policy)
         decision = session.step(name, **kwargs)
@@ -1026,7 +1033,7 @@ class Facility:
             p.start()
             self.branch_procs.append(p)
 
-    def stop(self, timeout: float = 60) -> None:
+    def stop(self, timeout: float = 120) -> None:
         self.stop_event.set()
         for _ in self.branch_procs:
             self.job_queue.put(None)
@@ -1122,6 +1129,10 @@ def add_common_cli_args(parser) -> None:
     parser.add_argument("--resume-branch-file", default=None,
                          help="recover a trial that was progressing normally (had already won "
                               "combats) when the facility died before writing its own output ")
+    parser.add_argument("--no-combat-dirichlet-noise", action="store_true",
+                         help="sample claws combat actions straight from the net's own softmax, "
+                              "with no root Dirichlet noise mixed in (default: noise enabled -- "
+                              "see policy._COMBAT_DIRICHLET_EPS_PER_OPTION)")
 
 
 def load_resume(path: str) -> dict:

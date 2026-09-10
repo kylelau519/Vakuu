@@ -155,6 +155,7 @@ def _run_meta_option_job(cfg: FacilityConfig, job: MetaOptionJob, results_queue)
                         turn_outcome, decision = _play_turn_only(
                             session, decision, combat_hp_before, combat_max_hp,
                             bypass_reward_on_win=False,
+                            combat_dirichlet_noise=cfg.combat_dirichlet_noise,
                         )
                     if turn_outcome == "lost":
                         outcome = "lost"
@@ -300,6 +301,7 @@ if __name__ == "__main__":
             meta_horizon_combats=args.meta_horizon_combats,
             map_branches_per_trial=map_branches_per_trial,
             map_room_horizon=args.map_room_horizon,
+            combat_dirichlet_noise=not args.no_combat_dirichlet_noise,
         ),
         main_worker_fn=functools.partial(
             main_worker_loop, combat_resolver=_resolve_combat, meta_resolver=_resolve_meta_decision,

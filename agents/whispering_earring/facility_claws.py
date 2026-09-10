@@ -291,6 +291,7 @@ def _run_branch_job(cfg: FacilityConfig, job: BranchJob, results_queue) -> None:
             outcome, _decision = _play_turn_only(
                 session, decision, job.combat_hp_before, job.combat_max_hp, job.is_last_of_act,
                 job.enemy_ids, job.enemy_max_hp,
+                combat_dirichlet_noise=cfg.combat_dirichlet_noise,
             )
         except Exception as e:
             recorder.log_error(f"{type(e).__name__}: {e}")
@@ -336,6 +337,7 @@ if __name__ == "__main__":
             verbose=args.verbose,
             map_branches_per_trial=map_branches_per_trial,
             map_room_horizon=args.map_room_horizon,
+            combat_dirichlet_noise=not args.no_combat_dirichlet_noise,
         ),
         main_worker_fn=functools.partial(
             main_worker_loop, combat_resolver=_resolve_combat, map_resolver=_resolve_map_decision,
