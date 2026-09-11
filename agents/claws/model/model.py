@@ -34,6 +34,13 @@ _TYPE_TO_IDX = {t: i for i, t in enumerate(TOKEN_TYPES)}
 
 FEATURE_DIM = 6
 
+# Tri-head design (see model/tri_head_design.md): one policy/value pair per reward stream --
+# "aggro" scores enemy_term (offense), "defense" scores hp_term, "scale" scores scale_term
+# (power/relic/setup value, read off win_value's own delta -- see tri_head_design.md's Reward
+# stream definitions). A 4th auxiliary head, win_value, estimates the graded win/lose outcome and
+# feeds both scale_term's residual and the gate below; it is NOT a peer policy/value pair.
+POLICY_STREAMS = ("aggro", "defense", "scale")
+
 
 def _log1p(x: float | int | None) -> float:
     """Signed log1p,  -- some of what feeds this can go negative (Strength and
@@ -373,8 +380,22 @@ class ClawsNet(nn.Module):
         self.final_ln = nn.LayerNorm(dim)
 
         self.end_turn_query = nn.Parameter(torch.randn(dim) * 0.02)
-        self.policy_mlp = nn.Sequential(nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, 1))
-        self.value_mlp = nn.Sequential(nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, 1))
+
+        def _head() -> nn.Sequential:
+            return nn.Sequential(nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, 1))
+
+        self.policy_heads = nn.ModuleDict({name: _head() for name in POLICY_STREAMS})
+        # Unbounded -- these accumulate discounted potential-differences (enemy_term/hp_term/
+        # scale_term), not a win probability, so tanh-squashing them the way win_value_mlp is
+        # squashed below would clip real signal for a combat with several eventful turns.
+        self.value_heads = nn.ModuleDict({name: _head() for name in POLICY_STREAMS})
+        self.win_value_mlp = _head()  # tanh-bounded below -- graded win/lose outcome, same role
+        # today's single value_mlp had.
+        # gate_mlp: state-level (tri_head_design.md's Aggregator section) -- one (w1,w2,w3) per
+        # decision, applied uniformly to every candidate option this turn, not per-option.
+        self.gate_mlp = nn.Sequential(
+            nn.Linear(dim + len(POLICY_STREAMS) + 1, dim), nn.GELU(), nn.Linear(dim, 3)
+        )
 
     def encode(self, batch: TokenBatch) -> torch.Tensor:
         """Returns per-token hidden states [N, dim] for one decision."""
@@ -414,9 +435,15 @@ class ClawsNet(nn.Module):
 
     def score(
         self, batch: TokenBatch, options: list[tuple[str, dict]]
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Shared by forward() (live decision) and a training loop reading materialize.py's
-        saved batches """
+        saved batches. Returns (probs, values): probs is a diagnostic-only probability-space
+        blend of the 3 heads' own softmaxes (tri_head_design.md's Aggregator originally proposed
+        sampling straight from this; policy.py's actual self-play sampler now does hard/
+        stochastic gating instead -- sample which head from values["gate"], then sample the
+        action from only that head's own distribution in values["stream_probs"] -- see
+        tri_head_design.md's Aggregator section for why); values is
+        {"aggro","defense","scale","win","gate","stream_probs"}."""
         h = self.encode(batch)
         queries = []
         for action, args in options:
@@ -434,21 +461,35 @@ class ClawsNet(nn.Module):
                 raise ValueError(f"unhandled combat action {action!r}")
             queries.append(q)
 
-        logits = self.policy_mlp(torch.stack(queries)).squeeze(-1)
-        value = torch.tanh(self.value_mlp(h[batch.player_pos]).squeeze(-1))
-        return logits, value
+        query_batch = torch.stack(queries)
+        stream_probs = {
+            name: torch.softmax(self.policy_heads[name](query_batch).squeeze(-1), dim=-1)
+            for name in POLICY_STREAMS
+        }
+
+        player_h = h[batch.player_pos]
+        values = {name: self.value_heads[name](player_h).squeeze(-1) for name in POLICY_STREAMS}
+        values["win"] = torch.tanh(self.win_value_mlp(player_h).squeeze(-1))
+
+        gate_in = torch.cat([player_h, torch.stack([values[n] for n in (*POLICY_STREAMS, "win")])])
+        gate_weights = torch.softmax(self.gate_mlp(gate_in), dim=-1)
+        values["gate"] = gate_weights
+        values["stream_probs"] = stream_probs
+
+        probs = sum(gate_weights[i] * stream_probs[name] for i, name in enumerate(POLICY_STREAMS))
+        return probs, values
 
     def forward(
         self, decision: CombatPlay | BufferDecision
-    ) -> tuple[list[tuple[str, dict]], torch.Tensor, torch.Tensor]:
+    ) -> tuple[list[tuple[str, dict]], torch.Tensor, dict[str, torch.Tensor]]:
         if isinstance(decision, BufferDecision):
             batch = tokenize_from_buffer(decision, self.gvocab)
             options = legal_options_from_buffer(decision)
         else:
             batch = tokenize(decision, self.gvocab)
             options = legal_options(decision)
-        logits, value = self.score(batch, options)
-        return options, logits, value
+        probs, values = self.score(batch, options)
+        return options, probs, values
 
 
 # --- smoke test ------------------------------------------------------------------------------------
@@ -468,9 +509,14 @@ if __name__ == "__main__":
     gvocab = GlobalVocab(vocab)
     net = ClawsNet(gvocab)
 
-    options, logits, value = net(decision)
-    probs = torch.softmax(logits, dim=-1)
+    options, probs, values = net(decision)
 
-    print(f"{len(options)} legal options, value={value.item():+.3f}")
+    gate = values["gate"].tolist()
+    print(
+        f"{len(options)} legal options -- "
+        f"value_aggro={values['aggro'].item():+.3f} value_defense={values['defense'].item():+.3f} "
+        f"value_scale={values['scale'].item():+.3f} win_value={values['win'].item():+.3f} "
+        f"gate=({gate[0]:.2f},{gate[1]:.2f},{gate[2]:.2f})"
+    )
     for (action, args), p in itertools.islice(zip(options, probs.tolist()), 8):
         print(f"  {p:5.3f}  {action} {args}")

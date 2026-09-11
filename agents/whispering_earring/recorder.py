@@ -3,12 +3,13 @@
 Value is scoped per turn, not per combat or per trial. facility_common.py brackets each
 individual turn with begin_turn()/end_turn(value) -- every turn (including the one that ends
 the combat) gets its own value, so a turn that took damage to set up a good follow-up isn't
-flattened to the same scalar as every other turn in that combat. For a turn that ends the
-combat, value is the combat's own terminal HP-loss outcome (README.md's Value head: "HP loss
-is used as the metric"); for a turn that doesn't, it's a TD-bootstrapped estimate -- see
-facility_common.py's _play_turn_only for both formulas. end_turn() backfills every step
-recorded since the matching begin_turn() -- the value can only be known once the turn
-resolves, so it's applied retroactively to the range, not per-action like attach_policy().
+flattened to the same scalar as every other turn in that combat. For a combat_play turn, value
+is a tri-head reward dict (see model/tri_head_design.md and facility_common.py's
+_play_turn_only): `{hp_term, enemy_term, scale_term, win_value_after}`; for any other
+value-bearing decision (a meta/map job's own commit, via attach_value()/set_value()), value stays
+a plain float. end_turn() backfills every step recorded since the matching begin_turn() -- the
+value can only be known once the turn resolves, so it's applied retroactively to the range, not
+per-action like attach_policy().
 Branch trials adopted by a main line already carry their own per-turn value in their saved
 file; facility_claws.py's _absorb_actions replays those through attach_value() (an immediate,
 per-action counterpart to attach_policy()) rather than recomputing it.
@@ -25,7 +26,7 @@ class CompactRecorder:
         self.error: str | None = None
         self._policies: dict[int, dict] = {}
         self._pending_policy: dict | None = None
-        self._values: dict[int, float] = {}
+        self._values: dict[int, float | dict] = {}
         self._pending_value: float | None = None
         self._turn_start: int | None = None
         self._step = start_step
@@ -50,7 +51,7 @@ class CompactRecorder:
         """Retroactively assigns `value` to a specific already-logged step -- see mark_step()."""
         self._values[step] = value
 
-    def attach_value(self, value: float) -> None:
+    def attach_value(self, value: float | dict) -> None:
         """Immediate counterpart to attach_policy(): assigns `value` to the *next* logged
         step. For replaying an adopted branch's already-scored actions (see facility.py's
         _absorb_actions) -- for scoring a turn as it's actually played live, use
@@ -60,11 +61,12 @@ class CompactRecorder:
     def begin_turn(self) -> None:
         self._turn_start = self._step
 
-    def end_turn(self, value: float) -> None:
+    def end_turn(self, value: float | dict) -> None:
         """Backfills `value` onto every step since the matching begin_turn() -- a turn's
         value (terminal outcome if it ends the combat, TD-bootstrap estimate otherwise) is
         only known once it resolves, so unlike attach_policy()/attach_value() this scores
-        retroactively rather than the next step."""
+        retroactively rather than the next step. `value` is a combat_play turn's tri-head
+        reward dict (facility_common.py's _play_turn_only) for every current caller."""
         assert self._turn_start is not None, "end_turn() with no matching begin_turn()"
         for step in range(self._turn_start, self._step):
             self._values[step] = value

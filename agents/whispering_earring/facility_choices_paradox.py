@@ -15,7 +15,7 @@ from checkpoint import BranchJob, MapOptionJob, MetaOptionJob
 from recorder import CompactRecorder
 from policy import _BufferCard, choose_action
 from facility_common import (
-    CombatOutcome, Facility, FacilityConfig, _combat_value, _play_turn_only,
+    CombatOutcome, Facility, FacilityConfig, _combat_value, _play_turn_only, _win_value_of,
     _resolve_map_decision, _run_map_option_job,
     add_common_cli_args, branch_worker_loop, load_resume, main_worker_loop,
 )
@@ -150,13 +150,16 @@ def _run_meta_option_job(cfg: FacilityConfig, job: MetaOptionJob, results_queue)
             while decision.decision != "game_over":
                 if decision.decision == "combat_play":
                     combat_hp_before, combat_max_hp = decision.player_hp, decision.player_max_hp
+                    win_value_before = _win_value_of(decision)
                     turn_outcome = "continue"
                     while turn_outcome == "continue":
-                        turn_outcome, decision = _play_turn_only(
+                        turn_outcome, decision, reward = _play_turn_only(
                             session, decision, combat_hp_before, combat_max_hp,
                             bypass_reward_on_win=False,
                             combat_dirichlet_noise=cfg.combat_dirichlet_noise,
+                            win_value_before=win_value_before,
                         )
+                        win_value_before = reward["win_value_after"]
                     if turn_outcome == "lost":
                         outcome = "lost"
                         break

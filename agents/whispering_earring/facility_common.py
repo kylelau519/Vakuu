@@ -59,6 +59,11 @@ def _random_seed() -> str:
     return f"{random.choice(_SEED_WORDS)}-{random.randint(0, 999_999)}"
 
 
+_DEBUG_REWARDS = bool(os.environ.get("CLAWS_DEBUG_REWARDS"))  # per-turn tri-head reward trace,
+# see _play_turn_only -- opt-in (can be noisy at any real branch fan-out) rather than gated on
+# FacilityConfig.verbose, since threading a new flag through every _play_turn_only caller (branch
+# jobs, map-option jobs, meta-option jobs, eval) just to reach this one print isn't worth it.
+
 _WORKER_TAG_COLORS = [31, 32, 33, 34, 35, 36, 91, 92, 93, 94, 95, 96]  # ANSI red..bright-cyan
 
 # Strips ANSI/terminal control sequences (CSI, OSC, lone ESC) and other C0 control bytes (except
@@ -251,20 +256,53 @@ def _bypass_card_reward(session) -> None:
         raise Sts2ActionError(session._session.LastError or "unknown error")
 
 
+_warned_no_claws_net = False  # print the fallback note below at most once per worker process
+
+
+def _win_value_of(decision) -> float:
+    """win_value estimate for the state a turn is about to be played from. Every turn but a
+    combat's first reuses the previous turn's own recorded win_value_after (see _play_turn_only's
+    win_value_before param); a combat's first turn has no previous turn to reuse, so callers get
+    one extra net call from here at combat entry -- see tri_head_design.md's win_value threading."""
+    net = get_claws_net()
+    if net is None:
+        global _warned_no_claws_net
+        if not _warned_no_claws_net:
+            _warned_no_claws_net = True
+            print(
+                "[claws] no CLAWS_CHECKPOINT loaded in this worker -- win_value/scale_term will "
+                "be a flat 0.0 for every continuing (non-combat-ending) turn this round, so "
+                "sibling comparisons over non-terminal turns will get 0 REINFORCE advantage "
+                "(materialize.py's _group_baseline degrades to baseline==value exactly). This is "
+                "expected for a checkpoint-less round 1; set CLAWS_CHECKPOINT once a checkpoint "
+                "exists so win_value/scale_term carry real signal.",
+                file=sys.stderr,
+            )
+        return 0.0
+    _, _, values = net.forward(decision)
+    return float(values["win"].item())
+
+
 def _play_turn_only(
     session, decision, combat_hp_before: int, combat_max_hp: int,
     is_last_of_act: bool = False, enemy_ids: frozenset[str] = frozenset(), enemy_max_hp: int = 0,
     bypass_reward_on_win: bool = True, combat_dirichlet_noise: bool = True,
+    win_value_before: float = 0.0,
 ):
     """Plays exactly one turn (through the mid-turn card_select edge case, e.g. Power Potion/
-    Brand) and scores it before returning `(outcome, decision)` -- outcome is "continue" if the
-    combat carries on, "won"/"lost" if this turn ended it; decision is whatever the game shows
-    after (a fresh combat_play round, the pending card_reward on a win, or game_over on a loss).
+    Brand) and scores it before returning `(outcome, decision, reward)` -- outcome is "continue" if
+    the combat carries on, "won"/"lost" if this turn ended it; decision is whatever the game shows
+    after (a fresh combat_play round, the pending card_reward on a win, or game_over on a loss);
+    reward is this turn's tri-head reward streams (tri_head_design.md):
+    `{hp_term, enemy_term, scale_term, win_value_after}`.
 
     For boss fight reward are shaped differently.
 
     bypass_reward_on_win: For branch job to skip reward because they are irrelevant.
-    combat_dirichlet_noise: forwarded to policy.choose_action -- see FacilityConfig.combat_dirichlet_noise."""
+    combat_dirichlet_noise: forwarded to policy.choose_action -- see FacilityConfig.combat_dirichlet_noise.
+    win_value_before: this turn's own win_value_before -- the previous turn's win_value_after, or
+    (for a combat's first turn) a fresh _win_value_of(decision) call the caller makes at combat
+    entry. Feeds scale_term's residual below."""
     hp_before_turn = decision.player_hp
     enemy_hp_before_turn = _tracked_enemy_hp(decision.arr, enemy_ids)
     session.logger.begin_turn()
@@ -288,35 +326,46 @@ def _play_turn_only(
         "this turn wrong if treated as resolved"
     )
 
+    # hp_term/enemy_term are computed for every turn, not just ones that don't end the combat --
+    # value_aggro/value_defense need real reward on the turn that finishes a fight too (a killing
+    # blow is exactly the kind of thing "aggro" should get credit for).
+    hp_term = -(hp_before_turn - decision.player_hp) / combat_max_hp if combat_max_hp else 0.0
+    enemy_term = 0.0
+    if enemy_max_hp and decision.decision != "game_over":  # enemy state isn't meaningful on death
+        enemy_hp_after_turn = _tracked_enemy_hp(decision.arr, enemy_ids)
+        enemy_term = (enemy_hp_before_turn - enemy_hp_after_turn) / enemy_max_hp
+
     if decision.decision == "card_reward":
         if bypass_reward_on_win:
             _bypass_card_reward(session)
         outcome = "won"
-        turn_value = min(1.0, _combat_value(
+        win_value_after = _combat_value(
             CombatOutcome(decision.player_hp, combat_max_hp, is_last_of_act)
-        ) + 1.0)
+        )
     elif decision.decision == "game_over":
         outcome = "lost"
-        turn_value = -1.0
+        win_value_after = -1.0
     else:
         outcome = "continue"
-        v_net = 0.0
-        net = get_claws_net()
-        if net is not None:
-            _, _, value_t = net.forward(decision)
-            v_net = float(value_t.item())
-        hp_term = (
-            -(hp_before_turn - decision.player_hp) / combat_max_hp if combat_max_hp else 0.0
-        )
-        enemy_term = 0.0
-        if enemy_max_hp:
-            enemy_hp_after_turn = _tracked_enemy_hp(decision.arr, enemy_ids)
-            enemy_term = (enemy_hp_before_turn - enemy_hp_after_turn) / enemy_max_hp
-        hp_weight = _BOSS_HP_WEIGHT if is_last_of_act else _HP_WEIGHT
-        turn_value = hp_weight * (hp_term + enemy_term) + v_net
+        win_value_after = _win_value_of(decision)
 
-    session.logger.end_turn(turn_value)
-    return outcome, decision
+    # scale_term: how much the graded outcome moved this turn, for reasons other than the direct
+    # HP/enemy swings already credited to the other two streams -- see tri_head_design.md's Reward
+    # stream definitions.
+    scale_term = (win_value_after - win_value_before) - hp_term - enemy_term
+    reward = {
+        "hp_term": hp_term, "enemy_term": enemy_term, "scale_term": scale_term,
+        "win_value_after": win_value_after,
+    }
+    if _DEBUG_REWARDS:
+        print(
+            f"[claws] turn reward: outcome={outcome} hp_term={hp_term:+.3f} "
+            f"enemy_term={enemy_term:+.3f} scale_term={scale_term:+.3f} "
+            f"win_value_before={win_value_before:+.3f} win_value_after={win_value_after:+.3f}",
+            file=sys.stderr,
+        )
+    session.logger.end_turn(reward)
+    return outcome, decision, reward
 
 
 def _clean_actions(actions: list[dict]) -> list[dict]:
@@ -343,6 +392,39 @@ META_ELIGIBLE_DECISIONS = frozenset({"card_reward", "rest_site", "event_choice"}
 # sibling of a divergence failing with the same FileNotFoundException (not just a straggler among
 # otherwise-successful siblings) means the whole divergence missed the window, not a per-job race.
 _META_DRAIN_TIMEOUT = 120.0
+
+# Combat BranchJobs (facility_claws._spawn_turn_branches) have no per-checkpoint refcount the way
+# MetaOptionJobs do (see _apply_meta_result) -- facility_claws._wait_for_turn_result adopts
+# branch_ids[0] and returns as soon as it's usable, WITHOUT waiting for the other
+# branches_per_turn-1 siblings, which can still be queued behind job_queue_priority's backlog or
+# mid-flight reading the SAME room checkpoint (unchanged across every turn of one combat -- see
+# _resolve_combat). Deleting a trial's checkpoints the moment that trial ends (the old behavior)
+# races those stragglers: confirmed live via a cluster of Sts2Headless FileNotFoundExceptions all
+# pointing at one now-deleted checkpoint, from many turn/branch ids of the SAME combat. Aging
+# checkpoints out by mtime instead (see _sweep_stale_checkpoints) sidesteps the race without
+# needing to plumb a refcount through combat_resolver's generic signature -- comfortably longer
+# than _META_DRAIN_TIMEOUT since combat branches sit on the higher-priority queue and should clear
+# faster than meta jobs do.
+_CHECKPOINT_GRACE_PERIOD = 300.0
+
+
+def _sweep_stale_checkpoints(checkpoint_dir: str) -> None:
+    """Deletes room checkpoints older than _CHECKPOINT_GRACE_PERIOD -- called once per trial
+    (main_worker_loop) instead of deleting a trial's own checkpoints the instant it ends, so a
+    still-running straggler BranchJob (see _CHECKPOINT_GRACE_PERIOD's comment) gets a generous
+    window to finish reading its checkpoint before the file disappears from under it."""
+    try:
+        entries = os.scandir(checkpoint_dir)
+    except OSError:
+        return
+    cutoff = time.time() - _CHECKPOINT_GRACE_PERIOD
+    with entries:
+        for entry in entries:
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    os.remove(entry.path)
+            except OSError:
+                pass
 
 
 def _apply_meta_result(
@@ -427,7 +509,6 @@ class _TrialState:
     room_index: int = 0
     pending_purpose: str | None = None  # threaded through choose_action -- see its docstring
     divergence_index: int = 0
-    checkpoint_paths_this_trial: list = field(default_factory=list)
 
     pending_map_steps: list = field(default_factory=list)
     pending_map_step_types: list = field(default_factory=list)
@@ -542,7 +623,6 @@ def _play_trial(
             )
             os.makedirs(state.checkpoint_dir, exist_ok=True)
             state.session.save(checkpoint_path)
-            state.checkpoint_paths_this_trial.append(checkpoint_path)
         decision = state.session.step(name, **kwargs)
         if name == "select_map_node":
             state.last_room_checkpoint_path = checkpoint_path
@@ -624,12 +704,14 @@ def _run_map_option_job(cfg: FacilityConfig, job: MapOptionJob, results_queue) -
             while decision.decision != "game_over":
                 if decision.decision == "combat_play":
                     combat_hp_before, combat_max_hp = decision.player_hp, decision.player_max_hp
+                    win_value_before = _win_value_of(decision)
                     turn_outcome = "continue"
                     while turn_outcome == "continue":
-                        turn_outcome, decision = _play_turn_only(
+                        turn_outcome, decision, reward = _play_turn_only(
                             session, decision, combat_hp_before, combat_max_hp,
-                            bypass_reward_on_win=False,
+                            bypass_reward_on_win=False, win_value_before=win_value_before,
                         )
+                        win_value_before = reward["win_value_after"]
                     if turn_outcome == "lost":
                         outcome = "lost"
                         break
@@ -842,9 +924,11 @@ def main_worker_loop(
             "character": character, "seed": seed, "ascension": cfg.ascension,
             "main_id": main_id, "role": "main",
         })
+        checkpoint_dir = os.path.join(cfg.raw_dir, "checkpoints")
+        _sweep_stale_checkpoints(checkpoint_dir)  # opportunistic, once per trial -- see its docstring
         state = _TrialState(
             session=session_factory(logger=recorder),
-            checkpoint_dir=os.path.join(cfg.raw_dir, "checkpoints"),
+            checkpoint_dir=checkpoint_dir,
             meta_budget=cfg.meta_branches_per_trial,
             map_budget=cfg.map_branches_per_trial,
         )
@@ -879,8 +963,8 @@ def main_worker_loop(
             # Bounded wait for this trial's still-outstanding MetaOptionJobs (no-op whenever
             # meta_resolver is None) -- must run BEFORE recorder.save() below, the only chance for
             # a late-arriving adopted-option value to land via recorder.set_value. Whatever
-            # doesn't resolve within _META_DRAIN_TIMEOUT is abandoned; its checkpoint still gets
-            # deleted below regardless.
+            # doesn't resolve within _META_DRAIN_TIMEOUT is abandoned; its checkpoint ages out via
+            # _sweep_stale_checkpoints on a later trial instead of being force-deleted here.
             _drain_meta_results_blocking(
                 meta_results_queue, state.pending_meta_jobs, state.checkpoint_refcount, recorder,
                 timeout=_META_DRAIN_TIMEOUT,
@@ -893,17 +977,14 @@ def main_worker_loop(
                 recorder.log_error(f"save failed: {type(e).__name__}: {e}")
         finally:
             state.session.close()
-            # Every combat branch has resolved by now (combat's own _wait_for_turn_result blocks
-            # the main line synchronously); meta-decision branches got a fair chance via the
-            # bounded drain above. Anything still outstanding is a straggler: safe to reclaim its
-            # checkpoint unconditionally here rather than let these accumulate for the facility's
-            # life (a job reading one late just gets a clean, already-handled error -- see
-            # _run_meta_option_job's try/except).
-            for path in state.checkpoint_paths_this_trial:
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
+            # No per-trial checkpoint cleanup here -- combat BranchJobs have no completion
+            # tracking (unlike MetaOptionJobs' checkpoint_refcount), so a turn's un-adopted or
+            # still-queued siblings (facility_claws._wait_for_turn_result returns as soon as the
+            # PREFERRED branch reports, not once every branch has) can still be reading this
+            # trial's checkpoints well after _play_trial returns. _sweep_stale_checkpoints
+            # (called once per trial, above) reclaims them by age instead once they're safely
+            # unreferenced -- see _CHECKPOINT_GRACE_PERIOD's comment for why deleting immediately
+            # here used to race those stragglers.
         if poisoned:
             # Exit this worker process outright rather than looping to the top of the while --
             # see the Sts2EngineTimeoutError handling above for why looping here can't recover.

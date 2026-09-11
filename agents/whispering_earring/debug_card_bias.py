@@ -66,9 +66,13 @@ def main() -> None:
 
         for member in group.members:
             policy = member.get("policy")
-            if not policy:
+            # combat's policy is {"head": ..., "options": [...]} since the hard/stochastic-gating
+            # change (policy.py's _choose_combat_action_claws); older raw files recorded a bare
+            # list.
+            options_list = policy.get("options") if isinstance(policy, dict) else policy
+            if not options_list:
                 continue
-            for opt in policy:
+            for opt in options_list:
                 name = _option_name(opt["action"], opt["args"], hand_names)
                 prob_mass[name] += opt["prob"]
                 sightings[name] += 1

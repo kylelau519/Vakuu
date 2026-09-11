@@ -15,7 +15,7 @@ from buffer_env import Sts2BufferSession, decode_token
 from checkpoint import BranchJob, MapOptionJob
 from recorder import CompactRecorder
 from facility_common import (
-    Facility, FacilityConfig, _clean_actions, _play_turn_only,
+    Facility, FacilityConfig, _clean_actions, _play_turn_only, _win_value_of,
     _resolve_map_decision, _run_map_option_job,
     add_common_cli_args, branch_worker_loop, load_resume, main_worker_loop,
 )
@@ -288,10 +288,12 @@ def _run_branch_job(cfg: FacilityConfig, job: BranchJob, results_queue) -> None:
                 decision = session.open_from_checkpoint(
                     job.character, job.seed, job.ascension, job.actions
                 )
-            outcome, _decision = _play_turn_only(
+            win_value_before = _win_value_of(decision)
+            outcome, _decision, _reward = _play_turn_only(
                 session, decision, job.combat_hp_before, job.combat_max_hp, job.is_last_of_act,
                 job.enemy_ids, job.enemy_max_hp,
                 combat_dirichlet_noise=cfg.combat_dirichlet_noise,
+                win_value_before=win_value_before,
             )
         except Exception as e:
             recorder.log_error(f"{type(e).__name__}: {e}")

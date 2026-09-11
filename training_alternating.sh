@@ -102,7 +102,7 @@ while true; do
     # whatever worker time is left over. Dial down to a positive cap here if rounds start taking
     # noticeably longer than before.
     python "$vakuu/agents/whispering_earring/facility_claws.py" \
-        --trials 20 --branch-workers 15 --branches-per-turn 40 --main-workers 5 \
+        --trials 10 --branch-workers 15 --branches-per-turn 40 --main-workers 5 \
         --ascension 1 --raw-dir "$vakuu/agents/whispering_earring/data/raw" \
         --map-branches-per-trial -1 --map-room-horizon 1 \
 
@@ -186,7 +186,7 @@ while true; do
     # above, sharing this facility's own branch-worker pool with its meta-decision chains --
     # both land on the same low-priority queue behind combat turn-branches.
     python "$vakuu/agents/whispering_earring/facility_choices_paradox.py" \
-        --trials 40 --branch-workers 15 --main-workers 4 \
+        --trials 20 --branch-workers 15 --main-workers 4 \
         --branches-per-turn 4 --meta-branches-per-trial 20\
         --ascension 1 --raw-dir "$raw_dir" \
         --map-branches-per-trial -1 --map-room-horizon 1
@@ -221,42 +221,42 @@ while true; do
 
     cleanup_procs
 
-    echo "==========================================="
-    echo " Training Golden Compass: Round $ROUND"
-    echo "==========================================="
+    # echo "==========================================="
+    # echo " Training Golden Compass: Round $ROUND"
+    # echo "==========================================="
 
-    compass_raw_dir="$vakuu/agents/whispering_earring/data/raw_compass"
+    # compass_raw_dir="$vakuu/agents/whispering_earring/data/raw_compass"
 
-    echo "[golden 1/4] Archiving previous round's raw data (keeping last $HISTORY_WINDOW rounds)..."
-    archive_round_data "$compass_raw_dir" \
-        "$vakuu/agents/whispering_earring/data/history/compass" "$HISTORY_WINDOW"
-    find "$compass_raw_dir/checkpoints/" -maxdepth 1 -name '*.json' -delete 2>/dev/null || true
+    # echo "[golden 1/4] Archiving previous round's raw data (keeping last $HISTORY_WINDOW rounds)..."
+    # archive_round_data "$compass_raw_dir" \
+    #     "$vakuu/agents/whispering_earring/data/history/compass" "$HISTORY_WINDOW"
+    # find "$compass_raw_dir/checkpoints/" -maxdepth 1 -name '*.json' -delete 2>/dev/null || true
 
-    echo "[golden 2/4] Running facility_compass.py (Data Generation)..."
-    python "$vakuu/agents/whispering_earring/facility_compass.py" \
-        --trials 30 --branch-workers 15 --branches-per-turn 4 --main-workers 4 \
-        --ascension 1 --raw-dir "$compass_raw_dir" \
-        --map-branches-per-trial -1 
+    # echo "[golden 2/4] Running facility_compass.py (Data Generation)..."
+    # python "$vakuu/agents/whispering_earring/facility_compass.py" \
+    #     --trials 10 --branch-workers 15 --branches-per-turn 4 --main-workers 4 \
+    #     --ascension 1 --raw-dir "$compass_raw_dir" \
+    #     --map-branches-per-trial -1 
 
-    echo "[golden 3/4] Materializing dataset (this round + up to $HISTORY_WINDOW archived rounds)..."
-    python "$vakuu/agents/golden_compass/model/materialize.py" \
-        "$compass_raw_dir/" \
-        "$vakuu/agents/whispering_earring/data/history/compass/"*/ \
-        --out "$vakuu/agents/golden_compass/model/dataset.pt" \
-        --jobs 12
+    # echo "[golden 3/4] Materializing dataset (this round + up to $HISTORY_WINDOW archived rounds)..."
+    # python "$vakuu/agents/golden_compass/model/materialize.py" \
+    #     "$compass_raw_dir/" \
+    #     "$vakuu/agents/whispering_earring/data/history/compass/"*/ \
+    #     --out "$vakuu/agents/golden_compass/model/dataset.pt" \
+    #     --jobs 12
 
-    echo "[golden 4/4] Training model..."
-    python "$vakuu/agents/golden_compass/model/train.py" \
-        "$vakuu/agents/golden_compass/model/dataset.pt" --epochs 4 \
-        --out "$vakuu/agents/golden_compass/model/golden_compass.pt" \
-        --init "$GOLDEN_COMPASS_CHECKPOINT_PATH" \
-        --batch-size 32
+    # echo "[golden 4/4] Training model..."
+    # python "$vakuu/agents/golden_compass/model/train.py" \
+    #     "$vakuu/agents/golden_compass/model/dataset.pt" --epochs 4 \
+    #     --out "$vakuu/agents/golden_compass/model/golden_compass.pt" \
+    #     --init "$GOLDEN_COMPASS_CHECKPOINT_PATH" \
+    #     --batch-size 32
 
-    echo "Backing up Golden Compass checkpoint..."
-    backup_dir="$vakuu/agents/golden_compass/model/backups"
-    mkdir -p "$backup_dir"
-    cp "$vakuu/agents/golden_compass/model/golden_compass.pt" \
-        "$backup_dir/golden_compass_$(date +%Y%m%d_%H%M%S).pt"
+    # echo "Backing up Golden Compass checkpoint..."
+    # backup_dir="$vakuu/agents/golden_compass/model/backups"
+    # mkdir -p "$backup_dir"
+    # cp "$vakuu/agents/golden_compass/model/golden_compass.pt" \
+    #     "$backup_dir/golden_compass_$(date +%Y%m%d_%H%M%S).pt"
 
     echo "==========================================="
     echo " Round $ROUND complete (claws + choices + golden compass)! Restarting in 3s..."

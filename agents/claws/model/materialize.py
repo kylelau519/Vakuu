@@ -3,8 +3,9 @@
 Every branch spawned by whispering_earring's turn-level branch-and-adopt (see
 ../../whispering_earring/facility_claws.py) replays an identical shared prefix before diverging on
 its own first action, then plays out the rest of that turn unbranched (facility_claws.py's
-_play_turn_only) under one shared REINFORCE advantage (the branch's end-of-turn value vs. its
-group's baseline -- see _group_baseline). Scoring only ever used that first divergent action
+_play_turn_only) under one shared set of per-stream REINFORCE advantages (the branch's end-of-turn
+value vs. its group's baseline, one baseline per reward stream -- see _group_baselines). Scoring
+only ever used that first divergent action
 (comment left here in case a from-scratch rewrite is ever worth it: a branch's other siblings'
 later actions live in states nothing else in this pipeline ever visits, since recorder.py
 deliberately never persists per-step state and this codebase's native save/load only checkpoints
@@ -50,16 +51,150 @@ import sts2_path  # noqa: E402,F401  (sets sys.path to sts2-cli/python before th
 from buffer_env import Sts2BufferSession  # noqa: E402
 from installation import ensure_setup  # noqa: E402
 
-from model import GlobalVocab, legal_options_from_buffer, tokenize_from_buffer  # noqa: E402
+from model import (  # noqa: E402
+    GlobalVocab, POLICY_STREAMS, legal_options_from_buffer, tokenize_from_buffer,
+)
 
 # Saved as plain dicts of builtins/tensors, not TokenBatch/dataclass instances -- torch.save
 # pickles a class by its import path, and TokenBatch would resolve to "__main__.TokenBatch" when
 # this script is run directly, unloadable from any other module. Plain dicts sidestep that.
 Example = dict[str, Any]
 
+# n-step/TD(lambda) propagation constants -- tri_head_design.md's Propagation section flags the
+# concrete value as needing a real sweep later; these are a reasonable starting point, not tuned.
+_TD_GAMMA = 0.99
+_TD_LAMBDA = 0.9
+
+_ALL_STREAMS = (*POLICY_STREAMS, "win")
+
+
+def _lambda_returns(
+    rewards: list[float], bootstrap: list[float | None], gamma: float, lam: float
+) -> list[float]:
+    """Backward TD(lambda) over one already-fully-known reward sequence (tri_head_design.md's
+    Propagation section): `rewards[t]` is earned during turn t (0-indexed, chronological, last
+    index is the sequence's real end -- not a truncation), `bootstrap[t]` is a value estimate for
+    the state right after turn t, or None where no such estimate is available/needed.
+
+    G[T] = rewards[T]
+    G[t] = rewards[t] + gamma * ((1-lam)*bootstrap[t] + lam*G[t+1])   if bootstrap[t] is not None
+    G[t] = rewards[t] + gamma * G[t+1]                                if bootstrap[t] is None
+
+    The `bootstrap is None` branch degrades to a plain discounted sum over the turns actually
+    known -- correct (not a fallback approximation) whenever the sequence already reaches the
+    real end, which every caller here guarantees (see this module's docstring on branch trials
+    only ever covering one real turn, and main-line trials always reaching a real outcome)."""
+    n = len(rewards)
+    g = [0.0] * n
+    g[-1] = rewards[-1]
+    for t in range(n - 2, -1, -1):
+        b = bootstrap[t]
+        if b is not None:
+            g[t] = rewards[t] + gamma * ((1 - lam) * b + lam * g[t + 1])
+        else:
+            g[t] = rewards[t] + gamma * g[t + 1]
+    return g
+
+
+@dataclass
+class TurnTargets:
+    """_turn_value_targets' per-action-index output. `values` is the 4 value-head regression
+    targets (`{"aggro","defense","scale","win"}`). `terminal_bonus` is the RAW graded win/lose
+    outcome (facility_common.py's `_combat_value` on a win, `-1.0` on a loss) for action indices
+    belonging to a combat's own genuinely-final turn, else None -- feeds train.py's extra
+    terminal-only gate REINFORCE term (on top of, not instead of, the regular per-turn advantage
+    every decision gets)."""
+    values: dict[str, float]
+    terminal_bonus: float | None
+
+
+def _turn_value_targets(
+    actions: list[dict], gamma: float = _TD_GAMMA, lam: float = _TD_LAMBDA
+) -> dict[int, TurnTargets]:
+    """Every combat_play-turn action's index (into `actions`) -> its TurnTargets, built from
+    recorder.py's per-turn tri-head reward dicts. Pure JSON -- no engine replay needed, `actions`
+    can be a whole trial's action log or just one branch member's own post-divergence actions.
+
+    recorder.py's end_turn() backfills the IDENTICAL reward dict onto every action of one turn.
+    "value" isn't unique to combat_play turns though -- a meta/map job's own commit
+    (attach_value()/set_value(), e.g. golden_compass's select_map_node reward) carries a plain
+    float "value" too, and can sit right next to a combat's own turns in one trial's action log --
+    so a maximal contiguous run of DICT-valued actions (not just "value"-bearing ones) is exactly
+    one combat, and within it a maximal contiguous sub-run sharing the identical dict is exactly
+    one turn.
+
+    value_aggro's target is enemy_term's own return (offense reward), value_defense's is
+    hp_term's, value_scale's is scale_term's -- see tri_head_design.md's Architecture section for
+    the stream/head naming. hp_term/enemy_term/scale_term have no per-stream value estimate
+    recorded at self-play time (those heads are new), so their returns are a real discounted sum
+    to the combat's actual end (see _lambda_returns's docstring). win_value DOES have a real
+    per-turn estimate already recorded (win_value_after, the self-play net's own live reading --
+    today's existing "TD-bootstrapped" value, just now blended over multiple steps instead of 1)."""
+    result: dict[int, TurnTargets] = {}
+    i, n = 0, len(actions)
+    while i < n:
+        if not isinstance(actions[i].get("value"), dict):
+            i += 1
+            continue
+        turns: list[tuple[dict, list[int]]] = []  # (reward dict, action indices) per turn
+        while i < n and isinstance(actions[i].get("value"), dict):
+            reward = actions[i]["value"]
+            if turns and turns[-1][0] == reward:
+                turns[-1][1].append(i)
+            else:
+                turns.append((reward, [i]))
+            i += 1
+
+        hp = [r["hp_term"] for r, _ in turns]
+        enemy = [r["enemy_term"] for r, _ in turns]
+        scale = [r["scale_term"] for r, _ in turns]
+        win_after = [r["win_value_after"] for r, _ in turns]
+
+        g_hp = _lambda_returns(hp, [None] * len(hp), gamma, lam)
+        g_enemy = _lambda_returns(enemy, [None] * len(enemy), gamma, lam)
+        g_scale = _lambda_returns(scale, [None] * len(scale), gamma, lam)
+        # win reward is 0 every non-terminal turn (the terminal turn's own win_value_after IS the
+        # real terminal outcome); bootstrap at turn t is that SAME turn's own win_value_after --
+        # exactly what a 1-step target would already use, generalized to blend further turns in.
+        win_rewards = [0.0] * (len(turns) - 1) + [win_after[-1]]
+        win_bootstrap: list[float | None] = win_after[:-1] + [None]
+        g_win = _lambda_returns(win_rewards, win_bootstrap, gamma, lam)
+
+        # A combat's own final turn is "genuinely terminal" (as opposed to a branch trial's one
+        # recorded turn simply running out of file) when either this scan stopped because the
+        # NEXT action is a real, different decision (i < n -- the trial kept logging past this
+        # combat, so it really ended in a win) or win_value_after is exactly the -1.0 sentinel
+        # _play_turn_only writes on a loss. Heuristic, not a persisted "outcome" field
+        # (recorder.py/facility_common.py are deliberately unchanged by this restart) -- the one
+        # gap is a branch trial whose single turn happens to end in a win right at its own file's
+        # end with no follow-up action recorded, which under-fires the bonus rather than
+        # mis-firing it.
+        is_terminal = i < n or win_after[-1] == -1.0
+
+        for turn_i, (_, idxs) in enumerate(turns):
+            values = {
+                "aggro": g_enemy[turn_i], "defense": g_hp[turn_i], "scale": g_scale[turn_i],
+                "win": g_win[turn_i],
+            }
+            bonus = win_after[-1] if (is_terminal and turn_i == len(turns) - 1) else None
+            for idx in idxs:
+                result[idx] = TurnTargets(values=values, terminal_bonus=bonus)
+    return result
+
 
 def _same_option(option: tuple[str, dict], recorded: dict) -> bool:
     return option[0] == recorded["action"] and option[1] == recorded.get("args", {})
+
+
+def _head_of(entry: dict) -> str | None:
+    """Which of POLICY_STREAMS the self-play sampler actually used for this recorded action
+    (policy.py's _choose_combat_action_claws's hard/stochastic gating -- see tri_head_design.md's
+    Training section) -- needed to route train.py's per-head/gate loss to the right head. None
+    for a turn with no recorded policy (a non-policy_point placeholder) or one recorded before
+    this field existed (the old flat-list `policy` format) -- callers skip a policy_real example
+    in that case rather than mis-attribute credit to the wrong head."""
+    policy = entry.get("policy")
+    return policy.get("head") if isinstance(policy, dict) else None
 
 
 def _option_index(options: list[tuple[str, dict]], entry: dict) -> int | None:
@@ -84,9 +219,10 @@ class _Group:
     be opened a second time. `members` holds each sibling's own post-divergence action entries
     (`[{action, args, value}, ...]`) -- the branch's ENTIRE remaining turn, not just its first
     novel action, so materialize_group()/materialize_main_and_groups() can score every action the
-    branch took under one shared advantage instead of only its first (see this module's docstring
-    on `sum(log_prob(a_t))`). `end_turn()`'s whole-range backfill (recorder.py) means every entry
-    in a member carries the same `value` -- reading it off entry 0 is enough for the baseline."""
+    branch took under its own per-stream advantages instead of only its first (see this module's
+    docstring on `sum(log_prob(a_t))`). `end_turn()`'s whole-range backfill (recorder.py) means
+    every entry in a member carries the same `value` -- reading it off entry 0 is enough for the
+    baseline."""
     main_id: str
     character: str
     seed: str
@@ -95,12 +231,26 @@ class _Group:
     members: list[list[dict]] = field(default_factory=list)
 
 
-def _group_baseline(group: _Group) -> float | None:
-    """The REINFORCE baseline for this group's turn-start decision:"""
+def _group_baselines(group: _Group) -> dict[str, float] | None:
+    """The REINFORCE baseline for this group's turn-start decision, one per reward stream --
+    each head's own policy loss is trained off ITS OWN stream's advantage (`targets[name] -
+    baselines[name]`), not a single shared win-derived number: `policy_aggro` should be judged
+    against "how much enemy damage did this action lead to, relative to what this group's other
+    candidate actions averaged," not against the group's overall win outcome. Only the GATE
+    (which strategy to trust) is trained off the `win` baseline here, since arbitrating between
+    strategies by overall outcome IS the gate's job -- see tri_head_design.md's Training section.
+    Without this split, hard-gating alone only gives each head distinct training DATA (whichever
+    states the gate routes to it); every head would still be chasing the identical `win` signal,
+    so nothing stops all three from converging toward the same generic "do whatever wins" policy
+    rather than a genuine, recognizable offense/defense/scale specialization."""
     subkeys = {_norm_action(m[0]) for m in group.members}
     if len(subkeys) < 2:
         return None
-    return sum(m[0]["value"] for m in group.members) / len(group.members)
+    per_member_targets = [_turn_value_targets(m)[0].values for m in group.members]
+    return {
+        name: sum(t[name] for t in per_member_targets) / len(per_member_targets)
+        for name in _ALL_STREAMS
+    }
 
 
 def _read_trial(path: str) -> dict:
@@ -130,10 +280,15 @@ def _scan_one(path: str, trial: dict, main_id_to_path: dict[str, str], groups: d
         if trial.get("error") is None and trial.get("main_id") is not None:
             main_id_to_path[trial["main_id"]] = path
         return
-    if trial.get("branch_kind") == "meta":
-        return  # choices_paradox's own MetaBranchJob file (different prefix/action shape --
-        # see agents/choices_paradox/model/materialize.py, which is what actually reads these);
-        # only relevant if this ever points at a raw-dir shared with facility_choices_paradox.py
+    if trial.get("branch_kind") in ("meta", "map"):
+        return  # choices_paradox's MetaOptionJob / golden_compass's MapOptionJob files (different
+        # shape -- see agents/choices_paradox/model/materialize.py and
+        # agents/golden_compass/model/materialize.py, which are what actually read these); only
+        # relevant if this ever points at a raw-dir shared with facility_choices_paradox.py. A
+        # MapOptionJob's own first post-divergence step is select_map_node with a plain float
+        # value (facility_common._apply_golden_compass_rewards), not a combat_play turn's tri-head
+        # reward dict -- letting one through here breaks _turn_value_targets's index-0 assumption
+        # (KeyError: 0), since it only skips non-dict-valued actions when scanning for turns.
     if trial.get("error") is not None:
         return
 
@@ -174,8 +329,8 @@ def materialize_group(
     once per sibling (this codebase's native save/load only checkpoints at room boundaries, not
     mid-combat -- see BufferSession.SaveCheckpoint in sts2-cli -- so there's no cheap fork point
     to replay each sibling's continuation from instead)."""
-    baseline = _group_baseline(group)
-    if baseline is None:
+    baselines = _group_baselines(group)
+    if baselines is None:
         return []
 
     decision = session.start(group.character, group.seed, group.ascension)
@@ -191,8 +346,10 @@ def materialize_group(
     for member in group.members:
         first = member[0]
         action_index = _option_index(options, first)
-        if action_index is None:
+        head = _head_of(first)
+        if action_index is None or head is None:
             continue
+        tt = _turn_value_targets(member)[0]
         examples.append({
             "type_ids": batch.type_ids,
             "global_ids": batch.global_ids,
@@ -202,9 +359,16 @@ def materialize_group(
             "enemy_pos": batch.enemy_pos,
             "potion_pos": batch.potion_pos,
             "options": options,
-            "value": first["value"],
+            "value_targets": tt.values,
             "action_index": action_index,
-            "advantage": first["value"] - baseline,
+            "head": head,
+            # Own-stream advantage per head, not one shared win-derived number -- see
+            # _group_baselines' docstring.
+            "advantages": {name: tt.values[name] - baselines[name] for name in _ALL_STREAMS},
+            # No wider main-line context here (no main-line file exists for this fallback path --
+            # see this function's docstring), so terminal detection degrades to the isolated,
+            # loss-only case (_turn_value_targets' is_terminal note).
+            "terminal_bonus": tt.terminal_bonus,
             "policy_real": True,
         })
     return examples
@@ -256,22 +420,29 @@ def materialize_main_and_groups(
         return []  # aborted trial -- no value signal, per ../README.md's Data section
 
     groups_by_len: dict[int, list[_Group]] = defaultdict(list)
-    baselines: dict[int, float] = {}
+    baselines: dict[int, dict[str, float]] = {}
     for g in own_groups:
-        baseline = _group_baseline(g)
-        if baseline is None:
+        group_baselines = _group_baselines(g)
+        if group_baselines is None:
             continue  # same guard materialize_group applies per-group
         groups_by_len[len(g.prefix_actions)].append(g)
-        baselines[id(g)] = baseline
+        baselines[id(g)] = group_baselines
 
     actions = trial["actions"]
+    # Pure JSON, no engine replay -- every combat_play turn's TurnTargets, keyed by action index
+    # into `actions`. The main line always reaches a real terminal outcome for every combat it
+    # plays, so this is a real (not estimated) lambda-return over each combat's whole turn
+    # sequence -- see _turn_value_targets's docstring. Full-trial context also means this is the
+    # only place terminal_bonus can be detected for a genuine WIN (see _turn_value_targets'
+    # is_terminal note) -- reused below for the adopted sibling's own continuation.
+    main_targets = _turn_value_targets(actions)
     examples: list[Example] = []
     decision = session.start(trial["character"], trial["seed"], trial.get("ascension", 0))
 
-    # position -> (recorded entry, value, advantage) for an adopted sibling's 2nd-and-later
-    # actions, populated when its group's boundary is reached below and consumed as the walk
-    # passes through each later position.
-    extension_map: dict[int, tuple[dict, float, float]] = {}
+    # position -> (recorded entry, value_targets, advantages, terminal_bonus) for an adopted
+    # sibling's 2nd-and-later actions, populated when its group's boundary is reached below and
+    # consumed as the walk passes through each later position.
+    extension_map: dict[int, tuple[dict, dict[str, float], dict[str, float], float | None]] = {}
 
     for i in range(len(actions) + 1):
         # i == len(actions) is a final sentinel pass -- covers the (unlikely but possible) case
@@ -288,9 +459,10 @@ def materialize_main_and_groups(
             batch = tokenize_from_buffer(decision, gvocab)
             scored_by_extension = False
             if extra is not None and decision.decision == "combat_play":
-                extra_entry, extra_value, extra_advantage = extra
+                extra_entry, extra_values, extra_advantages, extra_bonus = extra
                 action_index = _option_index(options, extra_entry)
-                if action_index is not None:
+                extra_head = _head_of(extra_entry)
+                if action_index is not None and extra_head is not None:
                     examples.append({
                         "type_ids": batch.type_ids,
                         "global_ids": batch.global_ids,
@@ -300,15 +472,18 @@ def materialize_main_and_groups(
                         "enemy_pos": batch.enemy_pos,
                         "potion_pos": batch.potion_pos,
                         "options": options,
-                        "value": extra_value,
+                        "value_targets": extra_values,
                         "action_index": action_index,
-                        "advantage": extra_advantage,
+                        "head": extra_head,
+                        "advantages": extra_advantages,
+                        "terminal_bonus": extra_bonus,
                         "policy_real": True,
                     })
                     scored_by_extension = True
             if is_policy_point and not scored_by_extension:
                 # already scored with its real advantage via extension_map above -- the flat
                 # placeholder would only dilute that signal with a duplicate, zero-advantage copy
+                tt = main_targets.get(i)
                 examples.append({
                     "type_ids": batch.type_ids,
                     "global_ids": batch.global_ids,
@@ -318,19 +493,35 @@ def materialize_main_and_groups(
                     "enemy_pos": batch.enemy_pos,
                     "potion_pos": batch.potion_pos,
                     "options": options,
-                    "value": entry.get("value", 0.0),
+                    "value_targets": tt.values if tt is not None else {
+                        "aggro": 0.0, "defense": 0.0, "scale": 0.0, "win": 0.0
+                    },
                     "action_index": None,
-                    "advantage": 0.0,
+                    "advantages": {name: 0.0 for name in _ALL_STREAMS},
+                    "terminal_bonus": None,
                     "policy_real": False,
                 })
             if decision.decision == "combat_play":  # defensive -- see materialize_group's guard
                 for g in groups_here:
-                    baseline = baselines[id(g)]
+                    group_baselines = baselines[id(g)]
+                    adopted = _find_adopted_member(actions, i, g.members)
                     for member in g.members:
                         first = member[0]
                         action_index = _option_index(options, first)
-                        if action_index is None:
+                        head = _head_of(first)
+                        if action_index is None or head is None:
                             continue
+                        tt = _turn_value_targets(member)[0]
+                        # The adopted sibling's later states genuinely live in this trial's own
+                        # action log (see _find_adopted_member's docstring), so its terminal
+                        # detection can use main_targets' full-trial context (real win detection,
+                        # not just the isolated loss-only case) -- every OTHER sibling's fate
+                        # beyond this one turn is never actually known, so it keeps the isolated
+                        # per-member bonus.
+                        bonus = (
+                            main_targets[i].terminal_bonus
+                            if member is adopted and i in main_targets else tt.terminal_bonus
+                        )
                         examples.append({
                             "type_ids": batch.type_ids,
                             "global_ids": batch.global_ids,
@@ -340,17 +531,24 @@ def materialize_main_and_groups(
                             "enemy_pos": batch.enemy_pos,
                             "potion_pos": batch.potion_pos,
                             "options": options,
-                            "value": first["value"],
+                            "value_targets": tt.values,
                             "action_index": action_index,
-                            "advantage": first["value"] - baseline,
+                            "head": head,
+                            "advantages": {
+                                name: tt.values[name] - group_baselines[name] for name in _ALL_STREAMS
+                            },
+                            "terminal_bonus": bonus,
                             "policy_real": True,
                         })
-                    adopted = _find_adopted_member(actions, i, g.members)
                     if adopted is not None and len(adopted) > 1:
-                        value = adopted[0]["value"]
-                        advantage = value - baseline
+                        tt = _turn_value_targets(adopted)[0]
+                        advantages = {
+                            name: tt.values[name] - group_baselines[name] for name in _ALL_STREAMS
+                        }
                         for k in range(1, len(adopted)):
-                            extension_map[i + k] = (adopted[k], value, advantage)
+                            idx = i + k
+                            bonus = main_targets[idx].terminal_bonus if idx in main_targets else None
+                            extension_map[idx] = (adopted[k], tt.values, advantages, bonus)
         if entry is None:
             break
         decision = session.step(entry["action"], **entry.get("args", {}))
@@ -428,7 +626,7 @@ def main() -> None:
     # separates out main-line trials and groups every branch trial by its shared prefix -- see
     # _scan_trials's docstring.
     main_id_to_path, groups = _scan_trials(trial_paths)
-    real_groups = {k: g for k, g in groups.items() if _group_baseline(g) is not None}
+    real_groups = {k: g for k, g in groups.items() if _group_baselines(g) is not None}
     print(f"{len(main_id_to_path)} main-line trial(s), {len(groups)} branch group(s) "
           f"({len(real_groups)} with real cross-branch signal)")
 
@@ -466,8 +664,62 @@ def main() -> None:
             all_examples.extend(examples)
 
     _print_truncated_counts(per_file_counts)
+    _print_dataset_summary(all_examples)
     torch.save(all_examples, args.out)
     print(f"wrote {len(all_examples)} examples to {args.out}")
+
+
+def _print_dataset_summary(examples: list[Example]) -> None:
+    """First-run sanity check for the tri-head value_targets/advantage a full materialize pass
+    just produced -- catches, without a manual debug session, the degenerate case a
+    checkpoint-less self-play round hits (see facility_common.py's _win_value_of warning): every
+    continuing turn's win_value_after is a flat 0.0, so any sibling group scored entirely over
+    non-terminal turns gets baseline==value and a real but useless advantage of exactly 0.0."""
+    if not examples:
+        print("dataset summary: 0 examples -- nothing to report")
+        return
+    real = [ex for ex in examples if ex.get("policy_real", False)]
+    nonzero_adv = [ex for ex in real if any(v != 0.0 for v in ex["advantages"].values())]
+    print(
+        f"dataset summary: {len(examples)} examples total, {len(real)} policy_real "
+        f"({len(nonzero_adv)} with nonzero advantage)"
+    )
+    if real and not nonzero_adv:
+        print(
+            "  WARNING: every policy_real example has advantage==0.0 on every stream -- the "
+            "policy loss and gate will get no real gradient this round. Likely cause: no "
+            "CLAWS_CHECKPOINT was loaded during self-play (see facility_common.py's "
+            "_win_value_of warning), so win_value_after was a flat 0.0 on every non-combat-ending "
+            "turn and every sibling comparison over such a turn produced baseline==value. "
+            "Expected for a checkpoint-less round 1."
+        )
+    for name in _ALL_STREAMS:
+        vals = [ex["value_targets"][name] for ex in examples]
+        lo, hi = min(vals), max(vals)
+        mean = sum(vals) / len(vals)
+        nonzero = sum(1 for v in vals if v != 0.0)
+        print(
+            f"  value_targets[{name}]: mean={mean:+.4f} min={lo:+.4f} max={hi:+.4f} "
+            f"({nonzero}/{len(vals)} nonzero)"
+        )
+    if real:
+        n_terminal = sum(1 for ex in real if ex.get("terminal_bonus") is not None)
+        print(f"  terminal_bonus present on {n_terminal}/{len(real)} policy_real examples")
+    if real:
+        # Hard/stochastic gating (policy.py's _choose_combat_action_claws) means self-play itself
+        # decides which head generates each policy_real example -- if one head is barely
+        # represented here, train.py's per-head loss has barely any examples to learn that head
+        # from regardless of how training goes (see tri_head_design.md's Training section).
+        head_counts = {name: 0 for name in POLICY_STREAMS}
+        no_head = 0
+        for ex in real:
+            head = ex.get("head")
+            if head in head_counts:
+                head_counts[head] += 1
+            else:
+                no_head += 1
+        counts_str = " ".join(f"{name}={n}" for name, n in head_counts.items())
+        print(f"  head usage among policy_real examples: {counts_str} (no_head={no_head})")
 
 
 def _print_truncated_counts(per_file_counts: list[tuple[str, int]], head_tail: int = 5) -> None:

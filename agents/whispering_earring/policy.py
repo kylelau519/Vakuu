@@ -16,6 +16,7 @@ import torch
 
 _CLAWS_CHECKPOINT = os.environ.get("CLAWS_CHECKPOINT")
 _claws_net = None  # lazy-loaded once per worker process, on first combat decision -- see below
+_claws_policy_streams = None  # ("aggro","defense","scale") -- set alongside _claws_net below
 
 _DIRICHLET_EPS = 0.15  # fraction of root probability mass replaced by noise -- AlphaZero's own
 # A symmetric Dirichlet's expected mass per option is always 1/n regardless of alpha, so a flat
@@ -88,16 +89,17 @@ def choose_action(
 
 
 def _load_claws_net():
-    global _claws_net
+    global _claws_net, _claws_policy_streams
     if _claws_net is not None or not _CLAWS_CHECKPOINT:
         return _claws_net
 
     claws_model_dir = Path(__file__).resolve().parents[1] / "claws" / "model"
     if str(claws_model_dir) not in sys.path:
         sys.path.insert(0, str(claws_model_dir))
-    from model import ClawsNet  # noqa: E402  (path just inserted above)
+    from model import ClawsNet, POLICY_STREAMS  # noqa: E402  (path just inserted above)
 
     _claws_net = ClawsNet.from_checkpoint(_CLAWS_CHECKPOINT)
+    _claws_policy_streams = POLICY_STREAMS
     return _claws_net
 
 
@@ -176,19 +178,42 @@ def _choose_card_reward_decision(
 def _choose_combat_action_claws(
     decision: CombatPlay, net, combat_dirichlet_noise: bool = True
 ) -> tuple[str, dict, dict]:
-    """Samples from ClawsNet's own softmax for the best combat action, mixed with root Dirichlet noise """
+    """Hard/stochastic gating (the "options" framework), not tri_head_design.md's originally
+    proposed probability-space blend: first sample WHICH strategy to use this decision from the
+    gate's own categorical distribution over {aggro, defense, scale}, then sample the action from
+    only that head's own policy -- never a blend of more than one head's opinion.
 
-    options, logits, _value = net.forward(decision)
-    probs = torch.softmax(logits, dim=-1)
+    Why: under the soft blend (still available via net.forward's other return, `probs`, for
+    diagnostics), a head the gate has driven to ~0 weight gets ~0 policy-gradient forever (both
+    REINFORCE terms in train.py's old loss were scaled by that same ~0 weight), with no way back.
+    Sampling a discrete head here means a head with small-but-nonzero gate weight still gets
+    chosen occasionally in self-play and receives a real, undiluted advantage signal when it is --
+    self-correcting exploration over STRATEGY, not just over which action a fixed blend prefers.
+    train.py's loss is the matching two-term hierarchical REINFORCE: one term for the gate's own
+    choice of head, one for the chosen head's own choice of action, both off the same win-derived
+    advantage (see tri_head_design.md's Training section).
+
+    combat_dirichlet_noise only perturbs the second (within-head) sample, same as before -- the
+    strategy pick itself is always a genuine sample from the gate, on or off exploration, since
+    that categorical sample IS the model's real policy, not noise added on top of it."""
+
+    options, _probs, values = net.forward(decision)
+    gate_weights = values["gate"]
+    head_idx = int(torch.multinomial(gate_weights, 1).item())
+    head = _claws_policy_streams[head_idx]
+    probs = values["stream_probs"][head]
     if combat_dirichlet_noise:
         alpha = _DIRICHLET_ALPHA_SCALE / len(options)
         noise = torch.distributions.Dirichlet(torch.full((len(options),), alpha)).sample()
         eps = min(_COMBAT_DIRICHLET_EPS_MAX, _COMBAT_DIRICHLET_EPS_PER_OPTION * len(options))
         probs = (1 - eps) * probs + eps * noise
     idx = int(torch.multinomial(probs, 1).item())
-    policy = [
-        {"action": a, "args": args, "prob": p} for (a, args), p in zip(options, probs.tolist())
-    ]
+    policy = {
+        "head": head,
+        "options": [
+            {"action": a, "args": args, "prob": p} for (a, args), p in zip(options, probs.tolist())
+        ],
+    }
     name, args = options[idx]
     return name, args, policy
 

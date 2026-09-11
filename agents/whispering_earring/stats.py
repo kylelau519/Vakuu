@@ -291,8 +291,11 @@ def _card_stats_group_task(group) -> tuple[dict[str, list], list[float], int]:
 
     for member in group.members:
         policy = member.get("policy")
-        if policy:
-            for opt in policy:
+        # combat's policy is {"head": ..., "options": [...]} since the hard/stochastic-gating
+        # change (policy.py's _choose_combat_action_claws); older raw files recorded a bare list.
+        options_list = policy.get("options") if isinstance(policy, dict) else policy
+        if options_list:
+            for opt in options_list:
                 row = counts[_option_name(opt["action"], opt["args"], hand_names)]
                 row[0] += 1
                 row[2] += opt["prob"]
