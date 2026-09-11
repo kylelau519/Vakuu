@@ -55,12 +55,6 @@ No recursive meta-branching inside a chain: any card_reward/rest_site/event_choi
 past its own initial commit resolves via a single self-play pick, same as the main line whenever
 meta-branching isn't invoked. Combinatorial cost (`options^depth`) is why.
 
-Each chain can optionally be cut off after a fixed number of combats past its own commit
-(`FacilityConfig.meta_horizon_combats` / `--meta-horizon-combats`, default unbounded) instead of
-always playing to natural death -- scores on whatever `total_value` it accumulated up to the
-cutoff, no terminal penalty either way (an early cutoff isn't a loss, same reasoning as the
-unbounded case's own no-penalty-for-the-eventual-loss argument).
-
 rest_site and event_choice both reuse this exact design (chain-and-score to death or to the
 horizon, baseline-via-skip-value, same as card_reward) with one addition: `leave_room` -- not
 itself one of `RestSite.options`/`EventChoice.options`, but a separate action always legal in a
@@ -158,10 +152,7 @@ loss formula, pointed at `ChoicesParadoxNet`.
 disables meta-branching (`facility_claws.py`'s default); `None` branches every eligible
 decision in `META_ELIGIBLE_DECISIONS` (`card_reward`, `rest_site`, `event_choice`)
 (`facility_choices_paradox.py`'s own CLI default, via `--meta-branches-per-trial`); a positive int
-caps how many per trial, shared across all eligible decision kinds, not one budget each (a
 decrementing per-trial budget -- early-run divergences get branched more often than late-run ones,
-a known bias not blocking v1). `meta_horizon_combats: int | None = None` -- `None` plays every
-option-chain to natural death (default); a positive int (`--meta-horizon-combats`) caps each chain
 at that many combats past its own commit instead, useful for a lower-variance/faster-turnaround
 signal at the cost of not seeing a chain's longer-tail consequences.
 
