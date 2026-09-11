@@ -185,12 +185,6 @@ def _combat_value(outcome: CombatOutcome) -> float:
 
 
 def _map_point_type_at(decision, col: int, row: int) -> str | None:
-    """The MapPointType (as a string, e.g. "Elite"/"Boss") of the map node at (col, row) --
-    used only for Golden Compass's Elite/Boss shaping bonus (see _play_trial's select_map_node
-    branch). BufferDecision has no `.choices` list to match against like the pydantic Decision
-    does, but the same data is directly readable off the map grid via buffer_layout, keyed by
-    (row, col) -- row/col -1 is map_points'/GetFullMap()'s shared sentinel for the boss node,
-    which lives outside the row/col grid on both sides."""
     if hasattr(decision, "arr"):
         slot = bl.map_boss_point(decision.arr) if row == -1 else bl.map_point_slot(decision.arr, row, col)
         return bl.map_point_type(slot)
@@ -199,8 +193,6 @@ def _map_point_type_at(decision, col: int, row: int) -> str | None:
 
 
 def _tracked_enemy_hp(arr, enemy_ids: frozenset[str]) -> int:
-    """Sums current HP across only the enemy slots whose decoded token is in enemy_ids -- anything
-    summoned mid-fight (not in the set captured at combat entry) is silently not counted."""
     if not enemy_ids:
         return 0
     return sum(
@@ -226,7 +218,6 @@ class FacilityConfig:
     # how many combats a chain plays past its own commit before it's scored on whatever
     # total_value it's accumulated so far -- see _run_meta_option_job. No terminal penalty either
     # way, same reasoning as the unbounded case: cutting a chain off early isn't a loss.
-    meta_horizon_combats: int | None = None
 
 
 def _bypass_card_reward(session) -> None:
@@ -242,14 +233,6 @@ def _play_turn_only(
     is_last_of_act: bool = False, enemy_ids: frozenset[str] = frozenset(), enemy_max_hp: int = 0,
     bypass_reward_on_win: bool = True,
 ):
-    """Plays exactly one turn (through the mid-turn card_select edge case, e.g. Power Potion/
-    Brand) and scores it before returning `(outcome, decision)` -- outcome is "continue" if the
-    combat carries on, "won"/"lost" if this turn ended it; decision is whatever the game shows
-    after (a fresh combat_play round, the pending card_reward on a win, or game_over on a loss).
-
-    For boss fight reward are shaped differently.
-
-    bypass_reward_on_win: For branch job to skip reward because they are irrelevant."""
     hp_before_turn = decision.player_hp
     enemy_hp_before_turn = _tracked_enemy_hp(decision.arr, enemy_ids)
     session.logger.begin_turn()
@@ -810,7 +793,7 @@ class Facility:
             p.start()
             self.branch_procs.append(p)
 
-    def stop(self, timeout: float = 60) -> None:
+    def stop(self, timeout: float = 90) -> None:
         self.stop_event.set()
         for _ in self.branch_procs:
             self.job_queue.put(None)
@@ -820,9 +803,6 @@ class Facility:
             remaining = deadline - time.monotonic()
             if remaining > 0:
                 p.join(remaining)
-        # A process still alive here didn't respond to stop_event within the shared deadline --
-        # most likely wedged inside a native CLR call that never returns. SIGKILL can't be
-        # deferred, so the join() right after is bounded even without its own timeout.
         for p in self.main_procs + self.branch_procs:
             if p.is_alive():
                 self.live.scroll(
@@ -834,13 +814,9 @@ class Facility:
                 except ProcessLookupError:
                     p.kill()
                 p.join()
-        # Every branch process (the only producers) has exited by now -- safe to shut the single
-        # terminal-writer thread down.
         self.log_queue.put(None)
         if self.log_thread is not None:
             self.log_thread.join(timeout)
-        # Every process that could still be holding a proxy into this manager has exited by now --
-        # safe to tear its server process down too.
         if self.manager is not None:
             self.manager.shutdown()
 

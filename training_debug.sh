@@ -11,43 +11,21 @@ shopt -s nullglob
 # under the 1048576 hard limit already available) buys enough headroom for this dataset's size.
 ulimit -n 65536
 
-export vakuu="/home/kylelau519/Programming/Vakuu"
+export vakuu="/Users/kylelau519/Programming/Vakuu"
 
-# Caps torch's per-process intra-op thread pool -- see training_claws.sh's own comment; same
-# reasoning here (each branch/main worker process runs policy.py's torch inference).
 export OMP_NUM_THREADS=1
-
-# Each branch/main/materialize worker loads its own in-process CoreCLR (buffer_env.py's
-# Sts2BufferSession), and sts2-cli's Sts2Headless.csproj builds it with Server GC, which spawns
-# one GC thread PER LOGICAL CORE inside every single one of those processes. With this many
-# workers running concurrently, that's dozens of processes each independently trying to use every
-# core for GC -- confirmed by hand: one worker went from 50 OS threads down to 30 with this unset
-# to 0 (Workstation GC, one GC thread total instead of one per core), and the difference scales
-# with worker count, not a fixed cost. DOTNET_gcServer overrides the build's runtimeconfig.json at
-# process start, same as any hosted CoreCLR -- no sts2-cli rebuild needed.
 export DOTNET_gcServer=0
 
 ROUND=1
-HISTORY_WINDOW=5  # how many past rounds' raw data to keep + train on, alongside the fresh round
+HISTORY_WINDOW=2  # how many past rounds' raw data to keep + train on, alongside the fresh round
 
 cleanup_procs() {
     pkill -9 -f "multiprocessing.spawn"
-    # Python 3.14 switched Linux's default multiprocessing start method from "spawn" to
-    # "forkserver" -- without this, a wedged round's worker processes (confirmed by hand:
-    # idle forever, near-zero CPU, after the CLR-bridge's result never makes it back to the
-    # parent) never get reaped between rounds, and each new round's materialize.py/
-    # facility_claws.py piles up alongside the stuck one instead of replacing it.
     pkill -9 -f "multiprocessing.forkserver"
     pkill -9 -f "sts2-cli/src/Sts2Headless"
     sleep 5
 }
 
-# Moves a just-finished round's raw trial JSON out of raw_dir into history_dir/round_<timestamp>/
-# instead of deleting it (previously: `find raw_dir -delete`), so materialize.py can later be
-# pointed at the last $window rounds together for a proper accumulated retrain instead of only
-# ever seeing one round's small on-policy batch -- see chat about survivorship/exploration-
-# collapse risk from training on a single fresh round with no replay buffer. Prunes down to the
-# newest $window round directories once archived.
 archive_round_data() {
     local raw_dir="$1" history_dir="$2" window="$3"
     if [ -n "$(find "$raw_dir" -maxdepth 1 -name '*.json' -print -quit)" ]; then
@@ -124,27 +102,6 @@ while true; do
     mkdir -p "$backup_dir"
     cp "$vakuu/agents/claws/model/claws.pt" \
         "$backup_dir/claws_$(date +%Y%m%d_%H%M%S).pt"
-
-    echo "[claws 7/7] Single-rollout comparison (current vs previous round vs untrained init)..."
-    # Frozen random-init baseline, generated once and reused every round -- train.py refuses to
-    # overwrite an existing --out, so this only ever runs on the very first round.
-    UNTRAINED_CLAWS_CHECKPOINT="$vakuu/agents/claws/model/claws_untrained.pt"
-    if [ ! -f "$UNTRAINED_CLAWS_CHECKPOINT" ]; then
-        python "$vakuu/agents/claws/model/train.py" \
-            --epochs 0 --init "" --out "$UNTRAINED_CLAWS_CHECKPOINT"
-    fi
-    # The backup dir's newest file is the one just copied above (this round's post-training
-    # checkpoint); the second-newest is last round's -- claws.pt itself already got overwritten
-    # by --out above, so this is the only place last round's weights still exist.
-    PREVIOUS_CLAWS_CHECKPOINT=$(ls -t "$backup_dir"/claws_*.pt 2>/dev/null | sed -n '2p')
-    eval_args=(
-        "current=$vakuu/agents/claws/model/claws.pt"
-        "untrained=$UNTRAINED_CLAWS_CHECKPOINT"
-    )
-    [ -n "$PREVIOUS_CLAWS_CHECKPOINT" ] && eval_args+=("previous=$PREVIOUS_CLAWS_CHECKPOINT")
-    python "$vakuu/agents/whispering_earring/eval_claws.py" \
-        --checkpoints "${eval_args[@]}" \
-        --ascension 1
 
     cleanup_procs
 

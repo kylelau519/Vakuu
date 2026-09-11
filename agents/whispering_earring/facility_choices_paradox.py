@@ -240,7 +240,6 @@ def _resolve_meta_decision(
             last_room_checkpoint_path=last_room_checkpoint_path,
             last_room_entry_index=last_room_entry_index,
             commit_name=opt_name, commit_args=opt_args, walk_seed=walk_seed,
-            horizon_combats=cfg.meta_horizon_combats,
         )
         # The dispatched-to queue travels with the job itself, not looked up from a table -- see
         # branch_worker_loop's docstring. Lands on the plain (low-priority) job_queue so this
@@ -288,7 +287,6 @@ if __name__ == "__main__":
             raw_dir=args.raw_dir,
             verbose=args.verbose,
             meta_branches_per_trial=args.meta_branches_per_trial,
-            meta_horizon_combats=args.meta_horizon_combats,
         ),
         main_worker_fn=functools.partial(
             main_worker_loop, combat_resolver=_resolve_combat, meta_resolver=_resolve_meta_decision,

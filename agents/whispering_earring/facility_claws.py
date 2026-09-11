@@ -36,8 +36,6 @@ def _spawn_turn_branches(
             actions=list(actions_so_far), checkpoint_path=checkpoint_path,
             combat_start_index=combat_start_index,
         )
-        # The dispatched-to queue travels with the job itself, not looked up from a table -- see
-        # branch_worker_loop's docstring.
         job_queue.put((job, results_queue))
         branch_ids.append(job.branch_id)
     return branch_ids
