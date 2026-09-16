@@ -64,7 +64,18 @@ class BranchJob:
             f"{self.main_id}_a{self.act:02d}f{self.floor:02d}c{self.combat_index:02d}"
             f"t{self.turn_index:02d}_b{self.branch_index:02d}"
         )
-
+@dataclass
+class BasicRunInfo:
+    main_id: str
+    seed: str
+    character: str
+    ascension: int
+    
+@dataclass
+class FastLoadInfo(BasicRunInfo):
+    checkpoint_path: str
+    combat_start_index: int
+    
 
 @dataclass
 class MetaOptionJob:

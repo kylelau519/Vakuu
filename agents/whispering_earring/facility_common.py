@@ -1,17 +1,11 @@
 """Shared self-play-facility infrastructure: worker-process orchestration, stderr relay/logging,
 FacilityConfig, and the pieces of combat scoring/turn-playing that more than one facility needs.
-
-`Facility`, `main_worker_loop`, and `branch_worker_loop` are pure orchestration here -- they take
-`combat_resolver`/`meta_resolver` (main line) and `handlers` (branch dispatch, keyed by job type)
-as callables/mappings, and know nothing about combat turn-branching or meta-decision branching
-specifically. Each concrete facility module binds its own domain logic to these via
-`functools.partial` before constructing a `Facility`
 """
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 import multiprocessing as mp
 import os
-import re
 import random
 import shutil
 import signal
@@ -20,71 +14,23 @@ import threading
 import time
 from dataclasses import dataclass, field
 from queue import Empty
-from typing import Callable
+from typing import Any, Callable
 
+from agents.whispering_earring.workers import BufferWorker
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imports below)
 import buffer_layout as bl
 from env import Sts2ActionError, Sts2EngineTimeoutError, Sts2Session
-from buffer_env import Sts2BufferSession, decode_token
+from buffer_env import Sts2BufferSession, decode_token, BufferDecision
 from installation import ensure_setup
-
+from utils import *
 from policy import choose_action, get_claws_net
 from recorder import CompactRecorder
 
-_SEED_WORDS = ["falcon", "ember", "wolf", "raven", "thorn", "comet", "storm", "harbor"]
-
-_HEALTHY_HP_FRACTION = 0.5
-_LOW_HP_SLOPE = 3.0
-
-# Per-turn shaping weight, applied equally to hp_term and enemy_term below -- both are
-# potential-differences (telescope to a fixed total over the whole combat regardless of which
-# turn the damage happened on), so weighting them the same doesn't bake in a fixed HP-for-damage
-# trade rate; it only densifies credit assignment turn-by-turn.
-_HP_WEIGHT = 0.75
-
-# Boss-fight (act-final combat) reward shaping. At ascension 2+, winning an act heals 80% of
-# missing HP, so leftover HP is worth much less there than in a normal fight
-_BOSS_HP_WEIGHT = 0.2
-_BOSS_WIN_FLOOR = 0.8
-
-# Golden Compass reward shaping (see main_worker_loop's pending_map_steps machinery)
-# the old scheme did.
-_GOLDEN_COMPASS_GAMMA = 0.9
-_GOLDEN_COMPASS_ELITE_BONUS = 2.0
-_GOLDEN_COMPASS_BOSS_BONUS = 3.0
-
-
-def _random_seed() -> str:
-    return f"{random.choice(_SEED_WORDS)}-{random.randint(0, 999_999)}"
-
-
-_WORKER_TAG_COLORS = [31, 32, 33, 34, 35, 36, 91, 92, 93, 94, 95, 96]  # ANSI red..bright-cyan
-
-# Strips ANSI/terminal control sequences (CSI, OSC, lone ESC) and other C0 control bytes (except
-# \t/\n) out of relayed worker output before it reaches the real terminal -- see _tag_worker_stderr.
-_CONTROL_SEQUENCE_RE = re.compile(
-    r"\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])"
-    r"|[\x00-\x08\x0b-\x1f\x7f]"
-)
-
-# Sts2Headless's [SIM]/[INFO] logging is all free text through one generic Log() call in the
-# engine 
-_MILESTONE_RE = re.compile(
-    r"Creating RunState|Rooms generated|Run launched|relics finalized|Entered Act|"
-    r"EnterRoom:|Post-combat:|Moving to map coord|Card reward pending|Selected card reward|"
-    r"Bundle selection pending|has won against encounter|has lost"
-)
-
-# CoreCLR's own unhandled-exception/fatal-error dump. Without this, a CLR crash was silently dropped
-# by _MILESTONE_RE in non-verbose mode, leaving a worker that just silently died or wedged with zero visible output.
-_CRASH_RE = re.compile(
-    r"Unhandled [Ee]xception|Fatal error\.|Process terminating|Stack overflow\.|"
-    r"Assertion failed|Segmentation fault|SIGABRT|SIGSEGV"
-)
 
 
 def _tag_worker_stderr(label: str, worker_index: int, log_queue: mp.Queue, verbose: bool) -> None:
-    """Sts2BufferSession loads Sts2Headless's CLR in-process (clr_bridge.load_clr) """
+    """Sts2BufferSession loads Sts2Headless's CLR in-process (clr_bridge.load_clr),  Spwans a background thread to relay the worker's stderr through log_queue, tagging each line
+ """
     read_fd, write_fd = os.pipe()
     os.dup2(write_fd, 2)
     os.close(write_fd)
@@ -93,19 +39,13 @@ def _tag_worker_stderr(label: str, worker_index: int, log_queue: mp.Queue, verbo
         crash_seen = False  # sticky once _CRASH_RE fires -- see _CRASH_RE's own comment
         with os.fdopen(read_fd) as pipe_reader:
             for line in pipe_reader:
-                clean = _CONTROL_SEQUENCE_RE.sub("", line)
-                if not crash_seen and _CRASH_RE.search(clean):
+                clean = CONTROL_SEQUENCE_RE.sub("", line)
+                if not crash_seen and CRASH_RE.search(clean):
                     crash_seen = True
-                if verbose or crash_seen or _MILESTONE_RE.search(clean):
+                if verbose or crash_seen or MILESTONE_RE.search(clean):
                     log_queue.put((label, worker_index, clean, crash_seen))
 
     threading.Thread(target=relay, daemon=True, name=f"stderr-relay-{label}-{worker_index}").start()
-
-
-def _tag(label: str, worker_index: int) -> str:
-    color = _WORKER_TAG_COLORS[worker_index % len(_WORKER_TAG_COLORS)]
-    return f"\x1b[{color}m[{label} {worker_index}]\x1b[0m"
-
 
 class _LiveStatus:
     """Fixed one-line-per-worker live status board for _log_writer_loop, 
@@ -118,13 +58,13 @@ class _LiveStatus:
         self._lock = threading.Lock()
         if self.active:
             for label, idx in labels:
-                sys.stderr.write(f"{_tag(label, idx)} (waiting...)\n")
+                sys.stderr.write(f"{self._tag(label, idx)} (waiting...)\n")
             sys.stderr.flush()
 
     def update(self, label: str, worker_index: int, line: str) -> None:
         key = (label, worker_index)
         if not self.active or key not in self.rows:
-            self.scroll(f"{_tag(label, worker_index)} {line}")
+            self.scroll(f"{self._tag(label, worker_index)} {line}")
             return
         with self._lock:
             up = self.n - self.rows[key]  # rows numbered top-down; cursor idles just below row n-1
@@ -136,7 +76,7 @@ class _LiveStatus:
             # \x1b[{up}A/B: move up/down `up` rows without touching the terminal's scrollback --
             # \r + \x1b[2K then clears and rewrites just that row before returning to where every
             # scrolling write (this class's own `scroll()` included) expects the cursor to be.
-            sys.stderr.write(f"\x1b[{up}A\r\x1b[2K{_tag(label, worker_index)} {msg}\x1b[{up}B\r")
+            sys.stderr.write(f"\x1b[{up}A\r\x1b[2K{self._tag(label, worker_index)} {msg}\x1b[{up}B\r")
             sys.stderr.flush()
 
     def scroll(self, text: str) -> None:
@@ -144,25 +84,26 @@ class _LiveStatus:
             self.active = False
             sys.stderr.write(text if text.endswith("\n") else f"{text}\n")
             sys.stderr.flush()
+            
+    def loop(self, log_queue: mp.Queue, on_activity: Callable[[], None] | None = None) -> None:
+        """Runs in a single background thread in the parent (Facility) process -- the only writer to
+        the real terminal for every branch worker's relayed stderr.  """
+        while True:
+            item = log_queue.get()
+            if item is None:
+                return
+            label, worker_index, line, is_crash = item
+            if on_activity is not None:
+                on_activity()
+            if is_crash:
+                self.scroll(f"{self._tag(label, worker_index)} {line.rstrip()}")
+            else:
+                self.update(label, worker_index, line)
 
-
-def _log_writer_loop(
-    log_queue: mp.Queue, live: _LiveStatus, on_activity: Callable[[], None] | None = None
-) -> None:
-    """Runs in a single background thread in the parent (Facility) process -- the only writer to
-    the real terminal for every branch worker's relayed stderr.  """
-    while True:
-        item = log_queue.get()
-        if item is None:
-            return
-        label, worker_index, line, is_crash = item
-        if on_activity is not None:
-            on_activity()
-        if is_crash:
-            live.scroll(f"{_tag(label, worker_index)} {line.rstrip()}")
-        else:
-            live.update(label, worker_index, line)
-
+    @staticmethod
+    def _tag(label: str, worker_index: int) -> str:
+        color = WORKER_TAG_COLORS[worker_index % len(WORKER_TAG_COLORS)]
+        return f"\x1b[{color}m[{label} {worker_index}]\x1b[0m"
 
 @dataclass
 class CombatOutcome:
@@ -172,18 +113,7 @@ class CombatOutcome:
     is_last_of_act: bool = False
 
 
-def _combat_value(outcome: CombatOutcome) -> float:
-    if not outcome.player_max_hp:
-        return 1.0
-    hp_frac = max(0.0, outcome.player_hp_after) / outcome.player_max_hp
-    if outcome.is_last_of_act:
-        return _BOSS_WIN_FLOOR + _BOSS_HP_WEIGHT * hp_frac
-    if hp_frac >= _HEALTHY_HP_FRACTION:
-        return hp_frac
-    shortfall = _HEALTHY_HP_FRACTION - hp_frac
-    return _HEALTHY_HP_FRACTION - shortfall * _LOW_HP_SLOPE
-
-
+# can move to BufferDecision.
 def _map_point_type_at(decision, col: int, row: int) -> str | None:
     if hasattr(decision, "arr"):
         slot = bl.map_boss_point(decision.arr) if row == -1 else bl.map_point_slot(decision.arr, row, col)
@@ -192,40 +122,24 @@ def _map_point_type_at(decision, col: int, row: int) -> str | None:
     return chosen.type if chosen is not None else None
 
 
-def _tracked_enemy_hp(arr, enemy_ids: frozenset[str]) -> int:
-    if not enemy_ids:
-        return 0
-    return sum(
-        bl.enemy_hp(slot) for _, slot in bl.enemies(arr)
-        if decode_token(bl.enemy_token(slot)) in enemy_ids
-    )
+# This can be defined in terms of the public BufferDecision API, remove later
+# def _tracked_enemy_hp(arr, enemy_ids: frozenset[str]) -> int:
+#     if not enemy_ids:
+#         return 0
+#     return sum(
+#         bl.enemy_hp(slot) for _, slot in bl.enemies(arr)
+#         if decode_token(bl.enemy_token(slot)) in enemy_ids
+#     )
 
 
 @dataclass
 class FacilityConfig:
-    characters: list[str] = field(default_factory=lambda: ["Ironclad"])
-    ascension: int = 0
-    branches_per_turn: int = 3  # side-copies spawned per combat turn, on top of the main line
     n_branch_workers: int = 4
     n_main_workers: int = 1  # concurrent main lines, sharing one branch-worker pool
-    n_main_trials: int | None = None  # stop after this many main-line trials *total*; None = forever
+    n_main_trials: int = 1  # stop after this many main-line trials *total*; None = forever
     raw_dir: str = "data/raw"
     verbose: bool = False  
     stall_timeout_s: float = 300.0
-    # Meta-decision (card_reward, rest_site, eventually card_select) branching
-    meta_branches_per_trial: int | None = 0  # 0 = disabled; None = unlimited
-    # None = play each option-chain to natural death (original behavior); a positive int caps
-    # how many combats a chain plays past its own commit before it's scored on whatever
-    # total_value it's accumulated so far -- see _run_meta_option_job. No terminal penalty either
-    # way, same reasoning as the unbounded case: cutting a chain off early isn't a loss.
-
-
-def _bypass_card_reward(session) -> None:
-    # A branch's own reward pick is discarded either way -- only the main line's adopted actions
-    # matter.
-    raw = session._session.Action("skip_card_reward", None)
-    if session._decision(raw).decision == "error":
-        raise Sts2ActionError(session._session.LastError or "unknown error")
 
 
 def _play_turn_only(
@@ -293,77 +207,60 @@ def _clean_actions(actions: list[dict]) -> list[dict]:
     ]
 
 
-# NOTE: on a BufferDecision, a blessing/event-triggered card reward reports decision.decision ==
-# "event_card_reward", not "card_reward" (buffer_layout.decision_name distinguishes the two
-# sections; the pydantic side unifies both under "card_reward" -- see policy.py's
-# _choose_card_reward_from_buffer). Since that string isn't in this set, an event-triggered card
-# reward on a buffer-session main line falls through to choose_action() same as any other
-# unbranched decision, rather than getting the meta-option branching an ordinary post-combat
-# card_reward gets -- a real but narrow coverage gap from running the main line on
-# Sts2BufferSession, not a bug (gameplay still proceeds correctly either way).
-META_ELIGIBLE_DECISIONS = frozenset({"card_reward", "rest_site", "event_choice"})
-# Raised from 30.0: MetaOptionJobs land on the low-priority half of the shared branch-worker
-# queue (combat turn-branches always go first, see facility_choices_paradox.py's dispatch), so
-# with few branch workers relative to many concurrent main lines (e.g. 3 workers / 10 main
-# workers), a meta job can sit queued -- not even started -- well past 30s. Confirmed live: every
-# sibling of a divergence failing with the same FileNotFoundException (not just a straggler among
-# otherwise-successful siblings) means the whole divergence missed the window, not a per-job race.
-_META_DRAIN_TIMEOUT = 120.0
+
+# def _apply_meta_result(
+#     meta_id: str, value: float | None, pending_meta_jobs: dict, checkpoint_refcount: dict,
+#     recorder: CompactRecorder,
+# ) -> None:
+#     """In the queue if it sees result, take the result and record it, and decrement the checkpoint refcount. 
+#     If the refcount reaches 0, delete the checkpoint file."""
+#     entry = pending_meta_jobs.pop(meta_id, None)
+#     if entry is None:
+#         return  # stale -- not among this trial's currently-tracked jobs (already applied, or from
+#         # a trial that's since moved on)
+#     checkpoint_path, is_adopted, commit_step = entry
+#     if is_adopted and value is not None:
+#         recorder.set_value(commit_step, value)
+#     if checkpoint_path is None:
+#         return  # this divergence's jobs reconstructed via full replay, not a checkpoint -- nothing to refcount
+#     remaining = checkpoint_refcount.get(checkpoint_path)
+#     if remaining is None:
+#         return
+#     remaining -= 1
+#     if remaining <= 0:
+#         checkpoint_refcount.pop(checkpoint_path, None)
+#         try:
+#             os.remove(checkpoint_path)
+#         except OSError:
+#             pass
+#     else:
+#         checkpoint_refcount[checkpoint_path] = remaining
 
 
-def _apply_meta_result(
-    meta_id: str, value: float | None, pending_meta_jobs: dict, checkpoint_refcount: dict,
-    recorder: CompactRecorder,
-) -> None:
-    """In the queue if it sees result, take the result and record it, and decrement the checkpoint refcount. 
-    If the refcount reaches 0, delete the checkpoint file."""
-    entry = pending_meta_jobs.pop(meta_id, None)
-    if entry is None:
-        return  # stale -- not among this trial's currently-tracked jobs (already applied, or from
-        # a trial that's since moved on)
-    checkpoint_path, is_adopted, commit_step = entry
-    if is_adopted and value is not None:
-        recorder.set_value(commit_step, value)
-    if checkpoint_path is None:
-        return  # this divergence's jobs reconstructed via full replay, not a checkpoint -- nothing to refcount
-    remaining = checkpoint_refcount.get(checkpoint_path)
-    if remaining is None:
-        return
-    remaining -= 1
-    if remaining <= 0:
-        checkpoint_refcount.pop(checkpoint_path, None)
-        try:
-            os.remove(checkpoint_path)
-        except OSError:
-            pass
-    else:
-        checkpoint_refcount[checkpoint_path] = remaining
+# def _drain_meta_results_nowait(
+#     meta_results_queue, pending_meta_jobs: dict, checkpoint_refcount: dict, recorder: CompactRecorder,
+# ) -> None:
+#     """Non-blocking: Drain the queue results immeidately, useful for the main line to catch up with the branch workers' results."""
+#     while True:
+#         try:
+#             meta_id, value = meta_results_queue.get_nowait()
+#         except Empty:
+#             return
+#         _apply_meta_result(meta_id, value, pending_meta_jobs, checkpoint_refcount, recorder)
 
 
-def _drain_meta_results_nowait(
-    meta_results_queue, pending_meta_jobs: dict, checkpoint_refcount: dict, recorder: CompactRecorder,
-) -> None:
-    """Non-blocking: Drain the queue results immeidately, useful for the main line to catch up with the branch workers' results."""
-    while True:
-        try:
-            meta_id, value = meta_results_queue.get_nowait()
-        except Empty:
-            return
-        _apply_meta_result(meta_id, value, pending_meta_jobs, checkpoint_refcount, recorder)
-
-
-def _drain_meta_results_blocking(
-    meta_results_queue, pending_meta_jobs: dict, checkpoint_refcount: dict, recorder: CompactRecorder,
-    timeout: float,
-) -> None:
-    """If the main line is done, wait for any remaining meta results to arrive."""
-    deadline = time.time() + timeout
-    while pending_meta_jobs and time.time() < deadline:
-        try:
-            meta_id, value = meta_results_queue.get(timeout=1.0)
-        except Empty:
-            continue
-        _apply_meta_result(meta_id, value, pending_meta_jobs, checkpoint_refcount, recorder)
+# def _drain_meta_results_blocking(
+#     meta_results_queue, pending_meta_jobs: dict, checkpoint_refcount: dict, recorder: CompactRecorder,
+#     timeout: float,
+# ) -> None:
+#     """If the main line is done, wait for any remaining meta results to arrive."""
+#     deadline = time.time() + timeout
+#     while pending_meta_jobs and time.time() < deadline:
+#         try:
+#             meta_id, value = meta_results_queue.get(timeout=1.0)
+#         except Empty:
+#             continue
+#         _apply_meta_result(meta_id, value, pending_meta_jobs, checkpoint_refcount, recorder)
 
 
 @dataclass
@@ -521,57 +418,8 @@ def main_worker_loop(
     combat_resolver: Callable, meta_resolver: Callable | None = None,
     session_factory: Callable = Sts2Session,
 ) -> None:
-    """Runs main-line trials (via _play_trial) until stop_event fires or cfg.n_main_trials is
-    reached.
-
-    job_queue/job_queue_priority/log_queue are shared with every other main worker; results_queue
-    and meta_results_queue are this worker's own private queues (Facility-owned) and must not be
-    shared -- meta_results_queue is kept separate from results_queue so an asynchronously-
-    dispatched MetaOptionJob result can never be mistaken for a stale turn-branch result by
-    combat's own _wait_for_turn_result. job_queue_priority carries this worker's own combat turn-
-    branches so they're never stuck behind another main line's meta-chain jobs on the plain
-    job_queue; branch_worker_loop always drains it first.
-
-    combat_resolver(job_queue_priority, results_queue, main_worker_index, cfg, recorder, session,
-    decision, character, seed, main_id, combat_index, stop_event, checkpoint_path) ->
-    (session, decision, outcome): drives one combat to resolution. outcome is None on a win, else
-    "lost"/"error" ends the trial.
-
-    meta_resolver(job_queue, results_queue, meta_results_queue, main_worker_index, cfg, recorder,
-    session, decision, character, seed, main_id, decision_kind, divergence_index, stop_event,
-    queue_manager, last_room_checkpoint_path, last_room_entry_index) -> (decision,
-    pending_meta_jobs): called whenever decision.decision is META_ELIGIBLE and this trial's
-    meta-branch budget (cfg.meta_branches_per_trial) allows it. pending_meta_jobs is a list of
-    (meta_id, checkpoint_path, is_adopted, commit_step) tuples for jobs just dispatched onto
-    job_queue. None (facility_claws.py's case) means meta-eligible decisions just fall through to
-    choose_action(). last_room_checkpoint_path/entry_index (may be None pre-first-room) locate the
-    most recently entered room's checkpoint (of ANY room type, not just combat -- a card_reward
-    right after combat, a rest_site, an event_choice, ... may all share the same one if no fresh
-    select_map_node happened in between) and its entry action's position in action_log -- a
-    checkpoint taken directly at the pending decision does NOT work for reconstructing "right
-    after entering this room" (confirmed by hand: save/load_save doesn't preserve a pending
-    decision screen).
-
-    manager_address/manager_authkey: (address, authkey) to reconnect to the Facility's own
-    multiprocessing.Manager() via SyncManager(...).connect() -- this worker is daemonic and can't
-    own a Manager itself, and a live SyncManager isn't picklable through Process(args=...) at all
-    (confirmed by hand). Unused by the one shipped meta_resolver; kept for a future one that needs
-    manager-backed queues at runtime. Skipped when meta_resolver is None.
-
-    resume: if given, this worker's FIRST trial only reconstructs an in-progress run instead of
-    starting fresh -- for recovering a trial that was progressing normally when the facility was
-    killed before it reached game_over. Keys: character, seed, main_id, combat_index (combats
-    already resolved), actions (full action log up to the resume point, same shape a branch/trial
-    JSON's own "actions" field has).
-
-    session_factory(logger=recorder) -> a fresh main-line session: Sts2Session (subprocess, the
-    default) or Sts2BufferSession (in-process CLR, faster but see the Sts2EngineTimeoutError
-    handling below). combat_resolver/meta_resolver must tolerate whichever one this worker was
-    built with -- facility_claws._resolve_combat and this module's _map_point_type_at both branch
-    on hasattr(decision, "arr") for exactly this reason."""
+    # Spwan 
     _tag_worker_stderr("main", main_worker_index, log_queue, cfg.verbose)
-    # New process group -- Facility.stop()'s force-kill uses os.killpg on it (see there for why:
-    # combat_resolver's dotnet-run subprocesses need to die with it, not be orphaned).
     os.setpgid(0, 0)
     random.seed(os.urandom(16))  # avoid fork-inherited identical RNG across concurrent workers
 
@@ -712,6 +560,16 @@ def branch_worker_loop(
         handler(cfg, job, results_queue)
 
 
+""" New design:
+Each worker has its own sts2bufferSession work station, and they are responsible to run job.execute()
+Worker will look into job queue and pick up a job, and they will return something to result_queue
+
+Facility on the otherhand, is responsible to manage the workers, and the job queue. It will spawn workers, and it will feed them jobs. It will also collect results from the result queue and do something with them.
+It is possible a new job should be created when a job is not completed, this should be handled by sending result to result_queue, and facility will look into the result and decide if a new job should be created and sent to job queue.
+"""
+
+
+
 class Facility:
     """Pure process orchestration -- knows nothing about combat-turn or meta-decision branching
     specifically. main_worker_fn/branch_worker_fn are fully-bound callables matching
@@ -756,7 +614,7 @@ class Facility:
         labels += [("branch", i) for i in range(self.cfg.n_branch_workers)]
         self.live = _LiveStatus(labels)
         self.log_thread = threading.Thread(
-            target=_log_writer_loop, args=(self.log_queue, self.live, self._mark_activity),
+            target=self.live.loop, args=(self.log_queue, self._mark_activity),
             daemon=True, name="branch-log-writer",
         )
         self.log_thread.start()
@@ -857,7 +715,77 @@ class Facility:
             self.live.scroll("Stopping facility (waiting for in-flight trials to finish)...")
         finally:
             self.stop()
+    
 
+class NewFacility(ABC):
+    def __init__(self, cfg: FacilityConfig):
+        self.cfg = cfg
+        self.job_queue: mp.Queue = mp.Queue()
+        self.priority_job_queue: mp.Queue = mp.Queue()
+        self.log_queue: mp.Queue = mp.Queue()
+        self.result_queue: mp.Queue = mp.Queue()
+        self.main_workers_processes: list[mp.Process] = []
+        self.branch_workers_processes: list[mp.Process] = []
+        self.stop_event = mp.Event()
+        self.log_thread: threading.Thread | None = None
+        self.live: _LiveStatus | None = None  # built in start() -- see _LiveStatus
+        self.trial_counter = mp.Value(
+            "i", 0) if cfg.n_main_trials is not None else None
+        self._manager = None
+        self._last_activity = time.monotonic()
+        self._trial_counter = mp.Value("i", 0) 
+        
+        
+    def start(self):
+        labels = [("main", i) for i in range(self.cfg.n_main_workers)]
+        labels += [("branch", i) for i in range(self.cfg.n_branch_workers)]
+        self.live = _LiveStatus(labels)
+        self.log_thread = threading.Thread(
+            target=self.live.loop, args=(self.log_queue, self._mark_activity()),
+            daemon=True, name="branch-log-writer",
+        )
+        self.log_thread.start()
+        # something to start the first few mainline
+        self.spawn_workers()
+        
+        
+        
+    def _mark_activity(self) -> None:
+        self._last_activity = time.monotonic()
+
+    def stop(self):
+        pass
+    
+    def run(self) -> None:
+        pass
+    
+    def spawn_workers(self):
+        for i in range(self.cfg.n_main_workers):
+            worker = BufferWorker(
+                self.job_queue, self.priority_job_queue, self.log_queue, self.result_queue, i
+            )
+            p = mp.Process(target=worker.run, name=f"main_worker_{i}")
+            p.start()
+            self.main_workers_processes.append(p)
+        for i in range(self.cfg.n_branch_workers):
+            worker = BufferWorker(
+                self.job_queue, self.priority_job_queue, self.log_queue, self.result_queue, i
+            )
+            p = mp.Process(target=worker.run, name=f"branch_worker_{i}")
+            p.start()
+            self.branch_workers_processes.append(p)
+
+    def spawn_job(self):
+        pass
+    
+    @abstractmethod
+    def drain_workers(self):
+        pass
+    
+    def drain_results(self):
+        pass
+    
+    
 
 def add_common_cli_args(parser) -> None:
     """Flags shared by facility_claws.py's and facility_choices_paradox.py's CLIs."""

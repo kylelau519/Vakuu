@@ -11,14 +11,14 @@ import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imp
 import buffer_layout as bl
 from env import Sts2Session
 from buffer_env import Sts2BufferSession, decode_token
-
 from checkpoint import BranchJob
 from recorder import CompactRecorder
+from utils import random_seed
 from facility_common import (
-    Facility, FacilityConfig, _clean_actions, _play_turn_only,
+    Facility, FacilityConfig, NewFacility, _clean_actions, _play_turn_only,
     add_common_cli_args, branch_worker_loop, load_resume, main_worker_loop,
 )
-
+from jobs import *
 
 def _spawn_turn_branches(
     job_queue, results_queue, cfg: FacilityConfig, main_id: str, act: int, floor: int,
@@ -91,17 +91,8 @@ def _wait_for_turn_result(
     return None
 
 
-# NOT USED -- kept for reference/possible revert. This is the original value/outcome-based
-# adoption scheme, replaced by the fixed-index _wait_for_turn_result above because it introduces
-# survivorship bias (any non-"lost" outcome beats a "lost" one) and winner's-curse bias (greedily
-# maximizing ClawsNet's own noisy "continue" value estimate across many candidates), both of
-# which skew what the main line explores toward states that dodged death or that the net already
-# rates highly -- see git history / chat for the full reasoning.
+# NOT USED 
 def _turn_score_key(result: dict) -> tuple[int, float]:
-    """Ranks a turn-branch result for adoption: any non-"lost" outcome beats a "lost" one,
-    then maximize the branch's own end_turn()-backfilled value -- identical across every one
-    of its new actions (end_turn() backfills the same scalar onto the whole turn's range), so
-    the last new action's `value` is representative."""
     outcome = result.get("outcome")
     actions = result.get("actions") or []
     value = actions[-1].get("value", float("-inf")) if actions else float("-inf")
@@ -111,11 +102,7 @@ def _turn_score_key(result: dict) -> tuple[int, float]:
 def _wait_for_turn_result_by_value(
     results_queue, branch_ids: list[str], prefix_len: int, stop_event, timeout: float = 120
 ) -> dict | None:
-    """NOT USED -- see _turn_score_key's comment. Original version of _wait_for_turn_result:
-    blocks on results_queue (branch_id, result) pairs. Most branches here report "continue"
-    rather than a terminal outcome, so they can't just be accepted on first
-    success -- every branch's turn_value is compared once all have reported (or timed out). A
-    branch that itself won the combat this turn is still an immediate, unambiguous best pick."""
+    """NOT USED  """
     usable: dict[str, dict] = {}
     pending = set(branch_ids)
     deadline = time.time() + timeout
@@ -186,13 +173,6 @@ def _resolve_turn(
         )
         session.action_log = cleaned[:combat_start_index] + session.action_log
     else:
-        # Rare (only the very first combat of a run lacks a checkpoint) and not covered by
-        # debug_verify_session_reuse.py's testing (that only exercised load_save reuse, not
-        # repeated start_run on one live session) -- kept as a fresh respawn rather than extending
-        # the reuse optimization somewhere it hasn't actually been verified. type(session), not a
-        # hardcoded class, so this respawns the same kind of session (Sts2Session or
-        # Sts2BufferSession) the caller's main line is actually running on -- see
-        # main_worker_loop's session_factory.
         session.close()
         session = type(session)(logger=recorder)
         new_decision = session.open_from_checkpoint(character, seed, cfg.ascension, cleaned)
@@ -302,6 +282,32 @@ def _run_branch_job(cfg: FacilityConfig, job: BranchJob, results_queue) -> None:
         # pending set would otherwise wait out the full timeout for this branch_id.
         results_queue.put((job.branch_id, result))
 
+
+
+
+
+class FacilityClaws(NewFacility):
+    """The original Whispering Earring self-play facility, generating training data for `claws` via
+    turn-branching.  """
+    def __init__(self, cfg: FacilityConfig):
+        super().__init__(cfg)
+        
+        
+    def run(self) -> None:
+        self.start()
+        for _ in range(self.cfg.n_main_trials):
+            self.create_main_job()
+
+    def create_main_job(self, character: str = "Ironclad", ascension: int = 1):
+        seed = random_seed()
+        trial_job = TrialJob(
+            BasicRunInfo(
+                main_id=f"{character}_{seed}", seed=seed, character=character, ascension=ascension
+            ),
+            self.result_queue,
+        )
+        self.priority_job_queue.put(trial_job)
+        
 
 if __name__ == "__main__":
     import argparse
