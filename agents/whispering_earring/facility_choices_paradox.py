@@ -206,7 +206,6 @@ def _resolve_meta_decision(
     job_queue, results_queue, meta_results_queue, main_worker_index: int, cfg: FacilityConfig,
     recorder: CompactRecorder, session, decision, character: str, seed: str, main_id: str,
     decision_kind: str, divergence_index: int, stop_event, queue_manager,
-    last_room_checkpoint_path: str | None, last_room_entry_index: int | None,
 ):
     """"""
     options = (
@@ -237,8 +236,8 @@ def _resolve_meta_decision(
             main_id=main_id, character=character, seed=seed, ascension=cfg.ascension,
             decision_kind=decision_kind, divergence_index=divergence_index,
             option_index=option_index, prefix=prefix,
-            last_room_checkpoint_path=last_room_checkpoint_path,
-            last_room_entry_index=last_room_entry_index,
+            last_room_checkpoint_path=recorder.checkpoint_path,
+            last_room_entry_index=recorder.replay_index,
             commit_name=opt_name, commit_args=opt_args, walk_seed=walk_seed,
         )
         # The dispatched-to queue travels with the job itself, not looked up from a table -- see
@@ -246,7 +245,7 @@ def _resolve_meta_decision(
         # trial's own combat turn-branches (job_queue_priority) are never stuck behind it.
         job_queue.put((job, meta_results_queue))
         pending_meta_jobs.append(
-            (job.meta_id, last_room_checkpoint_path, option_index == adopted_index, commit_step)
+            (job.meta_id, recorder.checkpoint_path, option_index == adopted_index, commit_step)
         )
 
     return decision, pending_meta_jobs

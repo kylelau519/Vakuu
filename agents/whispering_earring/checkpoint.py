@@ -35,6 +35,7 @@ when no checkpoint was available (e.g. the run's very first combat), falling bac
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from buffer_env import Sts2BufferSession, BufferDecision
 
 
 @dataclass
@@ -96,3 +97,35 @@ class MetaOptionJob:
     @property
     def meta_id(self) -> str:
         return f"{self.main_id}_m{self.divergence_index:03d}_o{self.option_index:02d}"
+
+
+@dataclass
+class Resume:
+    character: str
+    seed: str
+    ascension: int
+    actions: list[dict]                 # full run history since StartRun
+    checkpoint_path: str | None = None
+    replay_start_index: int = 0         # meaningful only when checkpoint_path is set
+
+    @classmethod
+    def from_checkpoint(cls, character, seed, ascension, actions, checkpoint_path, replay_start_index):
+        return cls(character, seed, ascension, actions, checkpoint_path, replay_start_index)
+
+    @classmethod
+    def from_full_replay(cls, character, seed, ascension, actions):
+        # checkpoint_path stays None
+        return cls(character, seed, ascension, actions)
+
+    def reload(self, session) -> BufferDecision:
+        if self.checkpoint_path is not None:
+            entry_action = self.actions[self.replay_start_index]
+            in_combat_actions = self.actions[self.replay_start_index + 1:]
+            decision = session.load_and_resume_combat(
+                self.checkpoint_path, entry_action, in_combat_actions)
+            session.action_log = self.actions[:self.replay_start_index] + \
+                session.action_log
+        else:
+            decision = session.open_from_checkpoint(
+                self.character, self.seed, self.ascension, self.actions)
+        return decision

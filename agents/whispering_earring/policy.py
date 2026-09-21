@@ -339,39 +339,37 @@ def _choose_generic_action_from_buffer(
     raise ValueError(f"no buffer-side policy for decision type {dec!r}")
 
 
-def _choose_map_action_from_buffer(arr) -> tuple[str, dict]:
-    current_children = None
-    for _row, _col, slot in bl.map_points(arr):
-        if int(slot[2]) == 1:  # MAP_POINT_SIZE layout: type, visited, current, then children
-            current_children = list(bl.map_point_children(slot))
-            break
-    if current_children is None:
-        # No point is marked current yet -- the very first move of the act, offered from every
-        # row-0 point (map_points() yields (row, col, slot) for every real point on the grid).
-        current_children = [(col, row) for row, col, _slot in bl.map_points(arr) if row == 0]
-    col, row = random.choice(current_children)
-    return "select_map_node", {"col": col, "row": row}
-
-
-def _choose_card_reward_from_buffer(
-    decision: BufferDecision, card_reward_dirichlet_noise: bool = True
-) -> tuple[str, dict]:
-    """Handles both buffer decision kinds a "card_reward" pydantic-side decision can actually be:
-    the ordinary post-combat CARD_REWARD section, or the blessing-triggered EVENT_CARD_REWARD one
-   """
+def _card_reward_options_from_buffer(decision: BufferDecision) -> tuple[list[_BufferCard], bool]:
+    """Decodes both buffer decision kinds a "card_reward" pydantic-side decision can actually be:
+    the ordinary post-combat CARD_REWARD section, or the blessing-triggered EVENT_CARD_REWARD one."""
     arr = decision.arr
     if bl.decision_name(arr) == "event_card_reward":
         cards = [
             _BufferCard(i, decode_token(bl.card_token(slot)))
             for i, slot in bl.event_card_reward_cards(arr)
         ]
-        can_skip = True
-    else:
-        cards = [_BufferCard(i, decode_token(bl.card_token(slot))) for i, slot in bl.reward_cards(arr)]
-        can_skip = bl.can_skip_reward(arr)
+        return cards, True
+    cards = [_BufferCard(i, decode_token(bl.card_token(slot))) for i, slot in bl.reward_cards(arr)]
+    return cards, bl.can_skip_reward(arr)
+
+
+def _choose_card_reward_from_buffer(
+    decision: BufferDecision, card_reward_dirichlet_noise: bool = True
+) -> tuple[str, dict]:
+    cards, can_skip = _card_reward_options_from_buffer(decision)
     return _choose_card_reward_decision(
-        decision, cards, can_skip, bl.player_deck_size(arr), card_reward_dirichlet_noise
+        decision, cards, can_skip, bl.player_deck_size(decision.arr), card_reward_dirichlet_noise
     )
+
+
+def _choose_card_reward_heuristic(decision: BufferDecision) -> tuple[str, dict]:
+    """Test-only counterpart to _choose_card_reward_from_buffer: skips the trained-checkpoint
+    path entirely and always resolves through choices_paradox's tier list."""
+    cards, can_skip = _card_reward_options_from_buffer(decision)
+    index = choices_paradox.choose_card_reward(cards, can_skip, bl.player_deck_size(decision.arr))
+    if index is None:
+        return "skip_card_reward", {}
+    return "select_card_reward", {"card_index": index}
 
 
 def _choose_shop_action_from_buffer(arr) -> tuple[str, dict, str | None]:
@@ -486,3 +484,110 @@ def _choose_rest_site_action(decision: Decision) -> tuple[str, dict, str | None]
     option = enabled[preferred] if preferred in enabled else random.choice(list(enabled.values()))
     purpose = "upgrade" if option.option_id == "SMITH" else None
     return "choose_option", {"option_index": option.index}, purpose
+
+
+##### Generic action chooser for testing: BufferDecision only, no checkpoint loading anywhere --
+##### map_select and card_reward resolve through golden_compass's/choices_paradox's plain
+##### heuristic policies instead of the pydantic-side fallbacks' random walk / net-first logic.
+
+def choose_generic_action(
+    decision: BufferDecision, purpose: str | None = None,
+) -> tuple[str, dict, str | None, dict | None]:
+    dec = decision.decision
+    arr = decision.arr
+
+    if dec == "combat_play":
+        name, kwargs = random.choice(_combat_options_from_buffer(arr))
+        return name, kwargs, None, None
+    if dec == "map_select":
+        name, kwargs = _choose_map_action_heuristic(arr)
+        return name, kwargs, None, None
+    if dec in ("card_reward", "event_card_reward"):
+        name, kwargs = _choose_card_reward_heuristic(decision)
+        return name, kwargs, None, None
+    if dec == "bundle_select":
+        return (
+            "select_bundle", {"bundle_index": random.choice([b for b, _ in bl.bundles(arr)])},
+            None, None,
+        )
+    if dec == "card_select":
+        name, kwargs = _choose_card_select_action(decision, purpose)
+        return name, kwargs, None, None
+    if dec == "shop":
+        name, kwargs, next_purpose = _choose_shop_action_from_buffer(arr)
+        return name, kwargs, next_purpose, None
+    if dec == "rest_site":
+        name, kwargs, next_purpose = _choose_rest_site_action_from_buffer(arr)
+        return name, kwargs, next_purpose, None
+    if dec == "event_choice":
+        unlocked = [i for i, is_locked in bl.event_options(arr) if not is_locked]
+        if not unlocked:
+            return "leave_room", {}, None, None
+        return "choose_option", {"option_index": random.choice(unlocked)}, None, None
+
+    raise ValueError(f"no buffer-side policy for decision type {dec!r}")
+
+
+def _map_json_from_buffer(arr) -> dict:
+    """Reassembles golden_compass's expected {"rows", "boss", "current_coord"} map shape out of
+    the buffer's raw grid encoding, so its tier-weighted DP (choose_next_node) runs unmodified
+    against buffer decisions. The trailing boss MapPoint slot carries no coordinate of its own
+    (RunSimulator.cs's Map() writes it as a bare extra slot past the grid) -- its (col, row) is
+    only ever referenced as a child of the last real row's nodes, so it's recovered here as the
+    one child coordinate that isn't itself a real grid node."""
+    rows_by_row: dict[int, list[dict]] = {}
+    current_coord = None
+    boss_type = None
+
+    for row, col, slot in bl.map_points(arr):
+        if row == -1:  # trailing boss slot
+            boss_type = bl.map_point_type(slot)
+            continue
+        node = {
+            "col": col, "row": row, "type": bl.map_point_type(slot),
+            "children": [{"col": c, "row": r} for c, r in bl.map_point_children(slot)],
+        }
+        rows_by_row.setdefault(row, []).append(node)
+        if int(slot[2]) == 1:  # MAP_POINT_SIZE layout: type, visited, current, then children
+            current_coord = {"col": col, "row": row}
+
+    grid_coords = {(n["col"], n["row"]) for nodes in rows_by_row.values() for n in nodes}
+    boss_coord = next(
+        (c["col"], c["row"])
+        for nodes in rows_by_row.values() for n in nodes for c in n["children"]
+        if (c["col"], c["row"]) not in grid_coords
+    )
+    boss = {"col": boss_coord[0], "row": boss_coord[1], "type": boss_type}
+    rows = [rows_by_row[r] for r in sorted(rows_by_row)]
+    return {"rows": rows, "boss": boss, "current_coord": current_coord}
+
+
+def _choose_map_action_heuristic(arr) -> tuple[str, dict]:
+    """Test-only counterpart to _choose_map_action_from_buffer: skips GoldenCompassNet entirely
+    and always resolves through golden_compass's node-value DP instead of a uniform random walk."""
+    max_hp = bl.player_max_hp(arr)
+    hp_frac = bl.player_hp(arr) / max_hp if max_hp else 1.0
+    target = golden_compass.choose_next_node(_map_json_from_buffer(arr), hp_frac=hp_frac)
+    if target is not None:
+        col, row = target
+        return "select_map_node", {"col": col, "row": row}
+
+    # current_coord is null -- the very first move of the act, forced from every row-0 point
+    # (choose_next_node returns None here since there's nothing to plan a path from yet).
+    current_children = [(col, row) for row, col, _slot in bl.map_points(arr) if row == 0]
+    col, row = random.choice(current_children)
+    return "select_map_node", {"col": col, "row": row}
+
+
+def _choose_map_action_from_buffer(arr) -> tuple[str, dict]:
+    current_children = None
+    for _row, _col, slot in bl.map_points(arr):
+        if int(slot[2]) == 1:  # MAP_POINT_SIZE layout: type, visited, current, then children
+            current_children = list(bl.map_point_children(slot))
+            break
+    if current_children is None:
+        # No point is marked current yet -- the very first move of the act, offered from every
+        # row-0 point (map_points() yields (row, col, slot) for every real point on the grid).
+        current_children = [(col, row) for row, col, _slot in bl.map_points(arr) if row == 0]
+    col, row = random.choice(current_children)
+    return "select_map_node", {"col": col, "row": row}
