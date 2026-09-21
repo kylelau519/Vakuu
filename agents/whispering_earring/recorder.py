@@ -30,6 +30,19 @@ class CompactRecorder:
         self._turn_start: int | None = None
         self._step = start_step
         self._combats: list[dict] = []
+        self.checkpoint_path: str | None = None
+        self.replay_index: int | None = None
+
+    def record_checkpoint(self, path: str, replay_index: int) -> None:
+        """The most recent native sts2-cli save taken (any room type, not just combat) plus the
+        action-log index it corresponds to -- overwritten on every new checkpoint, so whichever
+        was live at the moment save() is called is the closest one a resume can fast-load from
+        (load_and_resume_combat) and replay forward past, instead of a full from-scratch
+        open_from_checkpoint replay. Owned by the recorder rather than tracked separately by a
+        caller (e.g. _TrialState used to) since every consumer of "the latest checkpoint" --
+        _resolve_meta_decision, a resumed save() file -- already has the recorder in hand."""
+        self.checkpoint_path = path
+        self.replay_index = replay_index
 
     def attach_policy(self, policy: dict) -> None:
         self._pending_policy = policy
@@ -110,6 +123,9 @@ class CompactRecorder:
         data["actions"] = actions
         if outcome is not None:
             data["outcome"] = outcome
+        if self.checkpoint_path is not None:
+            data["checkpoint_path"] = self.checkpoint_path
+            data["replay_index"] = self.replay_index
         if self.error is not None:
             data["error"] = self.error
         if self._combats:

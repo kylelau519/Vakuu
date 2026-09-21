@@ -1,14 +1,18 @@
 from __future__ import annotations
+import os
 from dataclasses import dataclass, field
-from buffer_env import Sts2BufferSession, Sts2Session, BufferDecision
+from buffer_env import Sts2BufferSession, BufferDecision
+from env import Sts2Session
 import buffer_layout as bl
 from checkpoint import BasicRunInfo, FastLoadInfo
 from recorder import CompactRecorder
-from policy import choose_action, get_claws_net
+from policy import choose_generic_action
 from utils import *
 import multiprocessing as mp
 
 from abc import ABC, abstractmethod
+
+TEST_CHECKPOINT_DIR = "data/test_checkpoints"
 
 # Atomic unit once a run is started: a single combat turn, or a whole combat.
 class Job(ABC):
@@ -18,18 +22,9 @@ class Job(ABC):
     
     # This should return a result of some kind that is useful to spawn new jobs...
     @abstractmethod
-    def execute(self, session: Sts2BufferSession | Sts2Session):
+    def execute(self, session: Sts2BufferSession):
         pass
     
-    def wrap_result(self):
-        pass
-    
-    def emit_result(self):
-        result = self.wrap_result()
-        if result is not None:
-            self.result_queue.put(result) 
-
-
 # This should have enough information to create a save .json, resume, and materialize for training. 
 @dataclass
 class JobResult:
@@ -41,11 +36,10 @@ class JobResult:
     auxiliary_data: dict = field(default_factory=dict)
     
 class TrialJob(Job):
-    def __init__(self, basic_run_info: BasicRunInfo, result_queue: mp.Queue, checkpoint: dict | None = None):
+    def __init__(self, basic_run_info: BasicRunInfo, checkpoint: dict | None = None):
         self.basic_run_info = basic_run_info
         self.checkpoint = checkpoint
         self.combat_index = 0
-        self.result_queue = result_queue
     
     def execute(self, session: Sts2BufferSession | Sts2Session):
         decision = self._init_start(session)
@@ -84,11 +78,10 @@ class TrialJob(Job):
         })
 
 class CombatTurnJob(Job):
-    def __init__(self, run_info: FastLoadInfo | BasicRunInfo, result_queue: mp.Queue, combat_index: int, checkpoint: dict):
+    def __init__(self, run_info: FastLoadInfo | BasicRunInfo, combat_index: int, checkpoint: dict):
         self.run_info = run_info
         self.combat_index = combat_index
         self.checkpoint = checkpoint
-        self.result_queue = result_queue
     
     def execute(self, session: Sts2BufferSession | Sts2Session):
         decision = self._init_start(session)
@@ -183,10 +176,10 @@ class WholeCombatJob(Job):
         self.checkpoint = checkpoint
         self.result_queue = result_queue
     
-    def execute(self, session: Sts2BufferSession | Sts2Session):
+    def execute(self, session: Sts2BufferSession):
         decision = self._init_start(session)
         while decision.decision in ("combat_play", "card_select"):
-            name, kwargs, policy, _purpose = choose_action(decision, session)
+            name, kwargs, policy, _purpose = choose_generic_action(decision, session)
             if policy is not None:
                 session.logger.attach_policy(policy)
             decision = session.step(name, **kwargs)
@@ -212,7 +205,7 @@ class WholeCombatJob(Job):
         return result
     
 
-    def _init_start(self, session: Sts2BufferSession | Sts2Session) -> BufferDecision:
+    def _init_start(self, session: Sts2BufferSession) -> BufferDecision:
         # checkpoint must exist for combat turn.
         if isinstance(self.run_info, FastLoadInfo):
             entry_action = self.checkpoint["actions"][self.run_info.combat_start_index]
@@ -225,3 +218,66 @@ class WholeCombatJob(Job):
                 self.run_info.character, self.run_info.seed, self.run_info.ascension, self.checkpoint["actions"]
             )
         return decision
+    
+
+class TestJob(Job):
+    def __init__(self, run_info: FastLoadInfo | BasicRunInfo):
+        self.run_info = run_info
+
+    def create_recorder(self):
+        return CompactRecorder({
+            "character": self.run_info.character,
+            "seed": self.run_info.seed,
+            "ascension": self.run_info.ascension,
+            "main_id": self.run_info.main_id,
+            "role": "test",
+        })
+
+    def execute(self, session: Sts2BufferSession):
+        recorder = self.create_recorder()
+        session.logger = recorder
+
+        decision = session.start(self.run_info.character, self.run_info.seed, self.run_info.ascension)
+        purpose = None
+        in_turn = False
+        hp_before_turn = 0
+        enemies_hp_before_turn = 0.0
+        turns: list[dict] = []  # per-combat-turn aux stats, not a training value -- see JobResult.auxiliary_data
+
+        while decision.decision != "game_over":
+            if decision.decision == "map_select":
+                os.makedirs(TEST_CHECKPOINT_DIR, exist_ok=True)
+                checkpoint_path = os.path.join(
+                    TEST_CHECKPOINT_DIR,
+                    f"{self.run_info.main_id}"
+                    f"_a{decision.act:02d}f{decision.floor:02d}.json",
+                )
+                session.save(checkpoint_path)
+
+            if decision.decision == "combat_play" and not in_turn:
+                in_turn = True
+                hp_before_turn = decision.player_hp
+                enemies_hp_before_turn = float(decision.get_enemies_hp().sum())
+
+            name, kwargs, purpose, policy = choose_generic_action(decision, purpose)
+            if policy is not None:
+                recorder.attach_policy(policy)
+            decision = session.step(name, **kwargs)
+
+            if in_turn and (name == "end_turn" or decision.decision in ("card_reward", "game_over")):
+                turns.append({
+                    "damage_taken": max(0, hp_before_turn - decision.player_hp),
+                    "damage_done": max(0.0, enemies_hp_before_turn - float(decision.get_enemies_hp().sum())),
+                })
+                in_turn = False
+
+        outcome = "won" if decision.victory else "lost"
+        result = JobResult(
+            main_id=self.run_info.main_id,
+            action_log=session.action_log,
+            outcome=outcome,
+            decision=decision,
+            checkpoint_path=None,
+            auxiliary_data={"turns": turns},
+        )
+        return result

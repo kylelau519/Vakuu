@@ -273,14 +273,12 @@ class _TrialState:
     checkpoint_dir: str
     meta_budget: int | None
     combat_checkpoint_path: str | None = None
-    # Native checkpoint (and its entry action's position in action_log) taken before the most
-    # recently entered room, of ANY type -- not just combat. Meta-decision reconstruction
-    # (_resolve_meta_decision/_run_meta_option_job) needs this fast-path replay base for
-    # rest_site/event_choice divergences exactly as much as it does for a card_reward one right
-    # after a combat; see room_index below for why the checkpoint file itself can't be keyed off
-    # combat_index the way it used to be.
-    last_room_checkpoint_path: str | None = None
-    last_room_entry_index: int | None = None
+    # The "checkpoint taken before the most recently entered room, of ANY type" used to be
+    # tracked here as last_room_checkpoint_path/last_room_entry_index. That's now the recorder's
+    # own job (CompactRecorder.record_checkpoint/.checkpoint_path/.replay_index) -- every consumer
+    # (_resolve_meta_decision, a resumed save() file) already has the recorder in hand, so there's
+    # no need for _TrialState to duplicate it. See room_index below for why the checkpoint file
+    # itself can't be keyed off combat_index the way it used to be.
     # Increments once per select_map_node, regardless of what room it leads into -- combat_index
     # (a _play_trial local, not tracked here) only increments for actual combats, so keying the
     # checkpoint filename off it collided whenever two non-combat rooms (e.g. a rest_site then an
@@ -350,7 +348,6 @@ def _play_trial(
                 job_queue, results_queue, meta_results_queue, main_worker_index, cfg,
                 recorder, state.session, decision, character, seed, main_id,
                 decision.decision, state.divergence_index, stop_event, queue_manager,
-                state.last_room_checkpoint_path, state.last_room_entry_index,
             )
             for meta_id, ckpt_path, is_adopted, commit_step in new_pending:
                 state.pending_meta_jobs[meta_id] = (ckpt_path, is_adopted, commit_step)
@@ -385,8 +382,7 @@ def _play_trial(
             state.checkpoint_paths_this_trial.append(checkpoint_path)
         decision = state.session.step(name, **kwargs)
         if name == "select_map_node":
-            state.last_room_checkpoint_path = checkpoint_path
-            state.last_room_entry_index = len(state.session.action_log) - 1
+            recorder.record_checkpoint(checkpoint_path, len(state.session.action_log) - 1)
             if decision.decision == "combat_play":
                 state.combat_checkpoint_path = checkpoint_path
 
