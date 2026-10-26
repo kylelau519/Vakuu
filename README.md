@@ -1,5 +1,7 @@
 # Vakuu
 
+# Huge refactoring going on in refractor branch. The signal is too weak to be trained. RL Ideas cannot be tested because of unexpected problems. 
+
 An AI that plays Slay the Spire 2.
 
 Three subsystems, currently kept separate:
