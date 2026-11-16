@@ -31,7 +31,7 @@ class BufferWorker():
             try:
                 result = job.execute(self._work_station)
             except Exception as e:
-                self._log_queue.put(f"Worker {self._worker_index} encountered an error: {e}")
+                self._log_queue.put(("worker", self._worker_index, f"job {job.uid()} failed: {type(e).__name__}: {e}\n", True))
                 result = JobResult(
                     main_id=job.main_id, outcome="error", action_log=list(self._work_station.action_log),
                     auxiliary_data={"error": f"{type(e).__name__}: {e}"},

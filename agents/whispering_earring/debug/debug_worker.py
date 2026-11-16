@@ -1,5 +1,5 @@
 """Sanity check: does a BufferWorker's underlying Sts2BufferSession actually come up and play a
-full TestJob run end to end -- buffer-only, network-free choose_generic_action, driven by
+full TrialJob run end to end -- buffer-only, network-free choose_generic_action, driven by
 golden_compass's/choices_paradox's tier-list heuristics for map/card decisions and plain random
 choice for combat_play?
 
@@ -22,7 +22,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import sts2_path  # noqa: E402,F401
 from installation import ensure_setup  # noqa: E402
 from checkpoint import Checkpoint  # noqa: E402
-from jobs import TestJob, TEST_CHECKPOINT_DIR  # noqa: E402
+from jobs import TrialJob  # noqa: E402
+
+TEST_CHECKPOINT_DIR = "data/test_checkpoints"
 from workers import BufferWorker  # noqa: E402
 from utils import random_seed  # noqa: E402
 
@@ -51,9 +53,9 @@ def main() -> None:
         result_queue=mp.Queue(), worker_index=0,
     )
 
-    job = TestJob(Checkpoint.fresh(main_id, args.character, seed, args.ascension))
+    job = TrialJob(Checkpoint.fresh(main_id, args.character, seed, args.ascension), save_dir=TEST_CHECKPOINT_DIR)
 
-    print(f"Running TestJob {main_id} against the worker's session...")
+    print(f"Running TrialJob {main_id} against the worker's session...")
     try:
         result = job.execute(worker._work_station)
     finally:
@@ -64,11 +66,7 @@ def main() -> None:
     print(f"outcome:        {result.outcome}")
     print(f"actions taken:  {len(result.action_log)}")
     print(f"final decision: {result.decision.decision if result.decision else None}")
-
-    turns = result.auxiliary_data.get("turns", [])
-    print(f"\n=== Turns recorded: {len(turns)} ===")
-    for i, t in enumerate(turns):
-        print(f"  turn {i:>2}: damage_done={t['damage_done']:.0f}  damage_taken={t['damage_taken']:.0f}")
+    print(f"saved checkpoints: {len(result.auxiliary_data['checkpoints'])}")
 
 
 if __name__ == "__main__":

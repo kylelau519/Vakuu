@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from queue import Empty
 
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imports below)
 
@@ -15,19 +16,49 @@ from utils import random_seed
 class FacilityClaws(NewFacility):
     def __init__(self, cfg: FacilityConfig):
         super().__init__(cfg)
+        self._started = 0
 
-    def run(self) -> None:
-        self.start()
-        for _ in range(self.cfg.n_main_trials):
-            self.create_main_job()
+    def _more_trials(self) -> bool:
+        return self.cfg.n_main_trials is None or self._started < self.cfg.n_main_trials
 
-    def create_main_job(self):
+    def _submit_trial(self) -> None:
         character = random.choice(self.cfg.characters)
         seed = random_seed()
-        trial_job = TrialJob(
-            Checkpoint.fresh(f"{character}_{seed}", character, seed, self.cfg.ascension)
-        )
-        self.priority_job_queue.put(trial_job)
+        self._started += 1
+        self.submit_job(TrialJob(
+            Checkpoint.fresh(f"{character}_{seed}", character, seed, self.cfg.ascension),
+            self.cfg.raw_dir,
+        ))
+
+    def submit_job(self, job, priority: bool = False) -> None:
+        (self.priority_job_queue if priority else self.job_queue).put(job)
+
+    def run(self) -> None:
+        """Keeps n_main_workers trials in flight until n_main_trials have been started (None = forever)."""
+        self.start()
+        try:
+            in_flight = 0
+            while in_flight < self.cfg.n_main_workers and self._more_trials():
+                self._submit_trial()
+                in_flight += 1
+            while in_flight:
+                try:
+                    uid, result = self.result_queue.get(timeout=self.cfg.stall_timeout_s)
+                except Empty:
+                    self.live.scroll(f"No result for {self.cfg.stall_timeout_s:.0f}s -- treating the pool as wedged.")
+                    break
+                in_flight -= 1
+                error = result.auxiliary_data.get("error")
+                self.live.scroll(
+                    f"{uid}: {result.outcome}, {len(result.action_log)} actions" + (f" ({error})" if error else "")
+                )
+                if self._more_trials():
+                    self._submit_trial()
+                    in_flight += 1
+        except KeyboardInterrupt:
+            self.live.scroll("Stopping facility (waiting for in-flight jobs to finish)...")
+        finally:
+            self.stop()
 
 
 if __name__ == "__main__":

@@ -6,7 +6,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import multiprocessing as mp
 import os
+import random
 import shutil
+import signal
 import sys
 import threading
 import time
@@ -109,77 +111,75 @@ class FacilityConfig:
     stall_timeout_s: float = 300.0
 
 
+def _worker_process(
+    worker_index: int, job_queue, priority_job_queue, log_queue, result_queue, stop_event, verbose: bool,
+) -> None:
+    """Entry point of one worker process. The BufferWorker -- and so its CLR session, which can't be
+    pickled across a spawn -- is built here, inside the child."""
+    os.setpgid(0, 0)  # own process group, so stop()'s killpg takes its dotnet children too
+    random.seed(os.urandom(16))  # a forked worker would otherwise replay its siblings' random choices
+    _tag_worker_stderr("worker", worker_index, log_queue, verbose)
+    BufferWorker(
+        job_queue, priority_job_queue, log_queue, result_queue, worker_index, stop_event
+    ).run()
+
+
 class NewFacility(ABC):
+    """A pool of BufferWorkers pulling jobs from two queues (priority first) and reporting
+    (job.uid(), JobResult) on result_queue. Subclasses decide which jobs to submit and what to do
+    with their results in run()."""
+
     def __init__(self, cfg: FacilityConfig):
         self.cfg = cfg
         self.job_queue: mp.Queue = mp.Queue()
         self.priority_job_queue: mp.Queue = mp.Queue()
         self.log_queue: mp.Queue = mp.Queue()
         self.result_queue: mp.Queue = mp.Queue()
-        self.main_workers_processes: list[mp.Process] = []
-        self.branch_workers_processes: list[mp.Process] = []
         self.stop_event = mp.Event()
+        self.worker_procs: list[mp.Process] = []
         self.log_thread: threading.Thread | None = None
         self.live: _LiveStatus | None = None  # built in start() -- see _LiveStatus
-        self.trial_counter = mp.Value(
-            "i", 0) if cfg.n_main_trials is not None else None
-        self._manager = None
-        self._last_activity = time.monotonic()
-        self._trial_counter = mp.Value("i", 0) 
-        
-        
-    def start(self):
-        labels = [("main", i) for i in range(self.cfg.n_main_workers)]
-        labels += [("branch", i) for i in range(self.cfg.n_branch_workers)]
-        self.live = _LiveStatus(labels)
+
+    def start(self) -> None:
+        ensure_setup()  # once, here -- not per-session, which would repeat the same checks
+        self.live = _LiveStatus([("worker", i) for i in range(self.cfg.n_branch_workers)])
         self.log_thread = threading.Thread(
-            target=self.live.loop, args=(self.log_queue, self._mark_activity),
-            daemon=True, name="branch-log-writer",
+            target=self.live.loop, args=(self.log_queue,), daemon=True, name="log-writer",
         )
         self.log_thread.start()
-        # something to start the first few mainline
-        self.spawn_workers()
-        
-        
-        
-    def _mark_activity(self) -> None:
-        self._last_activity = time.monotonic()
-
-    def stop(self):
-        pass
-    
-    def run(self) -> None:
-        pass
-    
-    def spawn_workers(self):
-        for i in range(self.cfg.n_main_workers):
-            worker = BufferWorker(
-                self.job_queue, self.priority_job_queue, self.log_queue, self.result_queue, i,
-                self.stop_event,
-            )
-            p = mp.Process(target=worker.run, name=f"main_worker_{i}")
-            p.start()
-            self.main_workers_processes.append(p)
         for i in range(self.cfg.n_branch_workers):
-            worker = BufferWorker(
-                self.job_queue, self.priority_job_queue, self.log_queue, self.result_queue, i,
-                self.stop_event,
+            p = mp.Process(
+                target=_worker_process, name=f"worker_{i}", daemon=True,
+                args=(i, self.job_queue, self.priority_job_queue, self.log_queue, self.result_queue,
+                      self.stop_event, self.cfg.verbose),
             )
-            p = mp.Process(target=worker.run, name=f"branch_worker_{i}")
             p.start()
-            self.branch_workers_processes.append(p)
+            self.worker_procs.append(p)
 
-    def spawn_job(self):
-        pass
-    
+    def stop(self, timeout: float = 90) -> None:
+        """Workers finish whatever is already queued, then exit (the None sentinels sit behind it)."""
+        self.stop_event.set()
+        for _ in self.worker_procs:
+            self.job_queue.put(None)
+        deadline = time.monotonic() + timeout
+        for p in self.worker_procs:
+            p.join(max(0.0, deadline - time.monotonic()))
+        for p in self.worker_procs:
+            if p.is_alive():
+                self.live.scroll(f"{p.name} didn't stop within {timeout}s -- killing its process group")
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    p.kill()
+                p.join()
+        self.log_queue.put(None)
+        if self.log_thread is not None:
+            self.log_thread.join(5)
+
     @abstractmethod
-    def drain_workers(self):
-        pass
-    
-    def drain_results(self):
-        pass
-    
-    
+    def run(self) -> None:
+        """Start the pool, submit jobs, collect results, stop the pool."""
+
 
 def add_common_cli_args(parser) -> None:
     """Flags shared by facility_claws.py's and facility_choices_paradox.py's CLIs."""
