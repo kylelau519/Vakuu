@@ -10,6 +10,7 @@ import buffer_layout as bl
 from buffer_env import Sts2BufferSession, BufferDecision
 from checkpoint import Checkpoint
 from policy import choose_action, choose_generic_action, get_claws_net
+import run_state as rs  # golden_compass/run_state.py; policy.py puts its directory on sys.path
 from recorder import CompactRecorder
 
 MAX_COMBAT_TURNS = 20  # a combat that outlasts this is "stalled": HP loss alone gives no reason to finish one
@@ -255,6 +256,95 @@ class MainlineJob(Job):
             combat["act"], combat["floor"], combat["combat_index"], combat["outcome"],
             **{k: v for k, v in combat.items() if k not in ("act", "floor", "combat_index", "outcome")},
         )
+
+
+MACRO_DECISIONS = frozenset({"map_select", "card_reward", "event_card_reward", "shop", "rest_site", "event_choice"})
+
+
+class RunJob(Job):
+    """A whole run played with the policy at REAL HP (nothing is healed or reset), recording what
+    golden_compass's hazard net trains on -- the opposite of MainlineJob, which heals to full before
+    every combat so the run can never die of attrition.
+
+    At every macro decision it logs the RunState (golden_compass/run_state.py) the player is
+    looking at, and for a map move also the afterstate of the node it chose ("map_entered": the
+    state the net is asked about when it picks a path). Per combat it logs the HP going in and out.
+    The run file holds those plus the outcome and the floor the run ended on:
+
+        outcome "lost"      died on end_floor            (hazard label 1 there, 0 before)
+        outcome "won"       cleared the game             (hazard label 0 everywhere)
+        outcome "censored"  a combat hit MAX_COMBAT_TURNS and the run was stopped alive on end_floor
+
+    Always starts fresh -- there is nothing here worth checkpointing yet. Writes
+    raw_dir/{main_id}.json (role "run") when raw_dir is given."""
+    role = "run"
+
+    def __init__(self, checkpoint: Checkpoint, raw_dir: str | None = None):
+        super().__init__(checkpoint)
+        self.raw_dir = raw_dir
+
+    def execute(self, session: Sts2BufferSession) -> JobResult:
+        decision = self.begin(session)
+        purpose = None
+        states: list[dict] = []
+        combats: list[dict] = []
+        floor = decision.floor
+        outcome = None
+
+        while outcome is None:
+            if decision.decision == "game_over":
+                outcome = "won" if decision.victory else "lost"
+                break
+            floor = decision.floor  # at game_over the buffer's floor is the room the run died in -- keep the last live one
+            if decision.decision == "combat_play":
+                decision, stalled = self._play_combat(session, decision, combats)
+                if stalled:
+                    outcome = "censored"
+                continue
+
+            state = None
+            if decision.decision in MACRO_DECISIONS:
+                state = rs.encode_from_buffer(decision.arr, session.character, session.ascension)
+            name, kwargs, policy, purpose = choose_action(decision, session, purpose)
+            if policy is not None:
+                session.logger.attach_policy(policy)
+            if state is not None:
+                states.append({"decision": decision.decision, "action": name, "state": state.to_json()})
+                if name == "select_map_node":
+                    for key, entered in rs.map_afterstates(decision.arr, state):
+                        if key == (kwargs["col"], kwargs["row"]):
+                            states.append({"decision": "map_entered", "action": name, "state": entered.to_json()})
+            decision = session.step(name, **kwargs)
+
+        self.recorder.meta.update(end_floor=floor, states=states)
+        if self.raw_dir is not None:
+            self.recorder.save(os.path.join(self.raw_dir, f"{self.main_id}.json"), session.action_log, outcome=outcome)
+        return self.result(session, outcome, end_floor=floor, n_states=len(states), combats=combats)
+
+    def _play_combat(self, session, decision, combats: list[dict]):
+        """Plays one combat to its end. -> (decision after it, whether it was stopped as stalled)."""
+        entry_hp, max_hp, floor, act = decision.player_hp, decision.player_max_hp, decision.floor, decision.act
+        turns = 0
+        while decision.decision in ("combat_play", "card_select"):
+            name, kwargs, policy, _purpose = choose_action(decision, session)
+            if policy is not None:
+                session.logger.attach_policy(policy)
+            decision = session.step(name, **kwargs)
+            if name == "end_turn":
+                turns += 1
+                if turns >= MAX_COMBAT_TURNS and decision.decision == "combat_play":
+                    break
+
+        stalled = decision.decision == "combat_play"
+        died = decision.decision == "game_over"
+        outcome = "stalled" if stalled else "lost" if died else "won"
+        combat = {
+            "floor": floor, "hp_in": entry_hp, "hp_out": 0 if died else decision.player_hp,
+            "max_hp": max_hp, "turns": turns,
+        }
+        combats.append(combat)
+        self.recorder.record_combat(act, floor, len(combats), outcome, **{k: v for k, v in combat.items() if k != "floor"})
+        return decision, stalled
 
 
 class ForkJob(Job):

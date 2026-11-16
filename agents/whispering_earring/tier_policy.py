@@ -1,6 +1,7 @@
-"""Choices Paradox placeholder policy: card-value decisions backed by Baalorlord's per-character
-STS2 tier lists (see scripts/fetch_tier_lists.py and data/card_tiers.json), rather than a trained
-model. Purely functional and duck-typed on card-like objects (anything with `.id` and `.index`)
+"""Tier-list policy (moved here from the retired choices_paradox package): card-value decisions
+backed by Baalorlord's per-character STS2 tier lists (see scripts/fetch_tier_lists.py and
+tier_data/card_tiers.json), rather than a trained model. golden_compass's hazard net now owns map
+and card-reward picks; this still covers shop / remove / upgrade and the no-checkpoint fallback. Purely functional and duck-typed on card-like objects (anything with `.id` and `.index`)
 so it has no dependency on sts2-cli's schema types -- callers pass in whatever card objects their
 protocol client already gives them.
 
@@ -17,7 +18,7 @@ import random
 from typing import Protocol
 import numpy as np
 
-_DATA_PATH = Path(__file__).resolve().parent / "data" / "card_tiers.json"
+_DATA_PATH = Path(__file__).resolve().parent / "tier_data" / "card_tiers.json"
 
 _TIER_RANK = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1, "F": 0}
 _UNKNOWN_RANK = _TIER_RANK["C"]  # cards missing from the tier list (curses, statuses, new

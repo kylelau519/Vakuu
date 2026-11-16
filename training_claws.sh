@@ -34,20 +34,10 @@ while true; do
     export CLAWS_CHECKPOINT="$vakuu/agents/claws/model/claws.pt"
     [ -f "$CLAWS_CHECKPOINT" ] || unset CLAWS_CHECKPOINT
 
-    # policy.py's card_reward decisions upgrade to this trained net (if one exists yet) instead
-    # of the static tier-list heuristic -- see agents/whispering_earring/policy.py's
-    # _choose_card_reward_decision.
-    CHOICES_CHECKPOINT="$vakuu/agents/choices_paradox/model/choices_paradox.pt"
-    [ -f "$CHOICES_CHECKPOINT" ] || CHOICES_CHECKPOINT=""
-    export CHOICES_PARADOX_CHECKPOINT="$CHOICES_CHECKPOINT"
-
-    # map_select decisions upgrade to this trained net (if one exists yet) instead of
-    # golden_compass/policy.py's DP heuristic -- see agents/whispering_earring/policy.py's
-    # _choose_map_action. Trained by the separate training_golden_compass.sh loop, off this
-    # script's own data/raw output -- not produced here.
-    GOLDEN_COMPASS_CHECKPOINT_PATH="$vakuu/agents/golden_compass/model/golden_compass.pt"
-    [ -f "$GOLDEN_COMPASS_CHECKPOINT_PATH" ] || GOLDEN_COMPASS_CHECKPOINT_PATH=""
-    export GOLDEN_COMPASS_CHECKPOINT="$GOLDEN_COMPASS_CHECKPOINT_PATH"
+    # Mainline map / card-reward picks come from golden_compass.pt once it exists (trained by
+    # training_compass.sh or training_alternating.sh), the tier list / random before.
+    export GOLDEN_COMPASS_CHECKPOINT="$vakuu/agents/golden_compass/golden_compass.pt"
+    [ -f "$GOLDEN_COMPASS_CHECKPOINT" ] || unset GOLDEN_COMPASS_CHECKPOINT
 
     echo "[1/5] Cleaning up old raw data..."
     find "$vakuu/agents/whispering_earring/data/raw/" -maxdepth 1 -name '*.json' -delete
@@ -88,8 +78,8 @@ while true; do
     pkill -9 -f "multiprocessing.forkserver"
     # Belt-and-suspenders for the same problem facility_common.py's Facility.stop() now handles
     # at the source (each worker is its own process group, killed via os.killpg so its `dotnet
-    # run` Sts2Session children die with it) -- see training_choices.sh's matching line for the
-    # full explanation (confirmed by hand: an orphaned one of these can sit around for DAYS,
+    # run` Sts2Session children die with it) -- see training_alternating.sh / training_lib.sh's
+    # cleanup_procs for the full explanation (confirmed by hand: an orphaned one of these can sit around for DAYS,
     # invisible to the pkill above since that only ever matches the Python side).
     pkill -9 -f "sts2-cli/src/Sts2Headless"
 
