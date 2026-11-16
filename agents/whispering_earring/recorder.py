@@ -95,12 +95,12 @@ class CompactRecorder:
     def log_state(self, decision) -> None:
         pass  # state is derived by replay at materialization time, never stored here
 
-    def record_combat(self, act: int, floor: int, combat_index: int, outcome: str) -> None:
-        """Records one resolved combat's (act, floor, outcome) for the stats module
-        (see stats.py) -- cheap, already-known-live bookkeeping, not derived by replay
+    def record_combat(self, act: int, floor: int, combat_index: int, outcome: str, **extra) -> None:
+        """Records one resolved combat (act, floor, outcome, plus whatever else the caller already
+        knows live -- HP lost, per-turn records, ...) -- cheap bookkeeping, not derived by replay
         like everything else this recorder deliberately omits."""
         self._combats.append({
-            "act": act, "floor": floor, "combat_index": combat_index, "outcome": outcome,
+            "act": act, "floor": floor, "combat_index": combat_index, "outcome": outcome, **extra,
         })
 
     def log_error(self, message: str) -> None:
@@ -109,7 +109,9 @@ class CompactRecorder:
     def close(self) -> None:
         pass
 
-    def save(self, path: str, action_log: list[dict], outcome: str | None = None) -> dict:
+    def annotated_actions(self, action_log: list[dict]) -> list[dict]:
+        """action_log with this recorder's per-step `policy`/`value` merged in -- the form a trial
+        file stores, and what a job hands back in JobResult.record."""
         actions = []
         for i, cmd in enumerate(action_log):
             entry = dict(cmd)
@@ -118,9 +120,11 @@ class CompactRecorder:
             if i in self._values:
                 entry["value"] = self._values[i]
             actions.append(entry)
+        return actions
 
+    def save(self, path: str, action_log: list[dict], outcome: str | None = None) -> dict:
         data = dict(self.meta)
-        data["actions"] = actions
+        data["actions"] = self.annotated_actions(action_log)
         if outcome is not None:
             data["outcome"] = outcome
         if self.checkpoint_path is not None:
