@@ -21,6 +21,7 @@ WE_DATA="$vakuu/agents/whispering_earring/data"
 HISTORY_WINDOW="${HISTORY_WINDOW:-3}"
 
 source "$vakuu/training_lib.sh"
+install_traps
 
 SEEDS="${SEEDS:-train-1 train-2 train-3 train-4 train-5}"
 SEED_ARGS=()
@@ -42,6 +43,15 @@ while true; do
     python "$CLAWS_DIR/train.py" "$CLAWS_DIR/dataset.pt" --epochs 40 \
         --out "$CLAWS_DIR/claws.pt" --init "${CLAWS_CHECKPOINT:-}"
     backup_checkpoint "$CLAWS_DIR/claws.pt"
+
+    # Is Claws actually better? Fixed seeds, fixed non-combat policy, only the combat checkpoint changes
+    # (agents/whispering_earring/eval_claws.py). EVAL_RUNS=0 skips it; rows accumulate in data/claws_eval.jsonl.
+    if [ "${EVAL_RUNS:-40}" -gt 0 ]; then
+        [ "$ROUND" = 1 ] && python "$vakuu/agents/whispering_earring/eval_claws.py" --ckpt random \
+            --label "base" --runs "${EVAL_RUNS:-40}" --workers "${WORKERS:-8}" | tail -2
+        python "$vakuu/agents/whispering_earring/eval_claws.py" --ckpt "$CLAWS_DIR/claws.pt" \
+            --label "$(date +%d.%H%M)#$ROUND" --runs "${EVAL_RUNS:-40}" --workers "${WORKERS:-8}" | sed -n '/--- log/,$p'
+    fi
     cleanup_procs
 
     echo "=========================================== Round $ROUND: golden compass"

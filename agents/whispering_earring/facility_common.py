@@ -4,6 +4,7 @@ orchestration base class (NewFacility), and the stderr relay / live status board
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import atexit
 import multiprocessing as mp
 import os
 import random
@@ -73,6 +74,9 @@ class _LiveStatus:
             sys.stderr.flush()
 
     def scroll(self, text: str) -> None:
+        """Plain scrolling output, and a PERMANENT switch-off of the fixed rows (their cursor math only
+        holds while nothing else scrolls the terminal). Only for crash dumps and one-off notices; routine
+        progress belongs on the status row."""
         with self._lock:
             self.active = False
             sys.stderr.write(text if text.endswith("\n") else f"{text}\n")
@@ -112,12 +116,34 @@ class FacilityConfig:
     stall_timeout_s: float = 300.0
 
 
+def _die_with_parent(parent_pid: int) -> None:
+    """If the facility process disappears for any reason (a second Ctrl-C, SIGKILL, a closed terminal,
+    a crash), nothing else would ever stop this worker: it is in its own process group, so the terminal's
+    signals miss it, and it would run on holding its memory for as long as its job lasts or forever if
+    that job is stuck. A daemon thread polls for re-parenting and kills this whole process group
+    (the worker and anything it spawned)."""
+    def watch() -> None:
+        while True:
+            time.sleep(2)
+            if os.getppid() != parent_pid:
+                try:
+                    os.killpg(os.getpid(), signal.SIGKILL)
+                finally:
+                    os._exit(1)
+
+    threading.Thread(target=watch, daemon=True, name="die-with-parent").start()
+
+
 def _worker_process(
     worker_index: int, job_queue, priority_job_queue, log_queue, result_queue, stop_event, verbose: bool,
 ) -> None:
     """Entry point of one worker process. The BufferWorker -- and so its CLR session, which can't be
     pickled across a spawn -- is built here, inside the child."""
     os.setpgid(0, 0)  # own process group, so stop()'s killpg takes its dotnet children too
+    # Being in its own group means the terminal's Ctrl-C never reaches this process: shutdown is the
+    # facility's job (stop()), so a stray SIGINT must not half-kill a worker mid-run either.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    _die_with_parent(os.getppid())
     random.seed(os.urandom(16))  # a forked worker would otherwise replay its siblings' random choices
     _tag_worker_stderr("worker", worker_index, log_queue, verbose)
     BufferWorker(
@@ -140,10 +166,40 @@ class NewFacility(ABC):
         self.worker_procs: list[mp.Process] = []
         self.log_thread: threading.Thread | None = None
         self.live: _LiveStatus | None = None  # built in start() -- see _LiveStatus
+        self._interrupted = False
+        self._stopping = False
+
+    def _on_signal(self, signum, _frame) -> None:
+        """Ctrl-C / SIGTERM / SIGHUP (closing the terminal). The first one unwinds run() as a
+        KeyboardInterrupt, whose `finally: self.stop()` then kills the workers at once (an interrupted
+        run's in-flight jobs are lost either way). A second one while that is already happening means
+        "now": kill everything and leave."""
+        if self._stopping:
+            self._kill_all()
+            os._exit(128 + signum)
+        self._interrupted = True
+        raise KeyboardInterrupt
+
+    def _kill_all(self) -> None:
+        """SIGKILLs every worker's process group. Only workers still alive: a reaped worker's pid may
+        already belong to somebody else's process group by now."""
+        for p in self.worker_procs:
+            if p.is_alive():
+                try:
+                    os.killpg(p.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    p.kill()
 
     def start(self) -> None:
         ensure_setup()  # once, here -- not per-session, which would repeat the same checks
-        self.live = _LiveStatus([("worker", i) for i in range(self.cfg.n_branch_workers)])
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            signal.signal(sig, self._on_signal)
+        atexit.register(self._kill_all)  # whatever way this process exits, no worker outlives it
+        # One fixed row per worker plus a "status" row at the bottom for the facility's own running tally
+        # (see status()). Routine progress goes there, never through live.scroll(): scroll() switches the
+        # fixed rows off for good, which is for crash dumps and one-off notices only.
+        labels = [("worker", i) for i in range(self.cfg.n_branch_workers)] + [("status", 0)]
+        self.live = _LiveStatus(labels)
         self.log_thread = threading.Thread(
             target=self.live.loop, args=(self.log_queue,), daemon=True, name="log-writer",
         )
@@ -157,8 +213,16 @@ class NewFacility(ABC):
             p.start()
             self.worker_procs.append(p)
 
+    def status(self, text: str) -> None:
+        """Redraws the pinned status row in place (falls back to a plain line when stderr isn't a terminal)."""
+        self.live.update("status", 0, text)
+
     def stop(self, timeout: float = 90) -> None:
-        """Workers finish whatever is already queued, then exit (the None sentinels sit behind it)."""
+        """Workers finish whatever is already queued, then exit (the None sentinels sit behind it).
+        After an interrupt there is nothing worth waiting for: a short grace, then SIGKILL."""
+        self._stopping = True
+        if self._interrupted:
+            timeout = min(timeout, 2)
         self.stop_event.set()
         for _ in self.worker_procs:
             self.job_queue.put(None)

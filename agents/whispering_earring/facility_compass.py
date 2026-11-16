@@ -23,6 +23,9 @@ class FacilityCompass(NewFacility):
         super().__init__(cfg)
         self._started = 0
         self._jobs: dict[str, Job] = {}
+        self._floors: list[int] = []
+        self._tally = {"lost": 0, "won": 0, "censored": 0, "error": 0}
+        self._capped = 0
 
     def _more_runs(self) -> bool:
         return self.cfg.n_main_trials is None or self._started < self.cfg.n_main_trials
@@ -37,6 +40,29 @@ class FacilityCompass(NewFacility):
             self._jobs[job.uid()] = job
             self.job_queue.put(job)
 
+    def _record(self, uid: str, result) -> None:
+        """Folds one finished run into the running tally on the status row. (A failed job's own crash line is
+        already printed by the worker, so it only counts here.)"""
+        aux = result.auxiliary_data
+        if aux.get("error"):
+            self._tally["error"] += 1
+            last = f"{uid} FAILED"
+        else:
+            self._tally[result.outcome] = self._tally.get(result.outcome, 0) + 1
+            self._floors.append(aux["end_floor"])
+            last = f"{uid} {result.outcome} @floor {aux['end_floor']}"
+            if aux.get("capped"):
+                self._capped += 1
+                last += f" CAPPED ({aux['capped']})"
+        done = sum(self._tally.values())
+        total = self.cfg.n_main_trials if self.cfg.n_main_trials is not None else "inf"
+        mean = sum(self._floors) / len(self._floors) if self._floors else 0.0
+        self.status(
+            f"runs {done}/{total} | died {self._tally['lost']} won {self._tally['won']} "
+            f"stalled {self._tally['censored']} (capped {self._capped}) err {self._tally['error']} | "
+            f"mean floor {mean:.1f} best {max(self._floors, default=0)} | last: {last}"
+        )
+
     def run(self) -> None:
         self.start()
         try:
@@ -48,15 +74,7 @@ class FacilityCompass(NewFacility):
                     self.live.scroll(f"No result for {self.cfg.stall_timeout_s:.0f}s -- treating the pool as wedged.")
                     break
                 self._jobs.pop(uid, None)
-                error = result.auxiliary_data.get("error")
-                if error:
-                    self.live.scroll(f"{uid} failed: {error}")
-                else:
-                    aux = result.auxiliary_data
-                    self.live.scroll(
-                        f"{uid}: {result.outcome} on floor {aux['end_floor']}, "
-                        f"{len(aux['combats'])} combats, {aux['n_states']} states"
-                    )
+                self._record(uid, result)
                 self._top_up()
         except KeyboardInterrupt:
             self.live.scroll("Stopping facility (waiting for in-flight jobs to finish)...")

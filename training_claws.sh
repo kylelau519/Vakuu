@@ -31,6 +31,9 @@ SEEDS="${SEEDS:-train-1 train-2 train-3 train-4 train-5}"
 SEED_ARGS=()
 [ "$SEEDS" != "random" ] && SEED_ARGS=(--seeds $SEEDS --characters "${TRAIN_CHARACTER:-Ironclad}")
 
+source "$vakuu/training_lib.sh"
+install_traps
+
 ROUND=1
 
 while true; do
@@ -75,6 +78,15 @@ while true; do
     mkdir -p "$backup_dir"
     cp "$vakuu/agents/claws/model/claws.pt" \
         "$backup_dir/claws_$(date +%Y%m%d_%H%M%S).pt"
+
+    # Is Claws actually better? Fixed seeds, fixed non-combat policy, only the combat checkpoint changes
+    # (agents/whispering_earring/eval_claws.py). EVAL_RUNS=0 skips it; rows accumulate in data/claws_eval.jsonl.
+    if [ "${EVAL_RUNS:-40}" -gt 0 ]; then
+        [ "$ROUND" = 1 ] && python "$vakuu/agents/whispering_earring/eval_claws.py" --ckpt random \
+            --label "base" --runs "${EVAL_RUNS:-40}" --workers "${WORKERS:-8}" | tail -2
+        python "$vakuu/agents/whispering_earring/eval_claws.py" --ckpt "$vakuu/agents/claws/model/claws.pt" \
+            --label "$(date +%d.%H%M)#$ROUND" --runs "${EVAL_RUNS:-40}" --workers "${WORKERS:-8}" | sed -n '/--- log/,$p'
+    fi
 
     # Deliberately kill all the python multiprocessing to avoid zombie processes
     pkill -9 -f "multiprocessing.spawn"

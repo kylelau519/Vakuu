@@ -22,6 +22,7 @@ TRIALS="${COMPASS_TRIALS:-200}"
 WORKERS="${COMPASS_WORKERS:-15}"
 
 source "$vakuu/training_lib.sh"
+install_traps
 
 # SEEDS: the pool of seeds every run draws from, so progression shows on a few fixed maps. Default is
 # five; SEEDS="a b c" picks your own, SEEDS=random goes back to a fresh seed per run. One character

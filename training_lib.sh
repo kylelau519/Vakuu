@@ -1,12 +1,28 @@
 # Shared helpers for training_*.sh (source this; it does nothing on its own).
 
-cleanup_procs() {
+kill_stragglers() {
     # Python 3.14 switched Linux's default multiprocessing start method to "forkserver"; a wedged
-    # round's workers otherwise sit idle forever and pile up beside the next round's.
-    pkill -9 -f "multiprocessing.spawn"
-    pkill -9 -f "multiprocessing.forkserver"
-    pkill -9 -f "sts2-cli/src/Sts2Headless"
+    # round's workers otherwise sit idle forever and pile up beside the next round's. (Matches every
+    # such process on the machine, not only this script's -- don't run other multiprocessing jobs
+    # alongside a training loop.)
+    pkill -9 -f "multiprocessing.spawn" 2>/dev/null
+    pkill -9 -f "multiprocessing.forkserver" 2>/dev/null
+    pkill -9 -f "sts2-cli/src/Sts2Headless" 2>/dev/null
+    return 0
+}
+
+cleanup_procs() {
+    kill_stragglers
     sleep 5
+}
+
+# Ctrl-C / kill on a training script: the facility (see facility_common.py) already kills its own
+# workers within a few seconds and the workers kill themselves if it dies, so this is the backstop for
+# anything else a half-finished stage left behind (materialize's pool, an orphaned CLR host). Bash runs
+# the trap once the foreground python has exited, so the facility gets to clean up first.
+install_traps() {
+    trap 'echo; echo "Interrupted -- cleaning up leftover workers..."; kill_stragglers; exit 130' INT TERM HUP
+    trap kill_stragglers EXIT
 }
 
 # Moves a finished round's raw run JSON into history_dir/round_<timestamp>/ and prunes down to the
