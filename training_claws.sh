@@ -24,6 +24,13 @@ export OMP_NUM_THREADS=1
 # sts2-cli's build-time runtimeconfig.json at process start; no rebuild needed.
 export DOTNET_gcServer=0
 
+# SEEDS: the pool of seeds every run draws from, so progression shows on a few fixed maps. Default is
+# five; SEEDS="a b c" picks your own, SEEDS=random goes back to a fresh seed per run. One character
+# (TRAIN_CHARACTER, default Ironclad) because a seed plus a character is one map.
+SEEDS="${SEEDS:-train-1 train-2 train-3 train-4 train-5}"
+SEED_ARGS=()
+[ "$SEEDS" != "random" ] && SEED_ARGS=(--seeds $SEEDS --characters "${TRAIN_CHARACTER:-Ironclad}")
+
 ROUND=1
 
 while true; do
@@ -48,7 +55,7 @@ while true; do
     echo "[2/5] Running facility_claws.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility_claws.py" \
         --trials 5 --branch-workers 15 --forks-per-turn 40 --main-workers 3 \
-        --ascension 1 --raw-dir "$vakuu/agents/whispering_earring/data/raw"
+        --ascension 1 --raw-dir "$vakuu/agents/whispering_earring/data/raw" "${SEED_ARGS[@]}"
 
     # --target return while V is untrained or just reset; switch to q once V is calibrated.
     echo "[3/5] Materializing dataset..."

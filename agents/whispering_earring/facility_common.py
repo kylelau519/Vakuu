@@ -102,6 +102,7 @@ class _LiveStatus:
 class FacilityConfig:
     characters: list[str] = field(default_factory=lambda: ["Ironclad"])
     ascension: int = 0
+    seeds: list[str] | None = None  # runs cycle through these seeds in order (see utils.new_run); None = a fresh random seed per run
     forks_per_turn: int = 4  # alternative continuations played from every mainline combat turn
     n_branch_workers: int = 4
     n_main_workers: int = 1  # concurrent main lines, sharing one branch-worker pool
@@ -187,6 +188,11 @@ def add_common_cli_args(parser) -> None:
                          help="stop after this many main-line trials complete in total (default: run forever, Ctrl-C to stop)")
     parser.add_argument("--characters", nargs="+", default=["Ironclad"])
     parser.add_argument("--ascension", type=int, default=0)
+    parser.add_argument("--seeds", nargs="+", default=None,
+                         help="a small pool of seeds: runs cycle through them in order, so progression "
+                              "shows on a few fixed maps instead of a new one every run. Runs on the same seed "
+                              "still differ through the policy's own sampling. Use one --characters with it "
+                              "(default: a fresh random seed per run)")
     parser.add_argument("--branch-workers", type=int, default=4,
                          help="shared pool size -- serves branch jobs from every main worker, not "
                               "one dedicated set per main line (default: 4)")
