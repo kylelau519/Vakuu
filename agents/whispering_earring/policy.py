@@ -9,7 +9,7 @@ from pathlib import Path
 
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the import below)
 from env import Sts2Session
-from models import CombatPlay, Decision
+from models import Decision
 import buffer_layout as bl
 from buffer_env import BufferDecision, decode_token
 import torch
@@ -172,7 +172,7 @@ def _choose_card_reward_decision(
 
 
 def _choose_combat_action_claws(
-    decision: CombatPlay, net, combat_dirichlet_noise: bool = True
+    decision: BufferDecision, net, combat_dirichlet_noise: bool = True
 ) -> tuple[str, dict, dict]:
     """Samples from ClawsNet's own softmax for the best combat action, mixed with root Dirichlet noise """
 
@@ -191,8 +191,7 @@ def _choose_combat_action_claws(
 
 
 def _choose_combat_action(
-    decision: CombatPlay | BufferDecision, session: Sts2Session,
-    combat_dirichlet_noise: bool = True,
+    decision: BufferDecision, session: Sts2Session, combat_dirichlet_noise: bool = True,
 ) -> tuple[str, dict, dict]:
     """Samples a combat action from a trained ClawsNet if CLAWS_CHECKPOINT is set, falling back to
     a uniform-random placeholder policy otherwise"""
@@ -200,12 +199,7 @@ def _choose_combat_action(
     if net is not None:
         return _choose_combat_action_claws(decision, net, combat_dirichlet_noise)
 
-    options = (
-        _combat_options_from_buffer(decision.arr)
-        if isinstance(decision, BufferDecision)
-        else _combat_options_from_decision(decision)
-    )
-
+    options = _combat_options_from_buffer(decision.arr)
     chosen = random.choice(options)
     policy = [
         {"action": name, "args": args, "prob": 1.0 if (name, args) == chosen else 0.0}
@@ -215,28 +209,9 @@ def _choose_combat_action(
     return name, args, policy
 
 
-def _combat_options_from_decision(decision: CombatPlay) -> list[tuple[str, dict]]:
-    options: list[tuple[str, dict]] = [("end_turn", {})]
-
-    for card in decision.hand:
-        if not card.can_play or card.cost > decision.energy:
-            continue
-        args = {"card_index": card.index}
-        if card.target_type == "AnyEnemy" and len(decision.enemies) >= 2:
-            args["target_index"] = random.choice(decision.enemies).index
-        options.append(("play_card", args))
-
-    for potion in decision.player.potions:
-        args = {"potion_index": potion.index}
-        if potion.target_type == "AnyEnemy" and len(decision.enemies) >= 2:
-            args["target_index"] = random.choice(decision.enemies).index
-        options.append(("use_potion", args))
-
-    return options
-
-
 def _combat_options_from_buffer(arr) -> list[tuple[str, dict]]:
-    """Buffer counterpart to _combat_options_from_decision"""
+    """Uniform-random placeholder policy's options: every playable card (aimed at one random enemy when
+    it needs a target), every potion, and end_turn."""
     options: list[tuple[str, dict]] = [("end_turn", {})]
     en = bl.energy(arr)
     enemy_indices = [i for i, _ in bl.enemies(arr)]

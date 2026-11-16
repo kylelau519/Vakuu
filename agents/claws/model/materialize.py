@@ -1,39 +1,42 @@
-"""Turns whispering_earring trial files into tokenized training examples
+"""Turns whispering_earring's mainline + fork files into tokenized training examples.
 
-Every branch spawned by whispering_earring's turn-level branch-and-adopt (see
-../../whispering_earring/facility_claws.py) replays an identical shared prefix before diverging on
-its own first action, then plays out the rest of that turn unbranched (facility_claws.py's
-_play_turn_only) under one shared REINFORCE advantage (the branch's end-of-turn value vs. its
-group's baseline -- see _group_baseline). Scoring only ever used that first divergent action
-(comment left here in case a from-scratch rewrite is ever worth it: a branch's other siblings'
-later actions live in states nothing else in this pipeline ever visits, since recorder.py
-deliberately never persists per-step state and this codebase's native save/load only checkpoints
-at room boundaries, not mid-combat -- forking each sibling's own continuation from the shared
-divergence point would mean replaying its prefix from scratch, exactly the O(L^2) blowup
-materialize_main_and_groups's single-walk optimization exists to avoid).
+Data (see ../../whispering_earring/jobs.py, facility_claws.py): a mainline plays a run, every combat
+measured from full HP; every turn of every combat was then forked N times, each fork playing the
+combat out from that turn's start. Per combat turn t the *group* is {the mainline's own turn t} +
+{every fork of turn t}: same state, different continuations.
 
-What IS cheap: whichever sibling was actually adopted into the main line has its WHOLE turn's
-states already visited by this trial's own sequential replay (facility_claws.py's _absorb_actions
-copies an adopted branch's actions verbatim into the main line). materialize_main_and_groups
-scores that one sibling's later actions too (see _find_adopted_member), not just its first --
-train.py's per-example policy_loss is -advantage*log_prob(a_t), so emitting one example per
-(state, a_t) along that sibling's turn and letting them land anywhere across training batches
-sums to advantage*sum_t(log_prob(a_t)) for the whole trajectory, the standard multi-step REINFORCE
-objective, without train.py itself needing to know a trajectory boundary exists or this module
-paying for any replay it wasn't already doing.
+Two kinds of label, one example per combat_play decision:
+
+  value      V(state) = the HP actually lost from that decision to the end of the combat. Every
+             fork and mainline decision that is reached carries one, so V is trained on realized
+             outcomes (Monte Carlo), not on its own predictions.
+  advantage  only on decisions inside a group's compared turn (the first turn of a fork, or the
+             mainline's turn t): `baseline - cost` for that member, where cost is the member's
+             total remaining loss from that turn's start (`--target return`) or, once a trained V
+             was recording values, loss this turn + V(next turn's start) (`--target q`), and
+             baseline is the group's mean cost. Cost is HP lost, so lower is better: a member
+             that lost less than its group has a positive advantage.
+
+A fork's later turns have no group of their own, so only their turn-start decisions are kept, for V.
+
+Rebuilding states: the facility deletes its native saves, so this replays each mainline once from
+the start, taking a native save before every select_map_node, and reloads every fork of that run
+from those saves (Checkpoint.reload) -- one combat of replay per fork, not the whole run.
 
 Usage:
     conda activate sts2
-    python materialize.py ../../whispering_earring/data/raw/*.json --out dataset.pt
+    python materialize.py ../../whispering_earring/data/raw --out dataset.pt
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import sys
+import tempfile
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -47,8 +50,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # for `common`
 from common.tokenizer import EntityVocab  # noqa: E402
 
 import sts2_path  # noqa: E402,F401  (sets sys.path to sts2-cli/python before the imports below)
-from buffer_env import Sts2BufferSession  # noqa: E402
+from buffer_env import BufferDecision, Sts2BufferSession  # noqa: E402
 from installation import ensure_setup  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "whispering_earring"))  # for `checkpoint`
+from checkpoint import Checkpoint  # noqa: E402
 
 from model import GlobalVocab, legal_options_from_buffer, tokenize_from_buffer  # noqa: E402
 
@@ -57,432 +63,244 @@ from model import GlobalVocab, legal_options_from_buffer, tokenize_from_buffer  
 # this script is run directly, unloadable from any other module. Plain dicts sidestep that.
 Example = dict[str, Any]
 
+_FORK_FILE = re.compile(r"^(?P<main_id>.+)_c\d{3}t\d{2}_f\d{3}\.json$")
 
-def _same_option(option: tuple[str, dict], recorded: dict) -> bool:
-    return option[0] == recorded["action"] and option[1] == recorded.get("args", {})
+
+def _bare(entry: dict) -> dict:
+    """An action-log entry without the recorder's added policy/value."""
+    return {k: entry[k] for k in ("cmd", "action", "args", "hp") if k in entry}
+
+
+def _apply(session: Sts2BufferSession, entry: dict) -> BufferDecision:
+    if entry.get("cmd") == "set_hp":
+        return session.set_player_hp(entry["hp"])
+    return session.step(entry["action"], **entry.get("args", {}))
 
 
 def _option_index(options: list[tuple[str, dict]], entry: dict) -> int | None:
-    """Which slot in the model's own legal_options_from_buffer() matches the action a trial
-    actually recorded"""
-    for i, option in enumerate(options):
-        if _same_option(option, entry):
+    """Which slot in legal_options_from_buffer() matches the action a file recorded."""
+    for i, (name, args) in enumerate(options):
+        if name == entry["action"] and args == entry.get("args", {}):
             return i
     return None
 
 
-def _norm_action(entry: dict) -> tuple[str, tuple]:
-    """Hashable key for an {action, args} pair, used both to key the shared prefix a branch
-    trial replayed and to check how many distinct first actions its group's siblings sampled."""
-    return (entry["action"], tuple(sorted(entry.get("args", {}).items())))
+def _example(
+    decision: BufferDecision, gvocab: GlobalVocab, value: float, entry: dict | None, advantage: float | None,
+) -> Example:
+    """One combat_play decision. `entry` + `advantage` make it a policy example too."""
+    options = legal_options_from_buffer(decision)
+    batch = tokenize_from_buffer(decision, gvocab)
+    action_index = _option_index(options, entry) if entry is not None and advantage is not None else None
+    return {
+        "type_ids": batch.type_ids, "global_ids": batch.global_ids, "features": batch.features,
+        "player_pos": batch.player_pos, "hand_pos": batch.hand_pos, "enemy_pos": batch.enemy_pos,
+        "potion_pos": batch.potion_pos, "options": options,
+        "value": float(max(0, value)),
+        "action_index": action_index,
+        "advantage": float(advantage) if action_index is not None else 0.0,
+    }
+
+
+# --- groups --------------------------------------------------------------------------------------
 
 
 @dataclass
 class _Group:
-    """Everything materialize_group() needs for one (main_id, shared-prefix) group of sibling
-    branch trials, captured in _scan_trials's single read pass so no branch file ever needs to
-    be opened a second time. `members` holds each sibling's own post-divergence action entries
-    (`[{action, args, value}, ...]`) -- the branch's ENTIRE remaining turn, not just its first
-    novel action, so materialize_group()/materialize_main_and_groups() can score every action the
-    branch took under one shared advantage instead of only its first (see this module's docstring
-    on `sum(log_prob(a_t))`). `end_turn()`'s whole-range backfill (recorder.py) means every entry
-    in a member carries the same `value` -- reading it off entry 0 is enough for the baseline."""
-    main_id: str
-    character: str
-    seed: str
-    ascension: int
-    prefix_actions: list[dict]
-    members: list[list[dict]] = field(default_factory=list)
+    """The members of one (combat, turn) comparison, keyed "main" or a fork's index."""
+    advantages: dict[Any, float] = field(default_factory=dict)  # empty = no signal to learn from
 
 
-def _group_baseline(group: _Group) -> float | None:
-    """The REINFORCE baseline for this group's turn-start decision:"""
-    subkeys = {_norm_action(m[0]) for m in group.members}
-    if len(subkeys) < 2:
-        return None
-    return sum(m[0]["value"] for m in group.members) / len(group.members)
+def _costs(turn: dict, next_turn: dict | None) -> tuple[float, float | None]:
+    """(return, q): HP lost from this turn's start to the combat's end, and this turn's loss plus
+    V(next turn's start) -- None when V wasn't recorded."""
+    if next_turn is None:
+        return turn["g"], float(turn["loss"])  # the combat ended this turn: nothing left to predict
+    v_next = next_turn.get("v")
+    return turn["g"], None if v_next is None else turn["loss"] + v_next
 
 
-def _read_trial(path: str) -> dict:
-    return json.loads(Path(path).read_text())
+def _build_groups(main: dict, forks: list[dict], target: str) -> dict[tuple[int, int], _Group]:
+    members: dict[tuple[int, int], dict[Any, tuple[float, float | None]]] = defaultdict(dict)
+    for combat in main["combats"]:
+        if combat["outcome"] == "stalled":
+            continue
+        turns = combat["turns"]
+        for t, turn in enumerate(turns, start=1):
+            members[(combat["combat_index"], t)]["main"] = _costs(turn, turns[t] if t < len(turns) else None)
+    for fork in forks:
+        turns = fork["turns"]
+        key = (fork["combat_index"], fork["turn_index"])
+        members[key][fork["fork_index"]] = _costs(turns[0], turns[1] if len(turns) > 1 else None)
+
+    groups: dict[tuple[int, int], _Group] = {}
+    for key, costs in members.items():
+        use_q = target == "q" and all(q is not None for _, q in costs.values())
+        cost = {member: (q if use_q else g) for member, (g, q) in costs.items()}
+        group = groups[key] = _Group()
+        if len(cost) >= 2 and max(cost.values()) - min(cost.values()) > 1e-9:
+            baseline = sum(cost.values()) / len(cost)
+            group.advantages = {member: baseline - c for member, c in cost.items()}
+    return groups
 
 
-def _scan_trials(paths: list[str]) -> tuple[dict[str, str], dict[tuple, _Group]]:
-    """Single read pass over every trial file: classifies each as main-line or branch (grouped by the exact shared prefix
-    it replayed before diverging). The reads themselves run on a thread pool. Returns
-    (main_id -> path for every non-errored main-line trial, branch groups) -- main_id comes from
-    each main-line file's own recorded field (see facility_common.py's main_worker_loop, which
-    writes it as f"{character}_{seed}" -- same value every branch of that trial also carries),
-    read for free here since _read_trial already loaded the whole file."""
-    main_id_to_path: dict[str, str] = {}
-    groups: dict[tuple, _Group] = {}
-
-    with ThreadPoolExecutor(max_workers=min(32, (os.cpu_count() or 4) * 4)) as pool:
-        trials = pool.map(_read_trial, paths)
-        for path, trial in zip(paths, trials):
-            _scan_one(path, trial, main_id_to_path, groups)
-
-    return main_id_to_path, groups
+# --- replay --------------------------------------------------------------------------------------
 
 
-def _scan_one(path: str, trial: dict, main_id_to_path: dict[str, str], groups: dict[tuple, _Group]) -> None:
-    if trial.get("role") != "branch":
-        if trial.get("error") is None and trial.get("main_id") is not None:
-            main_id_to_path[trial["main_id"]] = path
-        return
-    if trial.get("branch_kind") == "meta":
-        return  # choices_paradox's own MetaBranchJob file (different prefix/action shape --
-        # see agents/choices_paradox/model/materialize.py, which is what actually reads these);
-        # only relevant if this ever points at a raw-dir shared with facility_choices_paradox.py
-    if trial.get("error") is not None:
-        return
+def _replay_main(
+    main: dict, groups: dict, gvocab: GlobalVocab, session: Sts2BufferSession, save_dir: str,
+) -> tuple[dict[int, str], list[Example]]:
+    """Replays the mainline from the start: native saves before the select_map_nodes its combats
+    entered through (returned, by action index), and an example for every combat_play decision."""
+    actions = main["actions"]
+    save_at = {c["save_index"] for c in main["combats"]}
 
-    prefix_len = trial.get("prefix_len")
-    actions = trial.get("actions", [])
-    if prefix_len is None or len(actions) <= prefix_len:
-        return
-    steps = actions[prefix_len:]  # the branch's whole post-divergence turn, not just its first
-    # action -- a branch trial only ever plays one turn (facility_claws.py's _play_turn_only), so
-    # this IS that turn's complete action sequence.
-    if "value" not in steps[0]:
-        return  # turn never resolved (branch errored mid-turn) -- no realized outcome
-
-    prefix_actions = actions[:prefix_len]
-    prefix_key = (trial["main_id"], tuple(_norm_action(a) for a in prefix_actions))
-    group = groups.get(prefix_key)
-    if group is None:
-        group = _Group(
-            main_id=trial["main_id"], character=trial["character"], seed=trial["seed"],
-            ascension=trial.get("ascension", 0), prefix_actions=prefix_actions,
+    # action index -> (combat, turn number) for every action a combat turn's range covers
+    turn_of: dict[int, tuple[dict, int]] = {}
+    for combat in main["combats"]:
+        if combat["outcome"] == "stalled":
+            continue
+        turns = combat["turns"]
+        end_of_combat = next(
+            (i for i in range(turns[-1]["start_index"], len(actions)) if actions[i].get("cmd") == "set_hp"),
+            len(actions),
         )
-        groups[prefix_key] = group
-    group.members.append(steps)
+        for t, turn in enumerate(turns, start=1):
+            end = turns[t]["start_index"] if t < len(turns) else end_of_combat
+            for i in range(turn["start_index"], end):
+                turn_of[i] = (combat, t)
+
+    saves: dict[int, str] = {}
+    examples: list[Example] = []
+    decision = session.start(main["character"], main["seed"], main.get("ascension", 0))
+    for i, entry in enumerate(actions):
+        if i in save_at:
+            assert entry["action"] == "select_map_node", f"{main['main_id']}: save index {i} is {entry}"
+            saves[i] = os.path.join(save_dir, f"{main['main_id']}_a{i:04d}.json")
+            session.save(saves[i])
+        if decision.decision == "combat_play" and i in turn_of:
+            combat, t = turn_of[i]
+            advantage = groups[(combat["combat_index"], t)].advantages.get("main")
+            remaining = decision.player_hp - (combat["max_hp"] - combat["loss"])
+            examples.append(_example(
+                decision, gvocab, remaining, entry if "policy" in entry else None, advantage,
+            ))
+        decision = _apply(session, _bare(entry))
+    return saves, examples
 
 
-def materialize_group(
-    group: _Group, gvocab: GlobalVocab, session: Sts2BufferSession
+def _replay_fork(
+    fork: dict, main: dict, saves: dict[int, str], groups: dict, gvocab: GlobalVocab, session: Sts2BufferSession,
 ) -> list[Example]:
-    """Replays this group's shared prefix exactly once, tokenizes the resulting turn-start
-    decision once, and emits one policy_real example per sibling directly from its own recorded
-    first action + value. Only used as a fallback for a branch group whose main-line file is
-    missing/errored (see main()) -- when the main file IS available,
-    materialize_main_and_groups() below both reaches the same checkpoint without replaying this
-    group's prefix from scratch AND (unlike this fallback) can score one sibling's WHOLE turn, not
-    just its first action -- see that function's docstring for why this path can't do the same:
-    with no main-line file, there's no way to tell which sibling would have been adopted, and
-    replaying every sibling's own remaining turn here would mean re-walking this group's prefix
-    once per sibling (this codebase's native save/load only checkpoints at room boundaries, not
-    mid-combat -- see BufferSession.SaveCheckpoint in sts2-cli -- so there's no cheap fork point
-    to replay each sibling's continuation from instead)."""
-    baseline = _group_baseline(group)
-    if baseline is None:
-        return []
+    combat = next(c for c in main["combats"] if c["combat_index"] == fork["combat_index"])
+    actions, prefix_len, turns = fork["actions"], fork["prefix_len"], fork["turns"]
+    decision = Checkpoint(
+        main["main_id"], main["character"], main["seed"], main.get("ascension", 0),
+        actions=[_bare(e) for e in actions[:prefix_len]],
+        save_path=saves[combat["save_index"]], save_index=combat["save_index"],
+    ).reload(session)
 
-    decision = session.start(group.character, group.seed, group.ascension)
-    for entry in group.prefix_actions:
-        decision = session.step(entry["action"], **entry.get("args", {}))
-    if decision.decision != "combat_play":
-        return []  # defensive -- a turn-start checkpoint should always land here
-
-    options = legal_options_from_buffer(decision)
-    batch = tokenize_from_buffer(decision, gvocab)
+    final_hp = decision.player_hp - turns[0]["g"]
+    turn_starts = {t["start_index"] for t in turns}
+    compared_end = turns[1]["start_index"] if len(turns) > 1 else len(actions)
+    advantage = groups[(fork["combat_index"], fork["turn_index"])].advantages.get(fork["fork_index"])
 
     examples: list[Example] = []
-    for member in group.members:
-        first = member[0]
-        action_index = _option_index(options, first)
-        if action_index is None:
-            continue
-        examples.append({
-            "type_ids": batch.type_ids,
-            "global_ids": batch.global_ids,
-            "features": batch.features,
-            "player_pos": batch.player_pos,
-            "hand_pos": batch.hand_pos,
-            "enemy_pos": batch.enemy_pos,
-            "potion_pos": batch.potion_pos,
-            "options": options,
-            "value": first["value"],
-            "action_index": action_index,
-            "advantage": first["value"] - baseline,
-            "policy_real": True,
-        })
+    for i in range(prefix_len, len(actions)):
+        entry = actions[i]
+        compared = i < compared_end
+        if decision.decision == "combat_play" and (compared or i in turn_starts):
+            examples.append(_example(
+                decision, gvocab, decision.player_hp - final_hp,
+                entry if compared and "policy" in entry else None, advantage if compared else None,
+            ))
+        decision = _apply(session, _bare(entry))
     return examples
 
 
-def _find_adopted_member(actions: list[dict], boundary: int, members: list[list[dict]]) -> list[dict] | None:
-    """Whichever member of a branch group is an exact match of the trial's OWN action log
-    starting at `boundary` -- guaranteed to exist (and be unique in practice) when that branch was
-    the one adopted into the main line, since facility_claws.py's _absorb_actions copies an
-    adopted branch's whole turn verbatim into the main recorder. Lets
-    materialize_main_and_groups score that one sibling's WHOLE turn using states its own
-    sequential walk visits anyway -- no extra engine replay, unlike every OTHER (non-adopted)
-    sibling, whose later states genuinely aren't available without forking the live session (see
-    materialize_group's docstring for why that fork isn't cheap here)."""
-    for member in members:
-        end = boundary + len(member)
-        if end > len(actions):
-            continue
-        if all(_norm_action(actions[boundary + k]) == _norm_action(member[k]) for k in range(len(member))):
-            return member
-    return None
-
-
-def materialize_main_and_groups(
-    path: str, own_groups: list[_Group], gvocab: GlobalVocab, session: Sts2BufferSession
+def materialize_run(
+    main_path: str, fork_paths: list[str], target: str, gvocab: GlobalVocab, session: Sts2BufferSession,
 ) -> list[Example]:
-    """Single sequential replay of one main-line trial, emitting its own per-turn
-    policy_real=False examples (same as this function used to do as materialize_main_trial) and,
-    at each shared-prefix boundary one of its OWN sibling branch groups diverged from, that
-    group's policy_real=True examples -- one per sibling's first action (same as materialize_group,
-    without re-replaying from action 0), PLUS every remaining action of whichever sibling was
-    actually adopted into this trial's own line (see _find_adopted_member and this module's
-    docstring on `sum(log_prob(a_t))`): those later actions are states this walk was already going
-    to visit for its own is_policy_point examples, so scoring them against the group's real
-    advantage instead of the flat placeholder costs nothing extra -- `extension_map` is what
-    carries a group's baseline forward from its boundary to those later positions.
-
-    The prefix-reuse trick works because whispering_earring's turn-level branch-and-adopt
-    (facility_claws.py) commits each turn's action to the main line before the next turn is even
-    branched -- so every branch group spawned off this trial replayed a prefix that is guaranteed
-    to be an EXACT prefix of this trial's own action log (verified against real data, 0 mismatches
-    across 840 branch files). Before this, each of a trial's branch groups independently replayed
-    its own prefix from scratch, so a trial with branch points every few turns paid for the sum of
-    every prefix length instead of just the trial's own length -- on one real ~126-action trial
-    with 28 branch groups, that was 1759 replayed steps instead of 126, a ~15x blowup that scales
-    O(L^2) in trial length rather than O(L)."""
-    trial = json.loads(Path(path).read_text())
-    if trial.get("error") is not None:
-        return []  # aborted trial -- no value signal, per ../README.md's Data section
-
-    groups_by_len: dict[int, list[_Group]] = defaultdict(list)
-    baselines: dict[int, float] = {}
-    for g in own_groups:
-        baseline = _group_baseline(g)
-        if baseline is None:
-            continue  # same guard materialize_group applies per-group
-        groups_by_len[len(g.prefix_actions)].append(g)
-        baselines[id(g)] = baseline
-
-    actions = trial["actions"]
-    examples: list[Example] = []
-    decision = session.start(trial["character"], trial["seed"], trial.get("ascension", 0))
-
-    # position -> (recorded entry, value, advantage) for an adopted sibling's 2nd-and-later
-    # actions, populated when its group's boundary is reached below and consumed as the walk
-    # passes through each later position.
-    extension_map: dict[int, tuple[dict, float, float]] = {}
-
-    for i in range(len(actions) + 1):
-        # i == len(actions) is a final sentinel pass -- covers the (unlikely but possible) case
-        # of a branch group whose prefix is the trial's ENTIRE action log -- without stepping
-        # anything further.
-        entry = actions[i] if i < len(actions) else None
-        extra = extension_map.pop(i, None)
-        is_policy_point = (
-            entry is not None and decision.decision == "combat_play" and "policy" in entry
-        )
-        groups_here = groups_by_len.get(i, [])
-        if is_policy_point or groups_here or extra is not None:
-            options = legal_options_from_buffer(decision)
-            batch = tokenize_from_buffer(decision, gvocab)
-            scored_by_extension = False
-            if extra is not None and decision.decision == "combat_play":
-                extra_entry, extra_value, extra_advantage = extra
-                action_index = _option_index(options, extra_entry)
-                if action_index is not None:
-                    examples.append({
-                        "type_ids": batch.type_ids,
-                        "global_ids": batch.global_ids,
-                        "features": batch.features,
-                        "player_pos": batch.player_pos,
-                        "hand_pos": batch.hand_pos,
-                        "enemy_pos": batch.enemy_pos,
-                        "potion_pos": batch.potion_pos,
-                        "options": options,
-                        "value": extra_value,
-                        "action_index": action_index,
-                        "advantage": extra_advantage,
-                        "policy_real": True,
-                    })
-                    scored_by_extension = True
-            if is_policy_point and not scored_by_extension:
-                # already scored with its real advantage via extension_map above -- the flat
-                # placeholder would only dilute that signal with a duplicate, zero-advantage copy
-                examples.append({
-                    "type_ids": batch.type_ids,
-                    "global_ids": batch.global_ids,
-                    "features": batch.features,
-                    "player_pos": batch.player_pos,
-                    "hand_pos": batch.hand_pos,
-                    "enemy_pos": batch.enemy_pos,
-                    "potion_pos": batch.potion_pos,
-                    "options": options,
-                    "value": entry.get("value", 0.0),
-                    "action_index": None,
-                    "advantage": 0.0,
-                    "policy_real": False,
-                })
-            if decision.decision == "combat_play":  # defensive -- see materialize_group's guard
-                for g in groups_here:
-                    baseline = baselines[id(g)]
-                    for member in g.members:
-                        first = member[0]
-                        action_index = _option_index(options, first)
-                        if action_index is None:
-                            continue
-                        examples.append({
-                            "type_ids": batch.type_ids,
-                            "global_ids": batch.global_ids,
-                            "features": batch.features,
-                            "player_pos": batch.player_pos,
-                            "hand_pos": batch.hand_pos,
-                            "enemy_pos": batch.enemy_pos,
-                            "potion_pos": batch.potion_pos,
-                            "options": options,
-                            "value": first["value"],
-                            "action_index": action_index,
-                            "advantage": first["value"] - baseline,
-                            "policy_real": True,
-                        })
-                    adopted = _find_adopted_member(actions, i, g.members)
-                    if adopted is not None and len(adopted) > 1:
-                        value = adopted[0]["value"]
-                        advantage = value - baseline
-                        for k in range(1, len(adopted)):
-                            extension_map[i + k] = (adopted[k], value, advantage)
-        if entry is None:
-            break
-        decision = session.step(entry["action"], **entry.get("args", {}))
-
+    main = json.loads(Path(main_path).read_text())
+    if main.get("error") is not None or not main.get("combats"):
+        return []  # an aborted run says nothing about its combats
+    forks = [json.loads(Path(p).read_text()) for p in fork_paths]
+    groups = _build_groups(main, forks, target)
+    with tempfile.TemporaryDirectory() as save_dir:
+        saves, examples = _replay_main(main, groups, gvocab, session, save_dir)
+        for fork in forks:
+            examples.extend(_replay_fork(fork, main, saves, groups, gvocab, session))
     return examples
 
+
+# --- driver --------------------------------------------------------------------------------------
 
 _gvocab: GlobalVocab | None = None
 _session: Sts2BufferSession | None = None
 
 
-def _silence_worker_stderr() -> None:
-    devnull_fd = os.open(os.devnull, os.O_WRONLY)
+def _init_worker() -> None:
+    devnull_fd = os.open(os.devnull, os.O_WRONLY)  # the engine logs every step to stderr
     os.dup2(devnull_fd, 2)
     os.close(devnull_fd)
-
-
-def _init_worker() -> None:
-    _silence_worker_stderr()
     global _gvocab, _session
     _gvocab = GlobalVocab(EntityVocab.load())
     _session = Sts2BufferSession()
 
 
-def _materialize_merged_task(
-    path: str, own_groups: list[_Group]
-) -> tuple[str, list[Example] | None, str | None]:
+def _task(main_path: str, fork_paths: list[str], target: str) -> tuple[str, list[Example] | None, str | None]:
     assert _gvocab is not None and _session is not None  # set by _init_worker before any task runs
-    label = path if not own_groups else f"{path} (+{len(own_groups)} branch group(s))"
+    label = f"{Path(main_path).stem} (+{len(fork_paths)} forks)"
     try:
-        examples = materialize_main_and_groups(path, own_groups, _gvocab, _session)
+        return label, materialize_run(main_path, fork_paths, target, _gvocab, _session), None
     except Exception as e:
         return label, None, f"{type(e).__name__}: {e}"
-    return label, examples, None
-
-
-def _materialize_group_task(group: _Group) -> tuple[str, list[Example] | None, str | None]:
-    assert _gvocab is not None and _session is not None
-    label = f"group({group.main_id}, {len(group.prefix_actions)}-action prefix, {len(group.members)} branches)"
-    try:
-        examples = materialize_group(group, _gvocab, _session)
-    except Exception as e:
-        return label, None, f"{type(e).__name__}: {e}"
-    return label, examples, None
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "trials", nargs="+",
-        help="trial JSON files, or directories to glob *.json from (data/raw/*.json) -- "
-             "directories let a huge data/raw/ be passed as one argument instead of a shell-"
-             "expanded file list, which can exceed the OS's exec argument-length limit",
-    )
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("trials", nargs="+", help="trial JSON files, or directories to glob *.json from")
     parser.add_argument("--out", default="dataset.pt")
-    parser.add_argument(
-        "--jobs", "-j", type=int, default=os.cpu_count(),
-        help="parallel worker processes, each loading its own in-process sts2-cli CLR session "
-             "(default: cpu count)",
-    )
+    parser.add_argument("--target", choices=["return", "q"], default="return",
+                        help="what a member's cost is: the HP it actually lost to the combat's end "
+                             "(return, unbiased -- use while V is untrained), or its loss this turn plus the "
+                             "recorded V(next turn) (q; groups without recorded V fall back to return)")
+    parser.add_argument("--jobs", "-j", type=int, default=os.cpu_count(),
+                        help="parallel worker processes, one in-process sts2-cli session each (default: cpu count)")
     args = parser.parse_args()
 
-    trial_paths: list[str] = []
+    paths: list[str] = []
     for trial in args.trials:
-        if os.path.isdir(trial):
-            trial_paths.extend(sorted(str(p) for p in Path(trial).glob("*.json")))
+        paths.extend(sorted(str(p) for p in Path(trial).glob("*.json")) if os.path.isdir(trial) else [trial])
+
+    forks_of: dict[str, list[str]] = defaultdict(list)
+    mains: dict[str, str] = {}
+    for path in paths:
+        match = _FORK_FILE.match(Path(path).name)
+        if match:
+            forks_of[match["main_id"]].append(path)
         else:
-            trial_paths.append(trial)
+            mains[Path(path).stem] = path
+    orphans = sum(len(v) for k, v in forks_of.items() if k not in mains)
+    print(f"{len(mains)} mainline run(s), {sum(len(v) for v in forks_of.values()) - orphans} fork(s)"
+          + (f", {orphans} fork(s) without a mainline file skipped" if orphans else ""))
 
-    # Once, here, in the parent -- not per worker, so a first-time DLL copy/build (see
-    # ensure_setup) can't race across several worker processes hitting it at once.
-    ensure_setup()
+    ensure_setup()  # once, in the parent, so a first-time build can't race across workers
 
-    # Single read pass (cheap -- no CLR session needed, just reading the files) that both
-    # separates out main-line trials and groups every branch trial by its shared prefix -- see
-    # _scan_trials's docstring.
-    main_id_to_path, groups = _scan_trials(trial_paths)
-    real_groups = {k: g for k, g in groups.items() if _group_baseline(g) is not None}
-    print(f"{len(main_id_to_path)} main-line trial(s), {len(groups)} branch group(s) "
-          f"({len(real_groups)} with real cross-branch signal)")
-
-    # Every group replays a prefix of its OWN main trial's action log (branch-and-adopt commits
-    # each turn before the next is even branched -- see materialize_main_and_groups's docstring),
-    # so route each group through one shared walk of its main file instead of replaying its
-    # prefix from scratch. A group only falls back to the old from-scratch replay when its main
-    # file is missing/errored (excluded from main_id_to_path above).
-    groups_by_main_id: dict[str, list[_Group]] = defaultdict(list)
-    for group in groups.values():
-        groups_by_main_id[group.main_id].append(group)
-    orphan_groups = [
-        g for main_id, gs in groups_by_main_id.items() if main_id not in main_id_to_path for g in gs
-    ]
-    if orphan_groups:
-        print(f"{len(orphan_groups)} branch group(s) have no matching main-line file -- "
-              f"replaying independently from action 0")
-
-    all_examples: list[Example] = []
-    per_file_counts: list[tuple[str, int]] = []
+    examples: list[Example] = []
     with ProcessPoolExecutor(max_workers=args.jobs, initializer=_init_worker) as pool:
-        futures = [
-            pool.submit(_materialize_merged_task, path, groups_by_main_id.get(main_id, []))
-            for main_id, path in main_id_to_path.items()
-        ]
-        futures += [pool.submit(_materialize_group_task, group) for group in orphan_groups]
+        futures = [pool.submit(_task, path, forks_of.get(main_id, []), args.target) for main_id, path in mains.items()]
         for future in as_completed(futures):
-            label, examples, error = future.result()
+            label, result, error = future.result()
             if error is not None:
                 print(f"skip {label}: {error}")
                 continue
-            assert examples is not None
-            if examples:
-                per_file_counts.append((label, len(examples)))
-            all_examples.extend(examples)
+            examples.extend(result)
 
-    _print_truncated_counts(per_file_counts)
-    torch.save(all_examples, args.out)
-    print(f"wrote {len(all_examples)} examples to {args.out}")
-
-
-def _print_truncated_counts(per_file_counts: list[tuple[str, int]], head_tail: int = 5) -> None:
-    """Print "{label}: N examples" per file, but only the first/last `head_tail` when there are
-    many -- with hundreds of raw trial files the full per-file listing just floods the terminal."""
-    total = len(per_file_counts)
-    if total <= 2 * head_tail:
-        for label, n in per_file_counts:
-            print(f"{label}: {n} examples")
-        return
-    for label, n in per_file_counts[:head_tail]:
-        print(f"{label}: {n} examples")
-    print(f"... ({total - 2 * head_tail} more files) ...")
-    for label, n in per_file_counts[-head_tail:]:
-        print(f"{label}: {n} examples")
+    scored = sum(ex["action_index"] is not None for ex in examples)
+    print(f"{len(examples)} examples ({scored} with a policy advantage)")
+    torch.save(examples, args.out)
+    print(f"wrote {args.out}")
 
 
 if __name__ == "__main__":
