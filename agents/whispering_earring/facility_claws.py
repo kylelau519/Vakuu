@@ -14,7 +14,7 @@ import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imp
 from checkpoint import Checkpoint
 from facility_common import FacilityConfig, NewFacility, add_common_cli_args
 from jobs import ForkJob, Job, JobResult, MainlineJob
-from utils import random_seed
+from utils import new_run
 
 
 class FacilityClaws(NewFacility):
@@ -34,9 +34,8 @@ class FacilityClaws(NewFacility):
 
     def _start_run(self) -> None:
         character = random.choice(self.cfg.characters)
-        seed = random_seed()
+        seed, main_id = new_run(character, self.cfg.seeds, self._started)
         self._started += 1
-        main_id = f"{character}_{seed}"
         self._forks_left[main_id] = 1  # the mainline itself; forks are added when it returns
         self._submit(MainlineJob(
             Checkpoint.fresh(main_id, character, seed, self.cfg.ascension), self._save_dir, self.cfg.raw_dir,
@@ -117,6 +116,7 @@ if __name__ == "__main__":
         FacilityConfig(
             characters=args.characters,
             ascension=args.ascension,
+            seeds=args.seeds,
             n_branch_workers=args.branch_workers,
             forks_per_turn=args.forks_per_turn,
             n_main_workers=args.main_workers,

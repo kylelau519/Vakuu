@@ -1,3 +1,4 @@
+import os
 import random
 import re
 from buffer_env import BufferDecision
@@ -14,6 +15,17 @@ BOSS_WIN_FLOOR = 0.8
 
 def random_seed() -> str:
     return f"{random.choice(SEED_WORDS)}-{random.randint(0, 999_999)}"
+
+
+def new_run(character: str, seeds: list[str] | None, index: int = 0) -> tuple[str, str]:
+    """(seed, main_id) for the `index`-th new run. With a seed pool the runs cycle through it in order, so
+    every seed gets an equal share; the same seed then recurs across runs, so the main_id (which names the run's files) gets a random suffix.
+    Without one every run gets a fresh random seed, which alone is unique enough."""
+    if not seeds:
+        seed = random_seed()
+        return seed, f"{character}_{seed}"
+    seed = seeds[index % len(seeds)]
+    return seed, f"{character}_{seed}_{os.urandom(3).hex()}"
 
 
 # Strips ANSI/terminal control sequences (CSI, OSC, lone ESC) and other C0 control bytes (except

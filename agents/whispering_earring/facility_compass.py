@@ -15,7 +15,7 @@ import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imp
 from checkpoint import Checkpoint
 from facility_common import FacilityConfig, NewFacility, add_common_cli_args
 from jobs import Job, RunJob
-from utils import random_seed
+from utils import new_run
 
 
 class FacilityCompass(NewFacility):
@@ -31,9 +31,8 @@ class FacilityCompass(NewFacility):
         """Keeps two jobs per worker queued so no worker idles between runs."""
         while self._more_runs() and len(self._jobs) < 2 * self.cfg.n_branch_workers:
             character = random.choice(self.cfg.characters)
-            seed = random_seed()
+            seed, main_id = new_run(character, self.cfg.seeds, self._started)
             self._started += 1
-            main_id = f"{character}_{seed}"
             job = RunJob(Checkpoint.fresh(main_id, character, seed, self.cfg.ascension), self.cfg.raw_dir)
             self._jobs[job.uid()] = job
             self.job_queue.put(job)
@@ -76,6 +75,7 @@ if __name__ == "__main__":
         FacilityConfig(
             characters=args.characters,
             ascension=args.ascension,
+            seeds=args.seeds,
             n_branch_workers=args.branch_workers,
             n_main_trials=args.trials,
             raw_dir=args.raw_dir,
