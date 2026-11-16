@@ -102,7 +102,7 @@ class _LiveStatus:
 class FacilityConfig:
     characters: list[str] = field(default_factory=lambda: ["Ironclad"])
     ascension: int = 0
-    branches_per_turn: int = 3  # side-copies spawned per combat turn, on top of the main line
+    forks_per_turn: int = 4  # alternative continuations played from every mainline combat turn
     n_branch_workers: int = 4
     n_main_workers: int = 1  # concurrent main lines, sharing one branch-worker pool
     n_main_trials: int | None = 1  # stop after this many main-line trials *total*; None = forever
