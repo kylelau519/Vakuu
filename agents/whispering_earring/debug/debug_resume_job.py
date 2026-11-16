@@ -2,7 +2,7 @@
 replay of the same actions does -- including from a checkpoint with nothing left to replay, and from
 one several actions into a room?
 
-Plays one TestJob run (which saves a native checkpoint at every map_select), then for a spread of
+Plays one TrialJob run (which saves a native checkpoint at every map_select), then for a spread of
 those checkpoints compares, on a fresh session each:
   fast: Checkpoint.reload() through the native save
   slow: the same actions, no save (full open_from_checkpoint replay)
@@ -31,7 +31,9 @@ import buffer_layout as bl  # noqa: E402
 from buffer_env import Sts2BufferSession  # noqa: E402
 from checkpoint import Checkpoint  # noqa: E402
 from installation import ensure_setup  # noqa: E402
-from jobs import TestJob, TEST_CHECKPOINT_DIR  # noqa: E402
+from jobs import TrialJob  # noqa: E402
+
+TEST_CHECKPOINT_DIR = "data/test_checkpoints"
 from workers import BufferWorker  # noqa: E402
 
 
@@ -138,14 +140,15 @@ def main() -> int:
     main_id = f"{args.character}_{args.seed}"
     worker = BufferWorker(mp.Queue(), mp.Queue(), mp.Queue(), mp.Queue(), 0)
     try:
-        result = TestJob(Checkpoint.fresh(main_id, args.character, args.seed, args.ascension)).execute(
+        result = TrialJob(Checkpoint.fresh(main_id, args.character, args.seed, args.ascension),
+                          save_dir=TEST_CHECKPOINT_DIR).execute(
             worker._work_station)
     finally:
         worker.close_work_station()
 
     checkpoints: list[Checkpoint] = result.auxiliary_data["checkpoints"]
     full = result.action_log
-    print(f"TestJob {main_id}: {result.outcome}, {len(full)} actions, {len(checkpoints)} saved checkpoints")
+    print(f"TrialJob {main_id}: {result.outcome}, {len(full)} actions, {len(checkpoints)} saved checkpoints")
     if not checkpoints:
         print("no checkpoints were saved -- nothing to verify")
         return 1

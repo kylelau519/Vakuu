@@ -12,9 +12,6 @@ from policy import choose_action, choose_generic_action, get_claws_net
 from recorder import CompactRecorder
 from utils import BOSS_HP_WEIGHT, HP_WEIGHT, bypass_card_reward, combat_value
 
-TEST_CHECKPOINT_DIR = "data/test_checkpoints"
-
-
 # This should have enough information to create a save .json, resume, and materialize for training.
 @dataclass
 class JobResult:
@@ -63,36 +60,41 @@ class Job(ABC):
 
 
 class TrialJob(Job):
-    """The main line of one run. Skeleton: the combat/map handlers are the next piece of the refactor."""
+    """A whole run played with the generic policy (uniform-random combat; heuristics for map and
+    cards). With raw_dir it saves raw_dir/{main_id}.json in the trial format materialize.py reads.
+    With save_dir it also takes a native save at every map_select and returns each as a Checkpoint in
+    auxiliary_data["checkpoints"] -- how the debug scripts get resume points to test."""
     role = "main"
 
-    def __init__(self, checkpoint: Checkpoint, combat_index: int = 0):
+    def __init__(self, checkpoint: Checkpoint, raw_dir: str | None = None, save_dir: str | None = None):
         super().__init__(checkpoint)
-        self.combat_index = combat_index
+        self.raw_dir = raw_dir
+        self.save_dir = save_dir
 
     def execute(self, session: Sts2BufferSession | Sts2Session) -> JobResult:
         decision = self.begin(session)
-
+        purpose = None
+        checkpoints: list[Checkpoint] = []
         while decision.decision != "game_over":
-            if decision.decision == "combat_play":
-                decision = self._resolve_combat_play(session, decision)
-            elif decision.decision == "select_map_node":
-                decision = self._resolve_select_map_node(session, decision)
-            else:
-                raise NotImplementedError(f"TrialJob can't resolve {decision.decision!r} yet")
+            if self.save_dir is not None and decision.decision == "map_select":
+                # Named by action index, so every save is unique -- a later save can never
+                # overwrite one a job is still waiting to load.
+                save_path = os.path.join(self.save_dir, f"{self.main_id}_a{len(session.action_log):04d}.json")
+                os.makedirs(self.save_dir, exist_ok=True)
+                session.save(save_path)
+                checkpoints.append(self.checkpoint.saved_from(session, save_path))
+            name, kwargs, purpose, policy = choose_generic_action(decision, purpose)
+            if policy is not None:
+                session.logger.attach_policy(policy)
+            decision = session.step(name, **kwargs)
+
+        outcome = "won" if decision.victory else "lost"
+        if self.raw_dir is not None:
+            self.recorder.save(os.path.join(self.raw_dir, f"{self.main_id}.json"), session.action_log, outcome=outcome)
         return JobResult(
-            main_id=self.main_id,
-            outcome="won" if decision.victory else "lost",
-            action_log=session.action_log,
-            decision=decision,
+            main_id=self.main_id, outcome=outcome, action_log=session.action_log, decision=decision,
+            auxiliary_data={"checkpoints": checkpoints},
         )
-
-    def _resolve_combat_play(self, session, decision: BufferDecision) -> BufferDecision:
-        self.combat_index += 1
-        raise NotImplementedError
-
-    def _resolve_select_map_node(self, session, decision: BufferDecision) -> BufferDecision:
-        raise NotImplementedError
 
 
 class CombatTurnJob(Job):
@@ -198,57 +200,4 @@ class WholeCombatJob(Job):
             action_log=session.action_log,
             outcome="won" if decision.decision == "card_reward" else "lost",
             decision=decision,
-        )
-
-
-class TestJob(Job):
-    """Plays a whole run with the network-free generic policy, saving a native checkpoint at every
-    map_select. Each save comes back as a Checkpoint in auxiliary_data["checkpoints"], so any later
-    job can resume from it."""
-    role = "test"
-    __test__ = False  # not a pytest class
-
-    def execute(self, session: Sts2BufferSession) -> JobResult:
-        decision = self.begin(session)
-        purpose = None
-        room_index = 0
-        in_turn = False
-        hp_before_turn = 0
-        enemies_hp_before_turn = 0.0
-        turns: list[dict] = []  # per-combat-turn aux stats, not a training value -- see JobResult.auxiliary_data
-        checkpoints: list[Checkpoint] = []
-
-        while decision.decision != "game_over":
-            if decision.decision == "map_select":
-                room_index += 1
-                os.makedirs(TEST_CHECKPOINT_DIR, exist_ok=True)
-                # room_index, not floor: unique per save even across acts, so a later save can
-                # never overwrite one a job is still waiting to load.
-                save_path = os.path.join(TEST_CHECKPOINT_DIR, f"{self.main_id}_r{room_index:03d}.json")
-                session.save(save_path)
-                checkpoints.append(self.checkpoint.saved_from(session, save_path))
-
-            if decision.decision == "combat_play" and not in_turn:
-                in_turn = True
-                hp_before_turn = decision.player_hp
-                enemies_hp_before_turn = float(decision.get_enemies_hp().sum())
-
-            name, kwargs, purpose, policy = choose_generic_action(decision, purpose)
-            if policy is not None:
-                session.logger.attach_policy(policy)
-            decision = session.step(name, **kwargs)
-
-            if in_turn and (name == "end_turn" or decision.decision in ("card_reward", "game_over")):
-                turns.append({
-                    "damage_taken": max(0, hp_before_turn - decision.player_hp),
-                    "damage_done": max(0.0, enemies_hp_before_turn - float(decision.get_enemies_hp().sum())),
-                })
-                in_turn = False
-
-        return JobResult(
-            main_id=self.main_id,
-            action_log=session.action_log,
-            outcome="won" if decision.victory else "lost",
-            decision=decision,
-            auxiliary_data={"turns": turns, "checkpoints": checkpoints},
         )
