@@ -33,12 +33,13 @@ CLAWS_CHECKPOINT=../claws/model/claws.pt python facility_claws.py --trials 10 ..
 
 | File | Role |
 |---|---|
-| `jobs.py` | `Job`, `JobResult`, `MainlineJob`, `ForkJob`, `TrialJob` |
+| `jobs.py` | `Job`, `JobResult`, `MainlineJob`, `ForkJob`, `RunJob` (real-HP run that logs the hazard net's states), `TrialJob` |
 | `checkpoint.py` | `Checkpoint`: a run's full action history plus an optional native save, so any job resumes by `load_save` + replaying only what followed it |
 | `workers.py` | `BufferWorker`: one session, pulls jobs, reports results |
 | `facility_common.py` | `FacilityConfig`, `NewFacility` (worker pool, queues, stop), stderr relay / live status board, shared CLI flags |
 | `facility_claws.py` | `FacilityClaws`: mainline + fork scheduling, CLI |
-| `policy.py` | `choose_action` -- combat is uniform-random, or sampled from `ClawsNet` when `CLAWS_CHECKPOINT` is set; other decisions delegate to the choices_paradox / golden_compass policies |
+| `facility_compass.py` | `FacilityCompass`: plain `RunJob` runs for golden_compass, CLI |
+| `policy.py` | `choose_action` -- combat is uniform-random, or sampled from `ClawsNet` when `CLAWS_CHECKPOINT` is set; map and card-reward decisions go to golden_compass's hazard net (`GOLDEN_COMPASS_CHECKPOINT`; uniform random / the tier list without one), shop / remove / upgrade use `tier_policy.py` |
 | `recorder.py` | `CompactRecorder`: per-run action log with the policy recorded at each step |
 | `utils.py` | seeds, log regexes, shared constants |
 | `debug/` | repro and verification scripts (`debug_resume_job.py`: reload equals full replay; `debug_set_hp.py`: the `set_hp` log entry) |

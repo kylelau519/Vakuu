@@ -24,7 +24,7 @@ Conda environment: `conda activate sts2`
 ```
 mod/       C# Godot mod — state extraction + headless trial driver
 schema/    state/action schema; the contract mod/ and agents/ both validate against
-agents/    Python: choices_paradox/, golden_compass/, claws/, whispering_earring/
+agents/    Python: golden_compass/, claws/, whispering_earring/
 data/      generated trials — gitignored, reproduced from manifests, never committed
 docs/
 ```

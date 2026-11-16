@@ -12,10 +12,6 @@ HP_WEIGHT = 0.75
 BOSS_HP_WEIGHT = 0.2
 BOSS_WIN_FLOOR = 0.8
 
-GOLDEN_COMPASS_GAMMA = 0.9
-GOLDEN_COMPASS_ELITE_BONUS = 2.0
-GOLDEN_COMPASS_BOSS_BONUS = 3.0
-
 def random_seed() -> str:
     return f"{random.choice(SEED_WORDS)}-{random.randint(0, 999_999)}"
 

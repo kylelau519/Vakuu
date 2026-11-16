@@ -182,7 +182,7 @@ class NewFacility(ABC):
 
 
 def add_common_cli_args(parser) -> None:
-    """Flags shared by facility_claws.py's and facility_choices_paradox.py's CLIs."""
+    """Flags shared by facility_claws.py's and facility_compass.py's CLIs."""
     parser.add_argument("--trials", type=int, default=None,
                          help="stop after this many main-line trials complete in total (default: run forever, Ctrl-C to stop)")
     parser.add_argument("--characters", nargs="+", default=["Ironclad"])

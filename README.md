@@ -49,9 +49,8 @@ whispering_earring/facility_*.py  ->  data/raw*/ (trial JSON)
 | Path | Contents |
 |---|---|
 | `agents/claws/` | Combat model (`ClawsNet`): feature table in the README, transformer trunk, policy/value heads, `materialize.py`, `train.py` |
-| `agents/choices_paradox/` | Deckbuilding/meta model (`ChoicesParadoxNet`) plus the tier-list heuristic used until a checkpoint exists |
-| `agents/golden_compass/` | Map-path model plus the DP heuristic in `policy.py` used until a checkpoint exists |
-| `agents/whispering_earring/` | Self-play facility: `facility_claws.py`, `facility_choices_paradox.py`, `facility_compass.py`, shared core in `facility_common.py`, `policy.py`, `recorder.py`, `checkpoint.py`, and `debug/` repro scripts |
+| `agents/golden_compass/` | Hazard net for map and card-reward choices (replaces the old Golden Compass and Choices Paradox): per-floor death hazard from the run state, choices scored as afterstates. See its README |
+| `agents/whispering_earring/` | Self-play facility: `facility_claws.py` (combat data), `facility_compass.py` (real-HP runs for the hazard net), shared core in `facility_common.py`, `policy.py`, `recorder.py`, `checkpoint.py`, `tier_policy.py` (shop / remove / upgrade fallback), and `debug/` repro scripts |
 | `agents/common/` | Shared tokenizer, embeddings and vocab |
 | `training_*.sh` | Generate -> materialize -> train loops (see below) |
 | `watchdog_overnight.sh` | Runs a training loop under a hard wall-clock limit and restarts it (there is a known, not-yet-root-caused hang inside a round) |
@@ -79,8 +78,7 @@ game DLLs from your Steam install; those binaries are never vendored here.
 Smoke test:
 
 ```sh
-python agents/whispering_earring/facility_choices_paradox.py --trials 1 --branch-workers 1 \
-  --main-workers 1 --branches-per-turn 1 --meta-branches-per-trial 1 --ascension 1 \
+python agents/whispering_earring/facility_compass.py --trials 1 --branch-workers 1 --ascension 1 \
   --raw-dir /tmp/smoke_test
 ```
 
@@ -89,21 +87,19 @@ Training loops, each repeating generate -> materialize -> train per round:
 | Script | Trains |
 |---|---|
 | `training_claws.sh` | Claws |
-| `training_choices.sh` | Choices Paradox |
-| `training_golden_compass.sh` | Golden Compass (reuses the trials the other two generate) |
-| `training_alternating.sh` | Rotates through the above |
-| `training_debug.sh` | Small configuration for debugging the loop |
+| `training_compass.sh` | Golden Compass (real-HP runs, played by the current Claws) |
+| `training_alternating.sh` | One round of Claws, then one of Golden Compass |
 
-Edit the `vakuu` path at the top of each script for your machine. `reset.sh` wipes all generated
+Shared helpers are in `training_lib.sh`. Set `vakuu` in the environment if the repo isn't at the default path. `reset.sh` wipes all generated
 data and checkpoints and writes fresh random-init `.pt` files.
 
-Set `CLAWS_CHECKPOINT` / `CHOICES_PARADOX_CHECKPOINT` to make `policy.py` sample from a trained
+Set `CLAWS_CHECKPOINT` / `GOLDEN_COMPASS_CHECKPOINT` to make `policy.py` sample from a trained
 network instead of the placeholder heuristics.
 
 ## Status
 
 Active, pre-deployment. The self-play facility, buffer-protocol branch workers, native checkpoint
-branching and all three training pipelines are wired end to end. Open problems include a known hang
+branching and both training pipelines are wired end to end. Open problems include a known hang
 inside training rounds, an Act 1 boss wall that may come from deck quality rather than combat skill,
 and the open question of a unified network.
 

@@ -25,4 +25,4 @@ python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
 
 echo
 echo "Setup complete. Activate with: source Vakuu/.venv/bin/activate"
-echo "Smoke test: cd Vakuu && python agents/whispering_earring/facility_choices_paradox.py --trials 1 --branch-workers 1 --main-workers 1 --branches-per-turn 1 --meta-branches-per-trial 1 --ascension 1 --raw-dir /tmp/smoke_test"
+echo "Smoke test: cd Vakuu && python agents/whispering_earring/facility_compass.py --trials 1 --branch-workers 1 --ascension 1 --raw-dir /tmp/smoke_test"

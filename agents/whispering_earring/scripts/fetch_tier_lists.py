@@ -12,7 +12,7 @@ Only the factual ranking (tier, order, good_upgrade, max_copies) is kept -- the 
 `commentary` text is proprietary editorial content from untapped.gg, not code, so it isn't
 vendored into this repo.
 
-Run: python agents/choices_paradox/scripts/fetch_tier_lists.py
+Run: python agents/whispering_earring/scripts/fetch_tier_lists.py
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ import re
 import urllib.request
 from pathlib import Path
 
-# Baalorlord's tier lists, v0.111.0 -- see agents/choices_paradox/data/README.md for how to
+# Baalorlord's tier lists, v0.111.0 -- see git history of the retired agents/choices_paradox/data/README.md for how to
 # find the current URLs if these characters get re-published under new uuids.
 TIER_LIST_URLS = {
     "ironclad": "https://sts2.untapped.gg/en/tier-list/004de170-026a-4dd4-a280-3b904be0b5d6/beta",
@@ -38,7 +38,7 @@ TIER_LIST_URLS = {
 # don't happen -- only colorless-vs-class ones do.
 MERGE_ORDER = ["colorless", "ironclad", "silent", "defect", "regent", "necrobinder"]
 
-OUT_PATH = Path(__file__).resolve().parent.parent / "data" / "card_tiers.json"
+OUT_PATH = Path(__file__).resolve().parent.parent / "tier_data" / "card_tiers.json"
 
 
 def _fetch_html(url: str) -> str:
