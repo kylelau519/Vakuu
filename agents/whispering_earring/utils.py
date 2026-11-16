@@ -49,11 +49,13 @@ META_ELIGIBLE_DECISIONS = frozenset({"card_reward", "rest_site", "event_choice"}
 META_DRAIN_TIMEOUT = 120.0
 
 # Slightly wrong, change later
-def combat_value(decision: BufferDecision) -> float:
+def combat_value(decision: BufferDecision, is_last_of_act: bool = False) -> float:
+    """is_last_of_act is passed in by the caller (decided at combat entry): the post-combat
+    card_reward decision has no map to derive it from, and is_last_of_act is a method anyway."""
     if not decision.player_max_hp:
         return 1.0
     hp_frac = max(0.0, decision.player_hp) / decision.player_max_hp
-    if decision.is_last_of_act:
+    if is_last_of_act:
         return BOSS_WIN_FLOOR + BOSS_HP_WEIGHT * hp_frac
     if hp_frac >= HEALTHY_HP_FRACTION:
         return hp_frac
