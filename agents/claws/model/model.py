@@ -1,11 +1,8 @@
-"""The network described in README.md -- tokenizer -> typed-token
-transformer -> policy/value heads. Exists to prove the shapes described in the README actually
-compose.
-
+"""ClawsNet: tokenizer -> typed-token transformer -> policy/value heads for combat_play decisions
+(see README.md). Reads the buffer protocol (BufferDecision) directly.
 """
 from __future__ import annotations
 
-import itertools
 import math
 import os
 import sys
@@ -18,12 +15,12 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import torch
 from torch import nn
+import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # for `common`
 from common.tokenizer import EntityVocab  # noqa: E402
 
 import sts2_path  # noqa: E402,F401  (sets sys.path to sts2-cli/python before the import below)
-from models import CombatPlay  # noqa: E402  (sts2-cli's python/models.py -- see ../README.md)
 import buffer_layout as bl  # noqa: E402  (sts2-cli's python/buffer_layout.py)
 from buffer_env import BufferDecision, decode_token  # noqa: E402
 
@@ -33,6 +30,7 @@ TOKEN_TYPES = ["PLAYER", "CARD", "ENEMY", "RELIC", "POTION", "PLAYER_POWER"]
 _TYPE_TO_IDX = {t: i for i, t in enumerate(TOKEN_TYPES)}
 
 FEATURE_DIM = 6
+V_SCALE = 20.0  # HP: the value head's output is V_SCALE * softplus(raw), so raw ~ 1 means ~ 20 HP
 
 
 def _log1p(x: float | int | None) -> float:
@@ -85,109 +83,9 @@ class TokenBatch:
     enemy_pos: dict[int, int] = field(default_factory=dict)  # Enemy.index -> token row
     potion_pos: dict[int, int] = field(default_factory=dict)  # Potion.index -> token row
 
-    @classmethod
-    def from_saved(cls, d: dict) -> "TokenBatch":
-        """Inverse of materialize.py's per-example dict -- materialize.py saves plain dicts
-        rather than TokenBatch instances (see its module docstring: pickling a dataclass by
-        import path breaks across scripts), so a training loop reads examples back through
-        this instead of torch.load handing back TokenBatch objects directly."""
-        return cls(
-            type_ids=d["type_ids"], global_ids=d["global_ids"], features=d["features"],
-            player_pos=d["player_pos"], hand_pos=d["hand_pos"], enemy_pos=d["enemy_pos"],
-            potion_pos=d["potion_pos"],
-        )
-
-
-def tokenize(decision: CombatPlay, gvocab: GlobalVocab) -> TokenBatch:
-    types: list[int] = []
-    ids: list[int] = []
-    feats: list[list[float]] = []
-
-    def add(type_name: str, global_id: int, feature: list[float]) -> int:
-        pos = len(types)
-        types.append(_TYPE_TO_IDX[type_name])
-        ids.append(global_id)
-        assert len(feature) == FEATURE_DIM
-        feats.append(feature)
-        return pos
-
-    player = decision.player
-    player_pos = add(
-        "PLAYER",
-        EntityVocab.PAD_IDX,  # no id space of its own -- global row 0 is always a zero vector
-                               # (id_emb is built with padding_idx=EntityVocab.PAD_IDX=0)
-        [
-            player.hp / player.max_hp if player.max_hp else 0.0,
-            _log1p(player.hp),
-            _log1p(player.block),
-            0.0,
-            0.0,
-            decision.energy / decision.max_energy if decision.max_energy else 0.0,
-        ],
-    )
-
-    hand_pos: dict[int, int] = {}
-    for card in decision.hand:
-        pos = add(
-            "CARD",
-            gvocab.card(card.id),
-            [0.0, 0.0, 0.0, float(card.cost), float(card.can_play), float(bool(card.upgraded))],
-        )
-        hand_pos[card.index] = pos
-
-    enemy_pos: dict[int, int] = {}
-    for enemy in decision.enemies:
-        intent_damage = 0
-        if enemy.intents:
-            intent_damage = enemy.intents[0].total_damage or enemy.intents[0].damage or 0
-        pos = add(
-            "ENEMY",
-            gvocab.entity("enemy", enemy.id),
-            [
-                enemy.hp / enemy.max_hp if enemy.max_hp else 0.0,
-                _log1p(enemy.hp),
-                _log1p(enemy.block),
-                _log1p(intent_damage),
-                float(enemy.intends_attack),
-                0.0,
-            ],
-        )
-        enemy_pos[enemy.index] = pos
-
-    for relic in player.relics:
-        add(
-            "RELIC",
-            gvocab.entity("relic", relic.id),
-            [0.0, 0.0, 0.0, _log1p(relic.counter), 0.0, 0.0],
-        )
-
-    potion_pos: dict[int, int] = {}
-    for potion in player.potions:
-        pos = add("POTION", gvocab.entity("potion", potion.id), [0.0] * FEATURE_DIM)
-        potion_pos[potion.index] = pos
-
-    for power in decision.player_powers or []:
-        add(
-            "PLAYER_POWER",
-            gvocab.entity("power", power.id),
-            [0.0, 0.0, 0.0, _log1p(power.amount), 0.0, 0.0],
-        )
-
-    return TokenBatch(
-        type_ids=torch.tensor(types, dtype=torch.long),
-        global_ids=torch.tensor(ids, dtype=torch.long),
-        features=torch.tensor(feats, dtype=torch.float),
-        player_pos=player_pos,
-        hand_pos=hand_pos,
-        enemy_pos=enemy_pos,
-        potion_pos=potion_pos,
-    )
-
 
 def tokenize_from_buffer(buf: BufferDecision, gvocab: GlobalVocab) -> TokenBatch:
-    """Buffer counterpart to tokenize() -- same token layout and feature math, read directly off
-    buf.arr via buffer_layout's offset accessors instead of a pydantic CombatPlay's attribute
-    tree."""
+    """Tokens for one combat_play decision, read directly off buf.arr via buffer_layout's offset accessors."""
     arr = buf.arr
     types: list[int] = []
     ids: list[int] = []
@@ -279,30 +177,8 @@ def tokenize_from_buffer(buf: BufferDecision, gvocab: GlobalVocab) -> TokenBatch
 # --- legal options (the policy head's action space) -----------------------------------------------
 
 
-def legal_options(decision: CombatPlay) -> list[tuple[str, dict]]:
-    options: list[tuple[str, dict]] = [("end_turn", {})]
-
-    for card in decision.hand:
-        if not card.can_play or card.cost > decision.energy:
-            continue
-        if card.target_type == "AnyEnemy" and len(decision.enemies) >= 2:
-            for enemy in decision.enemies:
-                options.append(("play_card", {"card_index": card.index, "target_index": enemy.index}))
-        else:
-            options.append(("play_card", {"card_index": card.index}))
-
-    for potion in decision.player.potions:
-        if potion.target_type == "AnyEnemy" and len(decision.enemies) >= 2:
-            for enemy in decision.enemies:
-                options.append(("use_potion", {"potion_index": potion.index, "target_index": enemy.index}))
-        else:
-            options.append(("use_potion", {"potion_index": potion.index}))
-
-    return options
-
-
 def legal_options_from_buffer(buf: BufferDecision) -> list[tuple[str, dict]]:
-    """Buffer counterpart to legal_options() """
+    """The policy head's action space at a combat_play decision."""
     arr = buf.arr
     options: list[tuple[str, dict]] = [("end_turn", {})]
     en = bl.energy(arr)
@@ -376,6 +252,12 @@ class ClawsNet(nn.Module):
         self.policy_mlp = nn.Sequential(nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, 1))
         self.value_mlp = nn.Sequential(nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, 1))
 
+    @staticmethod
+    def value_in_hp(raw: torch.Tensor) -> torch.Tensor:
+        """V(state) = the HP the player is expected to lose from this state until the combat ends
+        (0 once it is won). Never negative; V_SCALE only sets the output's natural size."""
+        return V_SCALE * F.softplus(raw)
+
     def encode(self, batch: TokenBatch) -> torch.Tensor:
         """Returns per-token hidden states [N, dim] for one decision."""
         tok = self.id_emb(batch.global_ids) + self.type_emb(batch.type_ids)
@@ -435,42 +317,13 @@ class ClawsNet(nn.Module):
             queries.append(q)
 
         logits = self.policy_mlp(torch.stack(queries)).squeeze(-1)
-        value = torch.tanh(self.value_mlp(h[batch.player_pos]).squeeze(-1))
-        return logits, value
+        return logits, self.value_in_hp(self.value_mlp(h[batch.player_pos]).squeeze(-1))
 
     def forward(
-        self, decision: CombatPlay | BufferDecision
+        self, decision: BufferDecision
     ) -> tuple[list[tuple[str, dict]], torch.Tensor, torch.Tensor]:
-        if isinstance(decision, BufferDecision):
-            batch = tokenize_from_buffer(decision, self.gvocab)
-            options = legal_options_from_buffer(decision)
-        else:
-            batch = tokenize(decision, self.gvocab)
-            options = legal_options(decision)
+        """(legal options, one logit per option, V in HP) for a combat_play decision."""
+        batch = tokenize_from_buffer(decision, self.gvocab)
+        options = legal_options_from_buffer(decision)
         logits, value = self.score(batch, options)
         return options, logits, value
-
-
-# --- smoke test ------------------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import json
-
-    fixture = (
-        Path(__file__).resolve().parents[3]
-        / "schema" / "tests" / "fixtures" / "ironclad_run_01.jsonl"
-    )
-    lines = fixture.read_text().splitlines()
-    raw = json.loads(lines[63])  # a 2-enemy, 1-potion combat_play -- exercises target branching
-    decision = CombatPlay.model_validate(raw)
-
-    vocab = EntityVocab.load()
-    gvocab = GlobalVocab(vocab)
-    net = ClawsNet(gvocab)
-
-    options, logits, value = net(decision)
-    probs = torch.softmax(logits, dim=-1)
-
-    print(f"{len(options)} legal options, value={value.item():+.3f}")
-    for (action, args), p in itertools.islice(zip(options, probs.tolist()), 8):
-        print(f"  {p:5.3f}  {action} {args}")
