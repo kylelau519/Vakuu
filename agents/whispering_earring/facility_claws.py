@@ -11,7 +11,7 @@ import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imp
 import buffer_layout as bl
 from env import Sts2Session
 from buffer_env import Sts2BufferSession, decode_token
-from checkpoint import BranchJob
+from checkpoint import BranchJob, Checkpoint
 from recorder import CompactRecorder
 from utils import random_seed
 from facility_common import (
@@ -283,10 +283,7 @@ class FacilityClaws(NewFacility):
     def create_main_job(self, character: str = "Ironclad", ascension: int = 1):
         seed = random_seed()
         trial_job = TrialJob(
-            BasicRunInfo(
-                main_id=f"{character}_{seed}", seed=seed, character=character, ascension=ascension
-            ),
-            self.result_queue,
+            Checkpoint.fresh(f"{character}_{seed}", character, seed, ascension)
         )
         self.priority_job_queue.put(trial_job)
         

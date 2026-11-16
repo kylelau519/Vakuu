@@ -737,7 +737,7 @@ class NewFacility(ABC):
         labels += [("branch", i) for i in range(self.cfg.n_branch_workers)]
         self.live = _LiveStatus(labels)
         self.log_thread = threading.Thread(
-            target=self.live.loop, args=(self.log_queue, self._mark_activity()),
+            target=self.live.loop, args=(self.log_queue, self._mark_activity),
             daemon=True, name="branch-log-writer",
         )
         self.log_thread.start()
@@ -758,14 +758,16 @@ class NewFacility(ABC):
     def spawn_workers(self):
         for i in range(self.cfg.n_main_workers):
             worker = BufferWorker(
-                self.job_queue, self.priority_job_queue, self.log_queue, self.result_queue, i
+                self.job_queue, self.priority_job_queue, self.log_queue, self.result_queue, i,
+                self.stop_event,
             )
             p = mp.Process(target=worker.run, name=f"main_worker_{i}")
             p.start()
             self.main_workers_processes.append(p)
         for i in range(self.cfg.n_branch_workers):
             worker = BufferWorker(
-                self.job_queue, self.priority_job_queue, self.log_queue, self.result_queue, i
+                self.job_queue, self.priority_job_queue, self.log_queue, self.result_queue, i,
+                self.stop_event,
             )
             p = mp.Process(target=worker.run, name=f"branch_worker_{i}")
             p.start()

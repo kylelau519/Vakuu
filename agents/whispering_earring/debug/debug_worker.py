@@ -4,9 +4,8 @@ golden_compass's/choices_paradox's tier-list heuristics for map/card decisions a
 choice for combat_play?
 
 Drives the job directly (job.execute(worker._work_station)) rather than through
-BufferWorker.run()'s queue loop, since TestJob has no uid() for that loop's result-queue
-bookkeeping -- this script only needs to confirm the worker's session comes up and a job runs
-against it, not the multiprocessing plumbing around it.
+BufferWorker.run()'s queue loop -- this script only needs to confirm the worker's session comes
+up and a job runs against it, not the multiprocessing plumbing around it.
 
 Usage:
     python debug_worker.py [--character Ironclad] [--seed SEED] [--ascension 0]
@@ -22,7 +21,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import sts2_path  # noqa: E402,F401
 from installation import ensure_setup  # noqa: E402
-from checkpoint import BasicRunInfo  # noqa: E402
+from checkpoint import Checkpoint  # noqa: E402
 from jobs import TestJob, TEST_CHECKPOINT_DIR  # noqa: E402
 from workers import BufferWorker  # noqa: E402
 from utils import random_seed  # noqa: E402
@@ -52,9 +51,7 @@ def main() -> None:
         result_queue=mp.Queue(), worker_index=0,
     )
 
-    job = TestJob(BasicRunInfo(
-        main_id=main_id, seed=seed, character=args.character, ascension=args.ascension,
-    ))
+    job = TestJob(Checkpoint.fresh(main_id, args.character, seed, args.ascension))
 
     print(f"Running TestJob {main_id} against the worker's session...")
     try:
