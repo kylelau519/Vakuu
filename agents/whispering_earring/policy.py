@@ -14,6 +14,7 @@ from buffer_env import BufferDecision, decode_token
 import torch
 
 _CLAWS_CHECKPOINT = os.environ.get("CLAWS_CHECKPOINT")
+_CLAWS_GREEDY = bool(os.environ.get("CLAWS_GREEDY"))  # eval: always play Claws's top-probability action
 _claws_net = None  # lazy-loaded once per worker process, on first combat decision -- see below
 
 _COMBAT_DIRICHLET_EPS = 0.25  # fraction of root probability mass replaced by noise -- AlphaZero's own
@@ -81,11 +82,13 @@ def _choose_combat_action_claws(
 
     options, logits, _value = net.forward(decision)
     probs = torch.softmax(logits, dim=-1)
+    if _CLAWS_GREEDY:
+        combat_dirichlet_noise = False
     if combat_dirichlet_noise:
         alpha = _DIRICHLET_ALPHA_SCALE / len(options)
         noise = torch.distributions.Dirichlet(torch.full((len(options),), alpha)).sample()
         probs = (1 - _COMBAT_DIRICHLET_EPS) * probs + _COMBAT_DIRICHLET_EPS * noise
-    idx = int(torch.multinomial(probs, 1).item())
+    idx = int(torch.argmax(probs).item()) if _CLAWS_GREEDY else int(torch.multinomial(probs, 1).item())
     policy = [
         {"action": a, "args": args, "prob": p} for (a, args), p in zip(options, probs.tolist())
     ]

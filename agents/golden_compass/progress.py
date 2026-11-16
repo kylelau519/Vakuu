@@ -26,6 +26,8 @@ def summarize(run_dir: str, label: str | None) -> dict | None:
     if not runs:
         return None
     combats = [c for d in runs for c in d.get("combats", []) if c.get("max_hp")]
+    won = sum(c.get("outcome") == "won" for c in combats)
+    lost = sum(c.get("outcome") == "lost" for c in combats)
     floors = [d["end_floor"] for d in runs]
     by_seed: dict[str, list[int]] = {}
     for d in runs:
@@ -33,6 +35,10 @@ def summarize(run_dir: str, label: str | None) -> dict | None:
     return {
         "label": label, "runs": len(runs),
         "mean_end_floor": round(statistics.mean(floors), 2), "best_floor": max(floors),
+        "floor_se": round(statistics.stdev(floors) / len(floors) ** 0.5, 2) if len(floors) > 1 else None,
+        "combats": len(combats),
+        "combat_win_rate": round(won / (won + lost), 3) if won + lost else None,
+        "mean_turns": round(statistics.mean(c.get("turns", 0) for c in combats), 2) if combats else None,
         "wins": sum(d["outcome"] == "won" for d in runs),
         "per_seed_mean_floor": {s: round(statistics.mean(v), 1) for s, v in sorted(by_seed.items())},
         "mean_combats": round(statistics.mean(len(d.get("combats", [])) for d in runs), 2),

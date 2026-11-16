@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import random
+import zlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
@@ -14,6 +15,11 @@ import run_state as rs  # golden_compass/run_state.py; policy.py puts its direct
 from recorder import CompactRecorder
 
 MAX_COMBAT_TURNS = 20  # a combat that outlasts this is "stalled": HP loss alone gives no reason to finish one
+# RunJob's backstops against a run that never ends (MAX_COMBAT_TURNS only counts end_turns, so it can't see
+# any of these): actions within one turn, the same decision coming back unchanged, and a run's total length.
+MAX_ACTIONS_PER_TURN = 200
+MAX_SAME_DECISION = 25
+MAX_RUN_ACTIONS = 4000
 
 
 @dataclass
@@ -261,6 +267,27 @@ class MainlineJob(Job):
 MACRO_DECISIONS = frozenset({"map_select", "card_reward", "event_card_reward", "shop", "rest_site", "event_choice"})
 
 
+class _StuckGuard:
+    """Notices a run that has stopped making progress: the same decision (byte-identical buffer) returned
+    MAX_SAME_DECISION times in a row, or MAX_RUN_ACTIONS actions in total."""
+
+    def __init__(self):
+        self.steps = 0
+        self._last: int | None = None
+        self._same = 0
+
+    def tripped(self, decision) -> str | None:
+        self.steps += 1
+        crc = zlib.crc32(decision.arr.tobytes())
+        self._same = self._same + 1 if crc == self._last else 0
+        self._last = crc
+        if self._same >= MAX_SAME_DECISION:
+            return f"{decision.decision} unchanged for {self._same} actions in a row"
+        if self.steps >= MAX_RUN_ACTIONS:
+            return f"{self.steps} actions in one run"
+        return None
+
+
 class RunJob(Job):
     """A whole run played with the policy at REAL HP (nothing is healed or reset), recording what
     golden_compass's hazard net trains on -- the opposite of MainlineJob, which heals to full before
@@ -273,7 +300,9 @@ class RunJob(Job):
 
         outcome "lost"      died on end_floor            (hazard label 1 there, 0 before)
         outcome "won"       cleared the game             (hazard label 0 everywhere)
-        outcome "censored"  a combat hit MAX_COMBAT_TURNS and the run was stopped alive on end_floor
+        outcome "censored"  stopped alive on end_floor: a combat hit MAX_COMBAT_TURNS, or the run stopped
+                            making progress (_StuckGuard; the file then carries `capped` and the last
+                            actions as `tail` so the cause can be found)
 
     Always starts fresh -- there is nothing here worth checkpointing yet. Writes
     raw_dir/{main_id}.json (role "run") when raw_dir is given."""
@@ -290,6 +319,8 @@ class RunJob(Job):
         combats: list[dict] = []
         floor = decision.floor
         outcome = None
+        guard = _StuckGuard()
+        capped: str | None = None
 
         while outcome is None:
             if decision.decision == "game_over":
@@ -297,10 +328,14 @@ class RunJob(Job):
                 break
             floor = decision.floor  # at game_over the buffer's floor is the room the run died in -- keep the last live one
             if decision.decision == "combat_play":
-                decision, stalled = self._play_combat(session, decision, combats)
+                decision, stalled, capped = self._play_combat(session, decision, combats, guard)
                 if stalled:
                     outcome = "censored"
                 continue
+            capped = guard.tripped(decision)
+            if capped:
+                outcome = "censored"
+                break
 
             state = None
             if decision.decision in MACRO_DECISIONS:
@@ -317,25 +352,36 @@ class RunJob(Job):
             decision = session.step(name, **kwargs)
 
         self.recorder.meta.update(end_floor=floor, states=states)
+        if capped:
+            self.recorder.meta.update(capped=capped, tail=session.action_log[-12:])
         if self.raw_dir is not None:
             self.recorder.save(os.path.join(self.raw_dir, f"{self.main_id}.json"), session.action_log, outcome=outcome)
-        return self.result(session, outcome, end_floor=floor, n_states=len(states), combats=combats)
+        return self.result(session, outcome, end_floor=floor, n_states=len(states), combats=combats, capped=capped)
 
-    def _play_combat(self, session, decision, combats: list[dict]):
-        """Plays one combat to its end. -> (decision after it, whether it was stopped as stalled)."""
+    def _play_combat(self, session, decision, combats: list[dict], guard: _StuckGuard):
+        """Plays one combat to its end. -> (decision after it, whether it was stopped as stalled, why it was
+        cut off by the guard or None)."""
         entry_hp, max_hp, floor, act = decision.player_hp, decision.player_max_hp, decision.floor, decision.act
-        turns = 0
+        turns = actions_this_turn = 0
+        capped = None
         while decision.decision in ("combat_play", "card_select"):
+            capped = guard.tripped(decision)
+            if capped is None and actions_this_turn >= MAX_ACTIONS_PER_TURN:
+                capped = f"{actions_this_turn} actions in one combat turn"
+            if capped:
+                break
             name, kwargs, policy, _purpose = choose_action(decision, session)
             if policy is not None:
                 session.logger.attach_policy(policy)
             decision = session.step(name, **kwargs)
+            actions_this_turn += 1
             if name == "end_turn":
                 turns += 1
+                actions_this_turn = 0
                 if turns >= MAX_COMBAT_TURNS and decision.decision == "combat_play":
                     break
 
-        stalled = decision.decision == "combat_play"
+        stalled = decision.decision in ("combat_play", "card_select")
         died = decision.decision == "game_over"
         outcome = "stalled" if stalled else "lost" if died else "won"
         combat = {
@@ -344,7 +390,7 @@ class RunJob(Job):
         }
         combats.append(combat)
         self.recorder.record_combat(act, floor, len(combats), outcome, **{k: v for k, v in combat.items() if k != "floor"})
-        return decision, stalled
+        return decision, stalled, capped
 
 
 class ForkJob(Job):

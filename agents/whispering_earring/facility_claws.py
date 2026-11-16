@@ -24,6 +24,11 @@ class FacilityClaws(NewFacility):
         self._started = 0
         self._jobs: dict[str, Job] = {}  # uid -> job, for every job still out
         self._forks_left: dict[str, int] = {}  # main_id -> forks still to report (a "pipeline" is open until 0)
+        self._mainlines_done = 0
+        self._forks_queued = 0
+        self._forks_done = 0
+        self._errors = 0
+        self._last = ""
 
     def _more_runs(self) -> bool:
         return self.cfg.n_main_trials is None or self._started < self.cfg.n_main_trials
@@ -59,6 +64,13 @@ class FacilityClaws(NewFacility):
                     n += 1
         return n
 
+    def _report(self) -> None:
+        total = self.cfg.n_main_trials if self.cfg.n_main_trials is not None else "inf"
+        self.status(
+            f"mainlines {self._mainlines_done}/{total} | forks {self._forks_done}/{self._forks_queued} "
+            f"| err {self._errors} | last: {self._last or '-'}"
+        )
+
     def _close_if_done(self, main_id: str) -> None:
         if self._forks_left[main_id] > 0:
             return
@@ -80,19 +92,20 @@ class FacilityClaws(NewFacility):
                     break
                 job = self._jobs.pop(uid, None)
                 error = result.auxiliary_data.get("error")
-                if error:
-                    self.live.scroll(f"{uid} failed: {error}")
+                self._errors += bool(error)  # the failing worker already printed its own crash line
                 if isinstance(job, MainlineJob):
                     n_forks = 0 if error else self._fork_all(job, result)
                     self._forks_left[job.main_id] += n_forks - 1
+                    self._mainlines_done += 1
+                    self._forks_queued += n_forks
                     if not error:
                         combats = result.auxiliary_data["combats"]
-                        self.live.scroll(
-                            f"{job.main_id}: {result.outcome}, {len(combats)} combats "
-                            f"({sum(c['loss'] for c in combats)} HP lost), {n_forks} forks queued"
-                        )
+                        self._last = (f"{job.main_id} {result.outcome}, {len(combats)} combats, "
+                                      f"{sum(c['loss'] for c in combats)} HP lost")
                 elif job is not None:
                     self._forks_left[job.main_id] -= 1
+                    self._forks_done += 1
+                self._report()
                 if job is not None:
                     self._close_if_done(job.main_id)
                 while len(self._forks_left) < self.cfg.n_main_workers and self._more_runs():
