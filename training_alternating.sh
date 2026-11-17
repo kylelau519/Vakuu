@@ -37,7 +37,7 @@ while true; do
     python "$vakuu/agents/whispering_earring/facility_claws.py" \
         --trials "${CLAWS_TRIALS:-5}" --branch-workers "${WORKERS:-14}" \
         --forks-per-turn "${CLAWS_FORKS:-40}" --main-workers "${CLAWS_MAIN_WORKERS:-3}" \
-        --ascension 1 --raw-dir "$WE_DATA/raw" "${SEED_ARGS[@]}"
+        --ascension 1 --raw-dir "$WE_DATA/raw" --dedup-forks "${SEED_ARGS[@]}"
     python "$CLAWS_DIR/materialize.py" "$WE_DATA/raw/" --out "$CLAWS_DIR/dataset.pt" \
         --target "${CLAWS_TARGET:-return}" --jobs "${JOBS:-18}"
     python "$CLAWS_DIR/train.py" "$CLAWS_DIR/dataset.pt" --epochs 40 --device cuda --batch-size "${CLAWS_BATCH:-512}" --lr "${CLAWS_LR:-1.5e-5}" \

@@ -13,6 +13,7 @@ from checkpoint import Checkpoint
 from policy import choose_action, choose_generic_action, get_claws_net
 import run_state as rs  # golden_compass/run_state.py; policy.py puts its directory on sys.path
 from recorder import CompactRecorder
+from state_key import state_key
 
 MAX_COMBAT_TURNS = 20  # a combat that outlasts this is "stalled": HP loss alone gives no reason to finish one
 # RunJob's backstops against a run that never ends (MAX_COMBAT_TURNS only counts end_turns, so it can't see
@@ -176,8 +177,9 @@ class MainlineJob(Job):
     role = "main"
 
     def __init__(self, checkpoint: Checkpoint, save_dir: str, raw_dir: str | None = None,
-                 keep_room_checkpoints: bool = False):
+                 keep_room_checkpoints: bool = False, dedup=None):
         super().__init__(checkpoint)
+        self.dedup = dedup  # ForkDedup | None: the mainline registers each turn's end state, so forks equal to it are dropped
         self.save_dir = save_dir
         self.raw_dir = raw_dir
         self.keep_room_checkpoints = keep_room_checkpoints  # debug scripts: a Checkpoint per room entry
@@ -233,6 +235,8 @@ class MainlineJob(Job):
             died = decision.decision == "game_over"
             turn["loss"] = hp_before if died else hp_before - decision.player_hp
             turns.append(turn)
+            if self.dedup is not None:  # claims the turn's end state first (forks only ever run later)
+                self.dedup.claim(combat["combat_index"], len(turns), state_key(session, decision), self.uid())
             if decision.decision != "combat_play" or len(turns) >= MAX_COMBAT_TURNS:
                 break
         combat["turns"] = _with_returns(turns)
@@ -402,8 +406,9 @@ class ForkJob(Job):
     role = "fork"
 
     def __init__(self, checkpoint: Checkpoint, combat_index: int, turn_index: int, fork_index: int,
-                 raw_dir: str | None = None):
+                 raw_dir: str | None = None, dedup=None):
         super().__init__(checkpoint)
+        self.dedup = dedup  # ForkDedup | None: a fork that ends its compared turn in an already-known state stops there
         self.combat_index = combat_index
         self.turn_index = turn_index
         self.fork_index = fork_index
@@ -423,6 +428,12 @@ class ForkJob(Job):
             died = decision.decision == "game_over"
             turn["loss"] = hp_before if died else hp_before - decision.player_hp
             turns.append(turn)
+            if self.dedup is not None and len(turns) == 1:
+                # Decided from the state this fork has reached so far -- never from how the rest of the
+                # combat goes -- so the choice of which member survives carries no look-ahead.
+                owner = self.dedup.claim(self.combat_index, self.turn_index, state_key(session, decision), self.uid())
+                if owner != self.uid():
+                    return self.result(session, "duplicate", duplicate_of=owner)
             if decision.decision != "combat_play" or len(turns) >= MAX_COMBAT_TURNS:
                 break
 

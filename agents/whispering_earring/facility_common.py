@@ -108,6 +108,7 @@ class FacilityConfig:
     ascension: int = 0
     seeds: list[str] | None = None  # runs cycle through these seeds in order (see utils.new_run); None = a fresh random seed per run
     forks_per_turn: int = 4  # alternative continuations played from every mainline combat turn
+    dedup_forks: bool = False  # stop (and drop) a fork whose compared turn ends in a state an earlier member of its group already reached
     n_branch_workers: int = 4
     n_main_workers: int = 1  # concurrent main lines, sharing one branch-worker pool
     n_main_trials: int | None = 1  # stop after this many main-line trials *total*; None = forever
