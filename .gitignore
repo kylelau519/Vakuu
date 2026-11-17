@@ -266,5 +266,5 @@ agents/whispering_earring/data/*/*
 
 # macOS
 .DS_Store
-agents/whispering_earring/data/stats_history.jsonl
-agents/whispering_earring/data/stats_history_choices.jsonl
+agents/whispering_earring/data/claws_eval.jsonl
+agents/whispering_earring/data/progress_compass.jsonl

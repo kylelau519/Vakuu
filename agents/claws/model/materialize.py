@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pickle
 import re
 import sys
 import tempfile
@@ -240,19 +241,26 @@ _session: Sts2BufferSession | None = None
 
 
 def _init_worker() -> None:
-    devnull_fd = os.open(os.devnull, os.O_WRONLY)  # the engine logs every step to stderr
-    os.dup2(devnull_fd, 2)
-    os.close(devnull_fd)
+    # The engine logs every step to stderr, so it is discarded -- unless MATERIALIZE_STDERR names a file
+    # (appended to), which is how a worker that dies or hangs inside the CLR gets diagnosed.
+    sink = os.environ.get("MATERIALIZE_STDERR")
+    fd = os.open(sink, os.O_WRONLY | os.O_CREAT | os.O_APPEND) if sink else os.open(os.devnull, os.O_WRONLY)
+    os.dup2(fd, 2)
+    os.close(fd)
     global _gvocab, _session
     _gvocab = GlobalVocab(EntityVocab.load())
     _session = Sts2BufferSession()
 
 
-def _task(main_path: str, fork_paths: list[str], target: str) -> tuple[str, list[Example] | None, str | None]:
+def _task(main_path: str, fork_paths: list[str], target: str) -> tuple[str, bytes | None, str | None]:
+    """-> (label, the run's examples pickled, error). Pickled by hand because the pool's own pickler
+    (torch's ForkingPickler) hands every tensor back through its own file descriptor: ~6 per example,
+    tens of thousands per run, past any sane ulimit -- the worker then dies mid-send and the pool
+    deadlocks shutting down. Plain pickle ships the tensors by value."""
     assert _gvocab is not None and _session is not None  # set by _init_worker before any task runs
     label = f"{Path(main_path).stem} (+{len(fork_paths)} forks)"
     try:
-        return label, materialize_run(main_path, fork_paths, target, _gvocab, _session), None
+        return label, pickle.dumps(materialize_run(main_path, fork_paths, target, _gvocab, _session), protocol=5), None
     except Exception as e:
         return label, None, f"{type(e).__name__}: {e}"
 
@@ -295,7 +303,9 @@ def main() -> None:
             if error is not None:
                 print(f"skip {label}: {error}")
                 continue
-            examples.extend(result)
+            run_examples = pickle.loads(result)
+            examples.extend(run_examples)
+            print(f"  done {label}: {len(run_examples)} examples", flush=True)
 
     scored = sum(ex["action_index"] is not None for ex in examples)
     print(f"{len(examples)} examples ({scored} with a policy advantage)")
