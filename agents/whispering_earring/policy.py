@@ -17,7 +17,9 @@ _CLAWS_CHECKPOINT = os.environ.get("CLAWS_CHECKPOINT")
 _CLAWS_GREEDY = bool(os.environ.get("CLAWS_GREEDY"))  # eval: always play Claws's top-probability action
 _claws_net = None  # lazy-loaded once per worker process, on first combat decision -- see below
 
-_COMBAT_DIRICHLET_EPS = 0.25  # fraction of root probability mass replaced by noise -- AlphaZero's own
+# Fraction of root probability mass replaced by noise; 0.25 is AlphaZero's own. CLAWS_NOISE_EPS overrides it, e.g. the
+# compass stage plays near-deployed (training_alternating.sh) so its labels are not mostly combat luck.
+_COMBAT_DIRICHLET_EPS = float(os.environ.get("CLAWS_NOISE_EPS", "0.25"))
 _DIRICHLET_ALPHA_SCALE = 10.0  # concentration = this / n_legal_options
 
 # The shop / remove / upgrade heuristics, and the card-reward fallback while no hazard net exists.

@@ -74,8 +74,7 @@ def main() -> None:
     print("round  runs  mean_total_floor  best  boss  beat  act2  wins  combats  hp_lost/combat")
     for r in rows:
         print(f"{str(r['label']):>5}  {r['runs']:4d}  {r['mean_end_floor']:16.2f}  {r['best_floor']:4d}  "
-              f"{r.get('reached_boss', 0):4d}  {r.get('beat_boss', 0):4d}  {r.get('act2_rate', 0):4.0%}  {r['wins']:4d}  {r['mean_combats']:7.2f}  {r['mean_hp_lost_per_combat']}"
-              + (f"  per seed {r['per_seed_mean_floor']}" if len(r.get("per_seed_mean_floor", {})) > 1 else ""))
+              f"{r.get('reached_boss', 0):4d}  {r.get('beat_boss', 0):4d}  {r.get('act2_rate', 0):4.0%}  {r['wins']:4d}  {r['mean_combats']:7.2f}  {r['mean_hp_lost_per_combat']}")
 
 
 if __name__ == "__main__":

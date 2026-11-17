@@ -96,7 +96,7 @@ def _bag(emb: nn.Embedding, ids: torch.Tensor) -> torch.Tensor:
 
 
 class HazardNet(nn.Module):
-    def __init__(self, sizes: dict[str, int], dim: int = 64, hidden: int = 128, body: int = 128):
+    def __init__(self, sizes: dict[str, int], dim: int = 8, hidden: int = 128, body: int = 128):
         super().__init__()
         self.config = {"sizes": sizes, "dim": dim, "hidden": hidden, "body": body}
         pad = {"padding_idx": 0}

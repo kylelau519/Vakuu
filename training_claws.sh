@@ -24,12 +24,7 @@ export OMP_NUM_THREADS=1
 # sts2-cli's build-time runtimeconfig.json at process start; no rebuild needed.
 export DOTNET_gcServer=0
 
-# SEEDS: default is a fresh random seed per run, so the nets train on many maps and cannot memorize a few.
-# SEEDS="a b c" restricts runs to that pool (a seed plus a character is one map; with a pool, also set
-# TRAIN_CHARACTER, default Ironclad). Keep fixed seeds for held-out evaluation, not for training.
-SEEDS="${SEEDS:-random}"
-SEED_ARGS=()
-[ "$SEEDS" != "random" ] && SEED_ARGS=(--seeds $SEEDS --characters "${TRAIN_CHARACTER:-Ironclad}")
+# Every run gets a fresh random seed (no fixed pool), so nothing can be memorized.
 
 source "$vakuu/training_lib.sh"
 install_traps
@@ -58,7 +53,7 @@ while true; do
     echo "[2/5] Running facility_claws.py (Data Generation)..."
     python "$vakuu/agents/whispering_earring/facility_claws.py" \
         --trials 5 --branch-workers 15 --forks-per-turn 40 --main-workers 3 \
-        --ascension 1 --raw-dir "$vakuu/agents/whispering_earring/data/raw" "${SEED_ARGS[@]}"
+        --ascension 1 --raw-dir "$vakuu/agents/whispering_earring/data/raw"
 
     # --target return while V is untrained or just reset; switch to q once V is calibrated.
     echo "[3/5] Materializing dataset..."
@@ -79,7 +74,7 @@ while true; do
     cp "$vakuu/agents/claws/model/claws.pt" \
         "$backup_dir/claws_$(date +%Y%m%d_%H%M%S).pt"
 
-    # Is Claws actually better? Held-out eval seeds, the compass on, no exploration noise (each row records the compass checkpoint)
+    # Is Claws actually better? Fresh random seeds, the compass on, no exploration noise (each row records the compass checkpoint)
     # (agents/whispering_earring/eval_claws.py). EVAL_RUNS=0 skips it; rows accumulate in data/claws_eval.jsonl.
     if [ "${EVAL_RUNS:-40}" -gt 0 ]; then
         [ "$ROUND" = 1 ] && python "$vakuu/agents/whispering_earring/eval_claws.py" --ckpt random \

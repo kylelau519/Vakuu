@@ -29,12 +29,7 @@ WORKERS="${COMPASS_WORKERS:-15}"
 source "$vakuu/training_lib.sh"
 install_traps
 
-# SEEDS: default is a fresh random seed per run, so the net trains on many maps and cannot memorize a few.
-# SEEDS="a b c" restricts runs to that pool (a seed plus a character is one map; with a pool, also set
-# TRAIN_CHARACTER, default Ironclad). Keep fixed seeds for held-out evaluation, not for training.
-SEEDS="${SEEDS:-random}"
-SEED_ARGS=()
-[ "$SEEDS" != "random" ] && SEED_ARGS=(--seeds $SEEDS --characters "${TRAIN_CHARACTER:-Ironclad}")
+# Every run gets a fresh random seed (no fixed pool), so nothing can be memorized.
 
 ROUND=1
 while true; do
@@ -46,9 +41,11 @@ while true; do
     archive_round_data "$RAW" "$HISTORY" "$HISTORY_WINDOW"
 
     echo "[2/4] Generating $TRIALS real-HP runs..."
+    # Claws plays near-greedy here: the labels should describe the deployed agent, not combat noise.
+    CLAWS_NOISE_EPS="${COMPASS_CLAWS_NOISE:-0.05}" \
     python "$vakuu/agents/whispering_earring/facility_compass.py" \
         --trials "$TRIALS" --branch-workers "$WORKERS" --ascension 1 --raw-dir "$RAW" \
-        --ckpt-dir "$CKPT_DIR" "${RESUME_ARGS[@]}" "${SEED_ARGS[@]}"
+        --ckpt-dir "$CKPT_DIR" "${RESUME_ARGS[@]}"
     python "$GC_DIR/progress.py" "$RAW" --label "$ROUND" \
         --log "$vakuu/agents/whispering_earring/data/progress_compass.jsonl"
 

@@ -1,4 +1,4 @@
-"""How well does the whole agent play? Plays the same fixed held-out seeds with each Claws checkpoint, with
+"""How well does the whole agent play? Plays fresh random seeds (a new map every run) with each Claws checkpoint, with
 the golden compass choosing map / card rewards and NO exploration noise: Claws plays its top action (no
 Dirichlet noise) and the compass its top-scored option (COMPASS_EPS=0, COMPASS_TAU~0). The compass checkpoint
 is the same in every row of one invocation, so rows still differ only in how Claws fights, but the route and
@@ -42,7 +42,7 @@ BACKUPS = os.path.normpath(os.path.join(HERE, "..", "claws", "model", "backups")
 DEFAULT_COMPASS = os.path.normpath(os.path.join(HERE, "..", "golden_compass", "golden_compass.pt"))
 
 
-def evaluate(ckpt: str, label: str, runs: int, seeds: list[str], workers: int, greedy: bool, ascension: int,
+def evaluate(ckpt: str, label: str, runs: int, seeds: list[str] | None, workers: int, greedy: bool, ascension: int,
              compass: str | None = None) -> dict:
     name = "random" if ckpt == "random" else os.path.basename(ckpt)
     # Spawned workers read these at import, so set them before the facility starts. The compass checkpoint is
@@ -99,7 +99,7 @@ def main() -> None:
     parser.add_argument("--backups", type=int, default=0, help="also evaluate N evenly spaced checkpoints from claws/model/backups/")
     parser.add_argument("--label", default=None, help="tag for the rows (e.g. the training round); default: the checkpoint's timestamp")
     parser.add_argument("--runs", type=int, default=40)
-    parser.add_argument("--seeds", nargs="+", default=[f"eval-{i}" for i in range(1, 9)])
+    parser.add_argument("--seeds", nargs="+", default=None, help="default: a fresh random seed per run")
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--ascension", type=int, default=1)
     parser.add_argument("--sample", action="store_true",
