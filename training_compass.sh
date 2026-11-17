@@ -24,10 +24,10 @@ WORKERS="${COMPASS_WORKERS:-15}"
 source "$vakuu/training_lib.sh"
 install_traps
 
-# SEEDS: the pool of seeds every run draws from, so progression shows on a few fixed maps. Default is
-# five; SEEDS="a b c" picks your own, SEEDS=random goes back to a fresh seed per run. One character
-# (TRAIN_CHARACTER, default Ironclad) because a seed plus a character is one map.
-SEEDS="${SEEDS:-train-1 train-2 train-3 train-4 train-5}"
+# SEEDS: default is a fresh random seed per run, so the net trains on many maps and cannot memorize a few.
+# SEEDS="a b c" restricts runs to that pool (a seed plus a character is one map; with a pool, also set
+# TRAIN_CHARACTER, default Ironclad). Keep fixed seeds for held-out evaluation, not for training.
+SEEDS="${SEEDS:-random}"
 SEED_ARGS=()
 [ "$SEEDS" != "random" ] && SEED_ARGS=(--seeds $SEEDS --characters "${TRAIN_CHARACTER:-Ironclad}")
 

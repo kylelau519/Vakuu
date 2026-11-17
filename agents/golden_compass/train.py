@@ -82,9 +82,9 @@ def main() -> None:
     parser.add_argument("--init", required=True, help='checkpoint to continue from, or "" for a fresh net')
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--aux-weight", type=float, default=3.0)
-    parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--holdout", type=int, default=5, help="1 run in N is held out")
     args = parser.parse_args()
 

@@ -33,7 +33,8 @@ from run_state import MAP_TYPES, MAX_DELTA, RunState  # noqa: E402
 
 FLOORS = 64
 AUX = 6  # combats whose HP cost the auxiliary head predicts
-FINAL_FLOOR = 55  # expected_floors() stops counting here; the game ends before any run gets this far
+ACT1_BOSS_FLOOR = 17  # floors restart in every act; act 1's boss is floor 17 (act 2 restarts at 2)
+FINAL_FLOOR = ACT1_BOSS_FLOOR + 1  # expected_floors() stops counting here: the compass looks only to the end of act 1
 NUM_FEATURES = 9
 
 CHARACTERS = ["IRONCLAD", "SILENT", "DEFECT", "REGENT", "NECROBINDER"]
@@ -95,7 +96,7 @@ def _bag(emb: nn.Embedding, ids: torch.Tensor) -> torch.Tensor:
 
 
 class HazardNet(nn.Module):
-    def __init__(self, sizes: dict[str, int], dim: int = 64, hidden: int = 256, body: int = 512):
+    def __init__(self, sizes: dict[str, int], dim: int = 64, hidden: int = 128, body: int = 128):
         super().__init__()
         self.config = {"sizes": sizes, "dim": dim, "hidden": hidden, "body": body}
         pad = {"padding_idx": 0}

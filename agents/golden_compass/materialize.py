@@ -23,7 +23,7 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import torch  # noqa: E402
 
-from hazard_net import AUX  # noqa: E402
+from hazard_net import AUX, FINAL_FLOOR  # noqa: E402
 
 OUTCOME_CODE = {"lost": 0, "won": 1, "censored": 2}
 
@@ -39,15 +39,22 @@ def _aux_targets(combats: list[dict], start: int) -> tuple[list[float], list[flo
 
 
 def materialize_run(data: dict) -> list[dict]:
+    """Only act 1 is learned: floors restart at 2 in every act, so an act-2 floor would be read as an early
+    act-1 floor. A run that got into act 2 is, for its act-1 states, one that survived to the end of act 1
+    (censored there); its act-2 states and combats are dropped."""
     code = OUTCOME_CODE.get(data.get("outcome"))
     states = data.get("states") or []
     if code is None or not states or data.get("error"):
         return []
     end = int(data["end_floor"])
-    combats = data.get("combats") or []
+    if int(data.get("end_act") or 1) >= 2:
+        end, code = FINAL_FLOOR, 2
+    combats = [c for c in data.get("combats") or [] if int(c.get("act") or 1) == 1]
     samples = []
     for entry in states:
         state = entry["state"]
+        if int(state.get("act") or 1) != 1:
+            continue
         start = int(state["floor"])
         if code == 0 and start > end:  # died in the room it was already in: nothing left to predict
             continue

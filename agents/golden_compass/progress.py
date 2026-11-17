@@ -33,8 +33,13 @@ def summarize(run_dir: str, label: str | None) -> dict | None:
     by_seed: dict[str, list[int]] = {}
     for d, f in zip(runs, floors):
         by_seed.setdefault(d["seed"], []).append(f)
+    def boss_fights(d):
+        # c["boss"] is recorded by jobs.RunJob; older files lack it, and act 1's boss is always on floor 17.
+        return [c for c in d.get("combats", []) if c.get("boss", c.get("act") == 1 and c.get("floor") == 17)]
+    reached_boss = sum(bool(boss_fights(d)) for d in runs)
+    beat_boss = sum(any(c.get("outcome") == "won" for c in boss_fights(d)) for d in runs)
     return {
-        "label": label, "runs": len(runs),
+        "label": label, "runs": len(runs), "reached_boss": reached_boss, "beat_boss": beat_boss,
         "mean_end_floor": round(statistics.mean(floors), 2), "best_floor": max(floors),
         "floor_se": round(statistics.stdev(floors) / len(floors) ** 0.5, 2) if len(floors) > 1 else None,
         "act2_rate": round(sum(d.get("acts_reached", 1) >= 2 for d in runs) / len(runs), 3),
@@ -66,10 +71,10 @@ def main() -> None:
         f.write(json.dumps(row) + "\n")
     with open(args.log) as f:
         rows = [json.loads(line) for line in f if line.strip()][-args.show:]
-    print("round  runs  mean_total_floor  best  act2  wins  combats  hp_lost/combat")
+    print("round  runs  mean_total_floor  best  boss  beat  act2  wins  combats  hp_lost/combat")
     for r in rows:
         print(f"{str(r['label']):>5}  {r['runs']:4d}  {r['mean_end_floor']:16.2f}  {r['best_floor']:4d}  "
-              f"{r.get('act2_rate', 0):4.0%}  {r['wins']:4d}  {r['mean_combats']:7.2f}  {r['mean_hp_lost_per_combat']}"
+              f"{r.get('reached_boss', 0):4d}  {r.get('beat_boss', 0):4d}  {r.get('act2_rate', 0):4.0%}  {r['wins']:4d}  {r['mean_combats']:7.2f}  {r['mean_hp_lost_per_combat']}"
               + (f"  per seed {r['per_seed_mean_floor']}" if len(r.get("per_seed_mean_floor", {})) > 1 else ""))
 
 

@@ -378,6 +378,9 @@ class RunJob(Job):
         entry_hp, max_hp, floor, act = decision.player_hp, decision.player_max_hp, decision.floor, decision.act
         turns = actions_this_turn = 0
         capped = None
+        # The act's boss is on the floor after the map's last grid row (act 1: rows 0..15, boss on floor 17).
+        rows = [r for r, _c, _slot in bl.map_points(decision.arr) if r >= 0]
+        boss = bool(rows) and floor == max(rows) + 2
         while decision.decision in ("combat_play", "card_select"):
             capped = guard.tripped(decision)
             if capped is None and actions_this_turn >= MAX_ACTIONS_PER_TURN:
@@ -400,7 +403,7 @@ class RunJob(Job):
         outcome = "stalled" if stalled else "lost" if died else "won"
         combat = {
             "floor": floor, "hp_in": entry_hp, "hp_out": 0 if died else decision.player_hp,
-            "max_hp": max_hp, "turns": turns,
+            "max_hp": max_hp, "turns": turns, "boss": boss,
         }
         combats.append(combat)
         self.recorder.record_combat(act, floor, len(combats), outcome, **{k: v for k, v in combat.items() if k != "floor"})
