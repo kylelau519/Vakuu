@@ -23,7 +23,7 @@ HISTORY_WINDOW="${HISTORY_WINDOW:-3}"
 source "$vakuu/training_lib.sh"
 install_traps
 
-SEEDS="${SEEDS:-train-1 train-2 train-3 train-4 train-5}"
+SEEDS="${SEEDS:-random}"
 SEED_ARGS=()
 [ "$SEEDS" != "random" ] && SEED_ARGS=(--seeds $SEEDS --characters "${TRAIN_CHARACTER:-Ironclad}")
 
@@ -44,7 +44,7 @@ while true; do
         --out "$CLAWS_DIR/claws.pt" --init "${CLAWS_CHECKPOINT:-}"
     backup_checkpoint "$CLAWS_DIR/claws.pt"
 
-    # Is Claws actually better? Fixed seeds, fixed non-combat policy, only the combat checkpoint changes
+    # Is Claws actually better? Held-out eval seeds, the compass on, no exploration noise (each row records the compass checkpoint)
     # (agents/whispering_earring/eval_claws.py). EVAL_RUNS=0 skips it; rows accumulate in data/claws_eval.jsonl.
     if [ "${EVAL_RUNS:-40}" -gt 0 ]; then
         [ "$ROUND" = 1 ] && python "$vakuu/agents/whispering_earring/eval_claws.py" --ckpt random \

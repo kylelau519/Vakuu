@@ -17,6 +17,11 @@ export DOTNET_gcServer=0      # workstation GC in every worker's in-process Core
 GC_DIR="$vakuu/agents/golden_compass"
 RAW="$vakuu/agents/whispering_earring/data/raw_runs"
 HISTORY="$vakuu/agents/whispering_earring/data/history/runs"
+CKPT_DIR="${COMPASS_CKPT_DIR:-$vakuu/agents/whispering_earring/data/act_checkpoints}"  # act-boundary saves, kept across rounds
+# RESUME_ACT=2: start every run from a saved just-past-the-act-1-boss state instead of floor 0 (needs checkpoints
+# from earlier rounds). Unset/0: fresh runs, which keep adding checkpoints to the pool.
+RESUME_ARGS=()
+[ "${RESUME_ACT:-0}" != "0" ] && RESUME_ARGS=(--resume-act "$RESUME_ACT")
 HISTORY_WINDOW="${HISTORY_WINDOW:-3}"  # past rounds kept and trained on alongside the fresh one
 TRIALS="${COMPASS_TRIALS:-200}"
 WORKERS="${COMPASS_WORKERS:-15}"
@@ -42,7 +47,8 @@ while true; do
 
     echo "[2/4] Generating $TRIALS real-HP runs..."
     python "$vakuu/agents/whispering_earring/facility_compass.py" \
-        --trials "$TRIALS" --branch-workers "$WORKERS" --ascension 1 --raw-dir "$RAW" "${SEED_ARGS[@]}"
+        --trials "$TRIALS" --branch-workers "$WORKERS" --ascension 1 --raw-dir "$RAW" \
+        --ckpt-dir "$CKPT_DIR" "${RESUME_ARGS[@]}" "${SEED_ARGS[@]}"
     python "$GC_DIR/progress.py" "$RAW" --label "$ROUND" \
         --log "$vakuu/agents/whispering_earring/data/progress_compass.jsonl"
 

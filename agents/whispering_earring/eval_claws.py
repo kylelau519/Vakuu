@@ -1,18 +1,23 @@
-"""Is Claws getting better at combat? Plays the same fixed seeds with each checkpoint and one fixed
-non-combat policy (random map, tier-list cards: the hazard net is switched off), so the ONLY thing that
-differs between rows is how Claws fights. Training's own `value_rmse` can't answer this -- it is error on
-the training data -- and the compass loop's table mixes in route and deck changes.
+"""How well does the whole agent play? Plays the same fixed held-out seeds with each Claws checkpoint, with
+the golden compass choosing map / card rewards and NO exploration noise: Claws plays its top action (no
+Dirichlet noise) and the compass its top-scored option (COMPASS_EPS=0, COMPASS_TAU~0). The compass checkpoint
+is the same in every row of one invocation, so rows still differ only in how Claws fights, but the route and
+deck are the compass's. Training's own `value_rmse` can't answer this -- it is error on the training data.
 
     python eval_claws.py --ckpt random --ckpt ../claws/model/claws.pt          # one comparison
     python eval_claws.py --backups 6 --ckpt ../claws/model/claws.pt --ckpt random   # a curve over past rounds
+    python eval_claws.py --no-compass --sample ...   # the old eval: random map, tier-list cards, noisy Claws
     python eval_claws.py --show                                                # just print the log
 
 Per checkpoint: runs, mean floor reached (+- standard error), HP lost per combat (share of max HP, deaths
 count in full), the share of combats won, turns per combat. Higher floor / win rate and lower HP lost mean
 better. A difference smaller than about two standard errors is noise: raise --runs.
 
-Rows append to data/claws_eval.jsonl. `random` is the untrained baseline (uniform-random legal actions).
-By default Claws plays sampled with noise, as in data generation; --greedy plays its top choice instead."""
+Rows append to data/claws_eval.jsonl; each records `greedy` and `compass` (the compass checkpoint's file name
+and mtime, or false). Rows from before this change have no `compass` key: they ran with the compass off and
+Claws sampled with noise, so they are not comparable with new rows. `random` is the untrained baseline
+(uniform-random legal actions). The compass checkpoint is --compass-ckpt, else $GOLDEN_COMPASS_CHECKPOINT, else
+golden_compass/golden_compass.pt; if none exists the compass is off and the row says so."""
 from __future__ import annotations
 
 import argparse
@@ -34,11 +39,28 @@ LOG = os.path.join(HERE, "data", "claws_eval.jsonl")
 BACKUPS = os.path.normpath(os.path.join(HERE, "..", "claws", "model", "backups"))
 
 
-def evaluate(ckpt: str, label: str, runs: int, seeds: list[str], workers: int, greedy: bool, ascension: int) -> dict:
+DEFAULT_COMPASS = os.path.normpath(os.path.join(HERE, "..", "golden_compass", "golden_compass.pt"))
+
+
+def evaluate(ckpt: str, label: str, runs: int, seeds: list[str], workers: int, greedy: bool, ascension: int,
+             compass: str | None = None) -> dict:
     name = "random" if ckpt == "random" else os.path.basename(ckpt)
-    # Spawned workers read these at import, so set them before the facility starts. The hazard net is off
-    # so map / card choices are the same for every checkpoint.
-    os.environ.pop("GOLDEN_COMPASS_CHECKPOINT", None)
+    # Spawned workers read these at import, so set them before the facility starts. The compass checkpoint is
+    # the same for every checkpoint of one invocation; with it off, map / card choices are random / tier list.
+    compass_row: str | bool = False
+    if compass and os.path.exists(compass):
+        os.environ["GOLDEN_COMPASS_CHECKPOINT"] = os.path.abspath(compass)
+        compass_row = f"{os.path.basename(compass)}@{int(os.path.getmtime(compass))}"
+        if greedy:  # no exploration: always the top-scored option
+            os.environ["COMPASS_EPS"] = "0"
+            os.environ["COMPASS_TAU"] = "0"  # compass.py floors the temperature at 1e-6
+        else:
+            os.environ.pop("COMPASS_EPS", None)
+            os.environ.pop("COMPASS_TAU", None)
+    else:
+        if compass:
+            print(f"warning: no compass checkpoint at {compass}; evaluating with the compass off")
+        os.environ.pop("GOLDEN_COMPASS_CHECKPOINT", None)
     if ckpt == "random":
         os.environ.pop("CLAWS_CHECKPOINT", None)
     else:
@@ -58,7 +80,7 @@ def evaluate(ckpt: str, label: str, runs: int, seeds: list[str], workers: int, g
     shutil.rmtree(tmp, ignore_errors=True)
     if row is None:
         raise SystemExit(f"{name}: no finished runs")
-    row.update(ckpt=name, greedy=greedy)
+    row.update(ckpt=name, greedy=greedy, compass=compass_row)
     return row
 
 
@@ -67,7 +89,8 @@ def show(rows: list[dict], last: int = 14) -> None:
     for r in rows[-last:]:
         floor = f"{r['mean_end_floor']:.2f}±{r['floor_se']}" if r.get("floor_se") is not None else f"{r['mean_end_floor']:.2f}"
         print(f"{str(r['label']):>8} {r['ckpt']:<28} {r['runs']:4d} {floor:>13} {str(r.get('reached_boss', '?')) + '/' + str(r['runs']):>9} {r.get('act2_rate', 0):>5.0%} {str(r['mean_hp_lost_per_combat']):>14} "
-              f"{str(r.get('combat_win_rate')):>10} {str(r.get('mean_turns')):>6}" + ("  (greedy)" if r.get("greedy") else ""))
+              f"{str(r.get('combat_win_rate')):>10} {str(r.get('mean_turns')):>6}" + ("  (greedy)" if r.get("greedy") else "")
+              + ("  +compass" if r.get("compass") else ""))
 
 
 def main() -> None:
@@ -79,7 +102,11 @@ def main() -> None:
     parser.add_argument("--seeds", nargs="+", default=[f"eval-{i}" for i in range(1, 9)])
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--ascension", type=int, default=1)
-    parser.add_argument("--greedy", action="store_true")
+    parser.add_argument("--sample", action="store_true",
+                        help="play sampled with exploration noise (Claws' Dirichlet, the compass's eps/tau) "
+                             "instead of the top choice; the old default")
+    parser.add_argument("--no-compass", action="store_true", help="random map, tier-list cards (the old eval)")
+    parser.add_argument("--compass-ckpt", default=os.environ.get("GOLDEN_COMPASS_CHECKPOINT") or DEFAULT_COMPASS)
     parser.add_argument("--log", default=LOG)
     parser.add_argument("--show", action="store_true", help="print the log and exit")
     args = parser.parse_args()
@@ -96,7 +123,8 @@ def main() -> None:
         os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
         for ckpt in ckpts:
             label = args.label or ("-" if ckpt == "random" else os.path.basename(ckpt).replace("claws_", "").replace(".pt", ""))
-            row = evaluate(ckpt, label, args.runs, args.seeds, args.workers, args.greedy, args.ascension)
+            row = evaluate(ckpt, label, args.runs, args.seeds, args.workers, not args.sample, args.ascension,
+                           None if args.no_compass else args.compass_ckpt)
             with open(LOG_PATH, "a") as f:
                 f.write(json.dumps(row) + "\n")
             show([row], 1)

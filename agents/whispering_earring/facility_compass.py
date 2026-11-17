@@ -7,6 +7,8 @@ The combat agent is whatever CLAWS_CHECKPOINT points at, so this data is only va
 retrain the hazard net after Claws changes (training_compass.sh does this each round)."""
 from __future__ import annotations
 
+import glob
+import os
 import random
 from queue import Empty
 
@@ -14,7 +16,7 @@ import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imp
 
 from checkpoint import Checkpoint
 from facility_common import FacilityConfig, NewFacility, add_common_cli_args
-from jobs import Job, RunJob
+from jobs import Job, RunJob, load_act_checkpoint
 from utils import new_run
 
 
@@ -26,6 +28,12 @@ class FacilityCompass(NewFacility):
         self._floors: list[int] = []
         self._tally = {"lost": 0, "won": 0, "censored": 0, "error": 0}
         self._capped = 0
+        self.resume_pool: list[str] = []
+        if cfg.resume_act:
+            self.resume_pool = sorted(glob.glob(os.path.join(cfg.ckpt_dir, f"*_act{cfg.resume_act}.ckpt.json")))
+            if not self.resume_pool:
+                raise SystemExit(f"--resume-act {cfg.resume_act}: no checkpoints in {cfg.ckpt_dir} yet "
+                                 "(they are written as runs reach that act; run without --resume-act first)")
 
     def _more_runs(self) -> bool:
         return self.cfg.n_main_trials is None or self._started < self.cfg.n_main_trials
@@ -33,10 +41,17 @@ class FacilityCompass(NewFacility):
     def _top_up(self) -> None:
         """Keeps two jobs per worker queued so no worker idles between runs."""
         while self._more_runs() and len(self._jobs) < 2 * self.cfg.n_branch_workers:
-            character = random.choice(self.cfg.characters)
-            seed, main_id = new_run(character, self.cfg.seeds, self._started)
             self._started += 1
-            job = RunJob(Checkpoint.fresh(main_id, character, seed, self.cfg.ascension), self.cfg.raw_dir)
+            if self.resume_pool:  # skip the acts a past run already beat: start from one of its act-boundary saves
+                sidecar = random.choice(self.resume_pool)
+                src = os.path.basename(sidecar)[:-len(".ckpt.json")]
+                cp, offset, acts = load_act_checkpoint(sidecar, f"{src}_r{os.urandom(3).hex()}")
+                job = RunJob(cp, self.cfg.raw_dir, self.cfg.ckpt_dir, offset, acts)
+            else:
+                character = random.choice(self.cfg.characters)
+                seed, main_id = new_run(character, self.cfg.seeds, self._started - 1)
+                job = RunJob(Checkpoint.fresh(main_id, character, seed, self.cfg.ascension),
+                             self.cfg.raw_dir, self.cfg.ckpt_dir)
             self._jobs[job.uid()] = job
             self.job_queue.put(job)
 
@@ -87,6 +102,11 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Run the Whispering Earring golden_compass data facility (real-HP runs)")
     add_common_cli_args(parser)
+    parser.add_argument("--ckpt-dir", default="data/act_checkpoints",
+                        help="where each run's first-map-node-of-act-N saves go (N >= 2), and where --resume-act reads them")
+    parser.add_argument("--resume-act", type=int, default=0,
+                        help="start every run from a random saved checkpoint of this act (2 = just past the act-1 boss) "
+                             "instead of from floor 0 (default: 0 = fresh runs)")
     args = parser.parse_args()
 
     FacilityCompass(
@@ -97,6 +117,8 @@ if __name__ == "__main__":
             n_branch_workers=args.branch_workers,
             n_main_trials=args.trials,
             raw_dir=args.raw_dir,
+            ckpt_dir=args.ckpt_dir,
+            resume_act=args.resume_act,
             verbose=args.verbose,
         )
     ).run()

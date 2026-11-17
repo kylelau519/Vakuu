@@ -113,6 +113,8 @@ class FacilityConfig:
     n_main_workers: int = 1  # concurrent main lines, sharing one branch-worker pool
     n_main_trials: int | None = 1  # stop after this many main-line trials *total*; None = forever
     raw_dir: str = "data/raw"
+    ckpt_dir: str = "data/act_checkpoints"  # RunJob's act-boundary saves (facility_compass.py)
+    resume_act: int = 0  # facility_compass: start runs from a saved checkpoint of this act; 0 = fresh runs
     verbose: bool = False
     stall_timeout_s: float = 300.0
 

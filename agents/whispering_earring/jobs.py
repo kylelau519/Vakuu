@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
 import random
 import zlib
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imports below)
 import buffer_layout as bl
@@ -309,13 +310,20 @@ class RunJob(Job):
                             making progress (_StuckGuard; the file then carries `capped` and the last
                             actions as `tail` so the cause can be found)
 
-    Always starts fresh -- there is nothing here worth checkpointing yet. Writes
-    raw_dir/{main_id}.json (role "run") when raw_dir is given."""
+    Starts from `checkpoint` (fresh, or an act-boundary one from load_act_checkpoint -- then pass its
+    floor_offset / acts_seen so total_floor and acts_reached stay cumulative). With ckpt_dir, the first
+    map_select of every act after the first (i.e. right after the previous act's boss) is saved there as a
+    resumable checkpoint (save_act_checkpoint), so later training can skip the acts already beaten.
+    Writes raw_dir/{main_id}.json (role "run") when raw_dir is given."""
     role = "run"
 
-    def __init__(self, checkpoint: Checkpoint, raw_dir: str | None = None):
+    def __init__(self, checkpoint: Checkpoint, raw_dir: str | None = None, ckpt_dir: str | None = None,
+                 floor_offset: int = 0, acts_seen: int = 1):
         super().__init__(checkpoint)
         self.raw_dir = raw_dir
+        self.ckpt_dir = ckpt_dir
+        self.floor_offset = floor_offset
+        self.acts_seen = acts_seen
 
     def execute(self, session: Sts2BufferSession) -> JobResult:
         decision = self.begin(session)
@@ -326,7 +334,8 @@ class RunJob(Job):
         # `floor` is the buffer's ActFloor, which restarts at 0 in every act. total_floor adds the
         # last floor of each finished act, so a run that died early in act 2 outranks one that died
         # late in act 1.
-        act, floor_offset, acts_seen = decision.act, 0, 1
+        act, floor_offset, acts_seen = decision.act, self.floor_offset, self.acts_seen
+        saved_acts = {act}  # a resumed run's own act was checkpointed by the run it came from
         outcome = None
         guard = _StuckGuard()
         capped: str | None = None
@@ -348,6 +357,10 @@ class RunJob(Job):
             if capped:
                 outcome = "censored"
                 break
+
+            if self.ckpt_dir and decision.decision == "map_select" and act not in saved_acts:
+                saved_acts.add(act)  # a map-level save, before the step (see Checkpoint)
+                save_act_checkpoint(self.checkpoint, session, self.ckpt_dir, act, floor_offset, acts_seen)
 
             state = None
             if decision.decision in MACRO_DECISIONS:
@@ -408,6 +421,31 @@ class RunJob(Job):
         combats.append(combat)
         self.recorder.record_combat(act, floor, len(combats), outcome, **{k: v for k, v in combat.items() if k != "floor"})
         return decision, stalled, capped
+
+
+def save_act_checkpoint(base: Checkpoint, session, ckpt_dir: str, act: int, floor_offset: int, acts_seen: int) -> str:
+    """Writes ckpt_dir/{main_id}_act{act}.json (the native save) plus .ckpt.json beside it: the Checkpoint
+    fields and the RunJob counters needed to resume. Returns the sidecar path. The sidecar is written last
+    and atomically, so a half-written checkpoint is never listed by load_act_checkpoints."""
+    os.makedirs(ckpt_dir, exist_ok=True)
+    save_path = os.path.abspath(os.path.join(ckpt_dir, f"{base.main_id}_act{act}.json"))
+    session.save(save_path)
+    cp = base.saved_from(session, save_path)
+    meta = {**asdict(cp), "act": act, "floor_offset": floor_offset, "acts_seen": acts_seen}
+    sidecar = os.path.join(ckpt_dir, f"{base.main_id}_act{act}.ckpt.json")
+    with open(sidecar + ".tmp", "w") as f:
+        json.dump(meta, f)
+    os.replace(sidecar + ".tmp", sidecar)
+    return sidecar
+
+
+def load_act_checkpoint(sidecar: str, new_id: str) -> tuple[Checkpoint, int, int]:
+    """(Checkpoint under a new main_id, floor_offset, acts_seen) from a save_act_checkpoint sidecar. The new id
+    keeps the many runs resumed from one checkpoint from sharing a raw file name."""
+    with open(sidecar) as f:
+        meta = json.load(f)
+    fields = {k: meta[k] for k in ("character", "seed", "ascension", "actions", "save_path", "save_index")}
+    return Checkpoint(main_id=new_id, **fields), meta["floor_offset"], meta["acts_seen"]
 
 
 class ForkJob(Job):
