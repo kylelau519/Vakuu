@@ -63,10 +63,10 @@ def evaluate(ckpt: str, label: str, runs: int, seeds: list[str], workers: int, g
 
 
 def show(rows: list[dict], last: int = 14) -> None:
-    print(f"{'label':>8} {'checkpoint':<28} {'runs':>4} {'floor':>11} {'hp lost/combat':>14} {'combat win':>10} {'turns':>6}")
+    print(f"{'label':>8} {'checkpoint':<28} {'runs':>4} {'floor (total)':>13} {'act2':>5} {'hp lost/combat':>14} {'combat win':>10} {'turns':>6}")
     for r in rows[-last:]:
         floor = f"{r['mean_end_floor']:.2f}±{r['floor_se']}" if r.get("floor_se") is not None else f"{r['mean_end_floor']:.2f}"
-        print(f"{str(r['label']):>8} {r['ckpt']:<28} {r['runs']:4d} {floor:>11} {str(r['mean_hp_lost_per_combat']):>14} "
+        print(f"{str(r['label']):>8} {r['ckpt']:<28} {r['runs']:4d} {floor:>13} {r.get('act2_rate', 0):>5.0%} {str(r['mean_hp_lost_per_combat']):>14} "
               f"{str(r.get('combat_win_rate')):>10} {str(r.get('mean_turns')):>6}" + ("  (greedy)" if r.get("greedy") else ""))
 
 

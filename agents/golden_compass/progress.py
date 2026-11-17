@@ -28,14 +28,16 @@ def summarize(run_dir: str, label: str | None) -> dict | None:
     combats = [c for d in runs for c in d.get("combats", []) if c.get("max_hp")]
     won = sum(c.get("outcome") == "won" for c in combats)
     lost = sum(c.get("outcome") == "lost" for c in combats)
-    floors = [d["end_floor"] for d in runs]
+    # total_floor counts floors across acts (end_floor restarts every act); older run files only have end_floor.
+    floors = [d.get("total_floor", d["end_floor"]) for d in runs]
     by_seed: dict[str, list[int]] = {}
-    for d in runs:
-        by_seed.setdefault(d["seed"], []).append(d["end_floor"])
+    for d, f in zip(runs, floors):
+        by_seed.setdefault(d["seed"], []).append(f)
     return {
         "label": label, "runs": len(runs),
         "mean_end_floor": round(statistics.mean(floors), 2), "best_floor": max(floors),
         "floor_se": round(statistics.stdev(floors) / len(floors) ** 0.5, 2) if len(floors) > 1 else None,
+        "act2_rate": round(sum(d.get("acts_reached", 1) >= 2 for d in runs) / len(runs), 3),
         "combats": len(combats),
         "combat_win_rate": round(won / (won + lost), 3) if won + lost else None,
         "mean_turns": round(statistics.mean(c.get("turns", 0) for c in combats), 2) if combats else None,
@@ -64,10 +66,10 @@ def main() -> None:
         f.write(json.dumps(row) + "\n")
     with open(args.log) as f:
         rows = [json.loads(line) for line in f if line.strip()][-args.show:]
-    print("round  runs  mean_end_floor  best  wins  combats  hp_lost/combat")
+    print("round  runs  mean_total_floor  best  act2  wins  combats  hp_lost/combat")
     for r in rows:
-        print(f"{str(r['label']):>5}  {r['runs']:4d}  {r['mean_end_floor']:14.2f}  {r['best_floor']:4d}  "
-              f"{r['wins']:4d}  {r['mean_combats']:7.2f}  {r['mean_hp_lost_per_combat']}"
+        print(f"{str(r['label']):>5}  {r['runs']:4d}  {r['mean_end_floor']:16.2f}  {r['best_floor']:4d}  "
+              f"{r.get('act2_rate', 0):4.0%}  {r['wins']:4d}  {r['mean_combats']:7.2f}  {r['mean_hp_lost_per_combat']}"
               + (f"  per seed {r['per_seed_mean_floor']}" if len(r.get("per_seed_mean_floor", {})) > 1 else ""))
 
 

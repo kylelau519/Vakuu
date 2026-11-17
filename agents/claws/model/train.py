@@ -71,7 +71,7 @@ torch.set_num_threads(1)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # for `common`
 from common.tokenizer import EntityVocab  # noqa: E402
 
-from model import ClawsNet, FEATURE_DIM, GlobalVocab, V_SCALE  # noqa: E402
+from model import ClawsNet, FEATURE_DIM, GlobalVocab, PILE_KEYS, V_SCALE  # noqa: E402
 
 _LOGP_FLOOR = -6.0  # ~0.25% probability -- see module docstring for why this exists
 
@@ -90,23 +90,29 @@ def _normalize_advantages(examples: list[dict]) -> None:
             ex["advantage"] /= std
 
 
-def _collate(examples: list[dict]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+def _collate(
+    examples: list[dict],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
     """Pads a list of examples' token tensors up to the batch's own max token count. Returns
     (type_ids, global_ids, features, pad_mask), each with a leading batch dimension -- pad_mask
-    is True at padded positions (see ClawsNet.encode_batched)."""
+    is True at padded positions (see ClawsNet.encode_batched). The fifth item stacks the fixed-size
+    pile tensors (PILE_KEYS) -- no padding needed, every pile is already padded to 50."""
     lens = [ex["type_ids"].shape[0] for ex in examples]
     max_len = max(lens)
     b = len(examples)
     type_ids = torch.zeros(b, max_len, dtype=torch.long)
     global_ids = torch.zeros(b, max_len, dtype=torch.long)
+    group_ids = torch.zeros(b, max_len, dtype=torch.long)
     features = torch.zeros(b, max_len, FEATURE_DIM)
     pad_mask = torch.ones(b, max_len, dtype=torch.bool)
     for i, (ex, n) in enumerate(zip(examples, lens)):
         type_ids[i, :n] = ex["type_ids"]
         global_ids[i, :n] = ex["global_ids"]
+        group_ids[i, :n] = ex["group_ids"]
         features[i, :n] = ex["features"]
         pad_mask[i, :n] = False
-    return type_ids, global_ids, features, pad_mask
+    piles = {k: torch.stack([ex[k] for ex in examples]) for k in PILE_KEYS}
+    return type_ids, global_ids, features, pad_mask, piles, group_ids
 
 
 def _batch_step(
@@ -120,11 +126,12 @@ def _batch_step(
 
     Returns (loss, total_policy_loss, total_squared_error_hp, n_scored) -- the last three are
     floats/int for the caller's running epoch totals, not part of the backward graph."""
-    type_ids, global_ids, features, pad_mask = _collate(examples)
+    type_ids, global_ids, features, pad_mask, piles, group_ids = _collate(examples)
     type_ids, global_ids, features, pad_mask = (
         type_ids.to(device), global_ids.to(device), features.to(device), pad_mask.to(device)
     )
-    h = net.encode_batched(type_ids, global_ids, features, pad_mask)  # [B, N, dim]
+    piles, group_ids = {k: v.to(device) for k, v in piles.items()}, group_ids.to(device)
+    h = net.encode_batched(type_ids, global_ids, features, pad_mask, piles, group_ids)  # [B, N, dim]
 
     queries = []
     spans: list[tuple[int, int]] = []  # (start, count) into `queries` per example
@@ -281,11 +288,13 @@ def main() -> None:
     examples: list[dict] = []
     for path in args.datasets:
         examples.extend(torch.load(path, weights_only=False))
+    if examples and any(k not in examples[0] for k in (*PILE_KEYS, "group_ids")):
+        raise SystemExit("dataset predates pile tokens (no pile_*/group_ids) -- re-run materialize.py")
     print(f"{len(examples)} training examples from {len(args.datasets)} dataset file(s)")
 
     net = ClawsNet(GlobalVocab(EntityVocab.load()))
     if args.init:
-        net.load_state_dict(torch.load(args.init, weights_only=True))
+        net.load_compatible(torch.load(args.init, weights_only=True))
         print(f"resumed from {args.init}")
     else:
         print("--init \"\": training from a random init")

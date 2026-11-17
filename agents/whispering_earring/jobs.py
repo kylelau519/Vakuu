@@ -302,6 +302,7 @@ class RunJob(Job):
     state the net is asked about when it picks a path). Per combat it logs the HP going in and out.
     The run file holds those plus the outcome and the floor the run ended on:
 
+        (end_floor is within end_act; total_floor is cumulative across acts -- use it to compare runs)
         outcome "lost"      died on end_floor            (hazard label 1 there, 0 before)
         outcome "won"       cleared the game             (hazard label 0 everywhere)
         outcome "censored"  stopped alive on end_floor: a combat hit MAX_COMBAT_TURNS, or the run stopped
@@ -322,6 +323,10 @@ class RunJob(Job):
         states: list[dict] = []
         combats: list[dict] = []
         floor = decision.floor
+        # `floor` is the buffer's ActFloor, which restarts at 0 in every act. total_floor adds the
+        # last floor of each finished act, so a run that died early in act 2 outranks one that died
+        # late in act 1.
+        act, floor_offset, acts_seen = decision.act, 0, 1
         outcome = None
         guard = _StuckGuard()
         capped: str | None = None
@@ -330,6 +335,9 @@ class RunJob(Job):
             if decision.decision == "game_over":
                 outcome = "won" if decision.victory else "lost"
                 break
+            if decision.act != act:  # first decision of a new act: `floor` still holds the old act's last
+                floor_offset += floor
+                act, acts_seen = decision.act, acts_seen + 1
             floor = decision.floor  # at game_over the buffer's floor is the room the run died in -- keep the last live one
             if decision.decision == "combat_play":
                 decision, stalled, capped = self._play_combat(session, decision, combats, guard)
@@ -355,12 +363,14 @@ class RunJob(Job):
                             states.append({"decision": "map_entered", "action": name, "state": entered.to_json()})
             decision = session.step(name, **kwargs)
 
-        self.recorder.meta.update(end_floor=floor, states=states)
+        self.recorder.meta.update(
+            end_floor=floor, end_act=act, acts_reached=acts_seen, total_floor=floor_offset + floor, states=states,
+        )
         if capped:
             self.recorder.meta.update(capped=capped, tail=session.action_log[-12:])
         if self.raw_dir is not None:
             self.recorder.save(os.path.join(self.raw_dir, f"{self.main_id}.json"), session.action_log, outcome=outcome)
-        return self.result(session, outcome, end_floor=floor, n_states=len(states), combats=combats, capped=capped)
+        return self.result(session, outcome, end_floor=floor, total_floor=floor_offset + floor, acts_reached=acts_seen, n_states=len(states), combats=combats, capped=capped)
 
     def _play_combat(self, session, decision, combats: list[dict], guard: _StuckGuard):
         """Plays one combat to its end. -> (decision after it, whether it was stopped as stalled, why it was

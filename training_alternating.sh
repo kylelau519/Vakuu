@@ -35,8 +35,8 @@ while true; do
     find "$WE_DATA/raw" -maxdepth 1 -name '*.json' -delete
 
     python "$vakuu/agents/whispering_earring/facility_claws.py" \
-        --trials "${CLAWS_TRIALS:-5}" --branch-workers "${WORKERS:-14}" \
-        --forks-per-turn "${CLAWS_FORKS:-40}" --main-workers "${CLAWS_MAIN_WORKERS:-3}" \
+        --trials "${CLAWS_TRIALS:-5}" --branch-workers "${WORKERS:-17}" \
+        --forks-per-turn "${CLAWS_FORKS:-40}" --main-workers "${CLAWS_MAIN_WORKERS:-5}" \
         --ascension 1 --raw-dir "$WE_DATA/raw" --dedup-forks "${SEED_ARGS[@]}"
     python "$CLAWS_DIR/materialize.py" "$WE_DATA/raw/" --out "$CLAWS_DIR/dataset.pt" \
         --target "${CLAWS_TARGET:-return}" --jobs "${JOBS:-18}"

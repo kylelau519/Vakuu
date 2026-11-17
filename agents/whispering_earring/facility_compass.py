@@ -49,8 +49,8 @@ class FacilityCompass(NewFacility):
             last = f"{uid} FAILED"
         else:
             self._tally[result.outcome] = self._tally.get(result.outcome, 0) + 1
-            self._floors.append(aux["end_floor"])
-            last = f"{uid} {result.outcome} @floor {aux['end_floor']}"
+            self._floors.append(aux["total_floor"])
+            last = f"{uid} {result.outcome} @floor {aux['total_floor']} (act {aux['acts_reached']})"
             if aux.get("capped"):
                 self._capped += 1
                 last += f" CAPPED ({aux['capped']})"

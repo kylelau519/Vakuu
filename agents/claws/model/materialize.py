@@ -94,9 +94,9 @@ def _example(
     batch = tokenize_from_buffer(decision, gvocab)
     action_index = _option_index(options, entry) if entry is not None and advantage is not None else None
     return {
-        "type_ids": batch.type_ids, "global_ids": batch.global_ids, "features": batch.features,
+        "type_ids": batch.type_ids, "global_ids": batch.global_ids, "group_ids": batch.group_ids, "features": batch.features,
         "player_pos": batch.player_pos, "hand_pos": batch.hand_pos, "enemy_pos": batch.enemy_pos,
-        "potion_pos": batch.potion_pos, "options": options,
+        "potion_pos": batch.potion_pos, "options": options, **batch.piles,
         "value": float(max(0, value)),
         "action_index": action_index,
         "advantage": float(advantage) if action_index is not None else 0.0,

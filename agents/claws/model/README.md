@@ -61,20 +61,24 @@ before this design has a different value head (bounded `tanh`, not HP) and shoul
 ## Representation
 
 Self-attention over typed tokens: `tok = id_emb[global_id] + type_emb[type] + feat_proj[type](features)`
-(numeric features signed-`log1p`), pre-norm transformer blocks, then:
+(numeric features flat `x / 10`, no log; hp keeps its hp/max_hp ratio), pre-norm transformer blocks, then:
 
 - policy: one query per legal action (`play_card` = hand-card token, plus the target enemy's token for
   an aimed card; `use_potion` likewise; `end_turn` = a learned query plus the player token) -> MLP -> logit.
 - value: the player token -> MLP -> `V_SCALE * softplus`.
 
-Token types today: player, hand cards, enemies (hp, block, intent), relics, potions, player powers.
+Token types today: player (hp ratio, hp/10, block/10, energy/10, max energy/10), hand cards, enemies (hp, block, intent), relics, potions, player powers, enemy powers (one token per power, amount/10; the owner enemy's id embedding is added so the power knows whose it is),
+and one pooled token each for the draw, discard and exhaust piles. A pile token is
+`rho(masked_mean(phi(card)) ++ summaries)` (`PileEncoder`): `phi` sees the shared `id_emb`, cost,
+upgraded, copies/10 and (draw pile) copies/draw_count; the summaries are count/50, counts by card type,
+0-cost count and mean cost. Mean-pooling with no position embedding hides the draw pile's true order.
+Datasets materialized before piles existed lack the `pile_*` tensors and must be re-materialized;
+older checkpoints still load (`load_compatible`), with the pile weights freshly initialized.
 
 ## Known gaps
 
-- **No piles, enemy powers, orbs or history counters in the tokens.** What is left in the draw pile and
-  what the enemies are buffed with drive the HP still to be lost, so `V` is noisier than it needs to be.
-  Piles must be tokenized as an unordered multiset: the engine lists the draw pile in its true order,
-  and a model that sees that order learns something the live game never shows.
+- **No multi-hit intent, orbs or history counters in the tokens.** What the enemies are
+  buffed with drives the HP still to be lost, so `V` is noisier than it needs to be.
 - **`V` is a mean.** A hazard model downstream needs how likely a loss at least as large as the player's
   HP is; a categorical head over loss buckets (with `V` as its mean) would give that.
 - **HP is the only cost.** Potions are free, so the policy has no reason to keep them; record them per combat
