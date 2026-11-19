@@ -20,6 +20,10 @@ _claws_net = None  # lazy-loaded once per worker process, on first combat decisi
 # Fraction of root probability mass replaced by noise; 0.25 is AlphaZero's own. CLAWS_NOISE_EPS overrides it, e.g. the
 # compass stage plays near-deployed (training_alternating.sh) so its labels are not mostly combat luck.
 _COMBAT_DIRICHLET_EPS = float(os.environ.get("CLAWS_NOISE_EPS", "0.25"))
+# At or below this eps the noise is a rare deviation from the top move: (1 - eps) argmax + eps noise, so with 0.05 Claws plays
+# its top move ~95% of the time (the compass stage, which wants the deployed agent). Above it the noise is exploration
+# blended into Claws's own softmax, which is then sampled (Claws's mainline and forks, which want varied play).
+_ARGMAX_MIX_MAX_EPS = 0.1
 _DIRICHLET_ALPHA_SCALE = 10.0  # concentration = this / n_legal_options
 
 # The shop / remove / upgrade heuristics, and the card-reward fallback while no hazard net exists.
@@ -89,6 +93,8 @@ def _choose_combat_action_claws(
     if combat_dirichlet_noise:
         alpha = _DIRICHLET_ALPHA_SCALE / len(options)
         noise = torch.distributions.Dirichlet(torch.full((len(options),), alpha)).sample()
+        if _COMBAT_DIRICHLET_EPS <= _ARGMAX_MIX_MAX_EPS:
+            probs = torch.nn.functional.one_hot(torch.argmax(probs), len(options)).to(probs.dtype)
         probs = (1 - _COMBAT_DIRICHLET_EPS) * probs + _COMBAT_DIRICHLET_EPS * noise
     idx = int(torch.argmax(probs).item()) if _CLAWS_GREEDY else int(torch.multinomial(probs, 1).item())
     policy = [

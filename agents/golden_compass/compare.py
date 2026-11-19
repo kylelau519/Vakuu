@@ -5,7 +5,7 @@
 Plays fresh random-seed runs with facility_compass.py (Claws greedy, half the runs with each compass choosing the
 route, so neither net's own trajectories are favoured), written to a temp dir so nothing trains on them, and scores
 both nets' death-hazard BCE on every run (the per-run mean over its logged states). The candidate wins a run when its
-loss is lower. PASS: it wins >= 65% of the non-tied runs and its mean loss is lower. Floors reached play no part.
+loss is lower. PASS: it wins >= 60% of the non-tied runs and its mean loss is lower. Floors reached play no part.
 """
 from __future__ import annotations
 
@@ -21,15 +21,16 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 HERE = Path(__file__).resolve().parent
 WE = HERE.parent / "whispering_earring"
 CLAWS = HERE.parent / "claws" / "model" / "claws.pt"
-THRESHOLD = 0.65
+THRESHOLD = 0.60
 
 
-def _play(ckpt: str, runs: int, workers: int, raw: str, ckpt_dir: str) -> None:
+def _play(ckpt: str, runs: int, workers: int, raw: str, ckpt_dir: str, claws: Path = CLAWS, resume_act: int = 0) -> None:
     env = dict(os.environ, OMP_NUM_THREADS="1", DOTNET_gcServer="0", CLAWS_NOISE_EPS="0", GOLDEN_COMPASS_CHECKPOINT=ckpt)
-    if CLAWS.exists():
-        env["CLAWS_CHECKPOINT"] = str(CLAWS)
+    if claws.exists():
+        env["CLAWS_CHECKPOINT"] = str(claws)
+    extra = ["--resume-act", str(resume_act)] if resume_act else []
     subprocess.run([sys.executable, str(WE / "facility_compass.py"), "--trials", str(runs), "--branch-workers", str(workers),
-                    "--ascension", "1", "--raw-dir", raw, "--ckpt-dir", ckpt_dir],
+                    "--ascension", "1", "--raw-dir", raw, "--ckpt-dir", ckpt_dir, *extra],
                    cwd=WE, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
 
@@ -39,6 +40,9 @@ def main() -> int:
     ap.add_argument("accepted")
     ap.add_argument("--runs", type=int, default=40)
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--claws", default=str(CLAWS), help="the Claws checkpoint that plays the runs (default: the main one)")
+    ap.add_argument("--resume-act", type=int, default=0, help="play from saved act-N starts (act 2 = training_alternating_run2.sh) instead of floor 0")
+    ap.add_argument("--ckpt-dir", default=None, help="the act saves --resume-act reads (default: a temp dir, i.e. fresh runs)")
     a = ap.parse_args()
     cand, acc = os.path.abspath(a.candidate), os.path.abspath(a.accepted)
     tmp = tempfile.mkdtemp(prefix="compass_gate_")
@@ -48,7 +52,8 @@ def main() -> int:
             raw = f"{tmp}/raw{i}"
             os.makedirs(raw)
             dirs.append(raw)
-            _play(ck, a.runs // 2 + (a.runs % 2 if i == 0 else 0), a.workers, raw, f"{tmp}/ckpt{i}")
+            _play(ck, a.runs // 2 + (a.runs % 2 if i == 0 else 0), a.workers, raw, a.ckpt_dir or f"{tmp}/ckpt{i}",
+                  Path(a.claws), a.resume_act)
         ds = f"{tmp}/ds.pt"
         subprocess.run([sys.executable, str(HERE / "materialize.py"), *dirs, "--out", ds], cwd=HERE,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)

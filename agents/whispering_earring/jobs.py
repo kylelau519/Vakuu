@@ -21,6 +21,7 @@ MAX_COMBAT_TURNS = 20  # a combat that outlasts this is "stalled": HP loss alone
 # any of these): actions within one turn, the same decision coming back unchanged, and a run's total length.
 MAX_ACTIONS_PER_TURN = 200
 MAX_SAME_DECISION = 25
+EVENT_DEAD_AFTER = 3
 MAX_RUN_ACTIONS = 4000
 
 
@@ -192,6 +193,7 @@ class MainlineJob(Job):
         combats: list[dict] = []
         room_checkpoints: list[Checkpoint] = []
         outcome = None
+        guard = _StuckGuard()
 
         while outcome is None:
             if decision.decision == "game_over":
@@ -199,7 +201,11 @@ class MainlineJob(Job):
             elif decision.decision == "combat_play":
                 decision, outcome = self._play_combat(session, decision, combats, save_path, save_index)
             else:
-                name, kwargs, policy, purpose = choose_action(decision, session, purpose)
+                guard.tripped(decision)  # only to count repeats; a dead event is left (see _StuckGuard.event_dead)
+                if guard.event_dead(decision):
+                    name, kwargs, policy = "leave_room", {}, None
+                else:
+                    name, kwargs, policy, purpose = choose_action(decision, session, purpose)
                 if policy is not None:
                     session.logger.attach_policy(policy)
                 if name == "select_map_node":
@@ -280,6 +286,12 @@ class _StuckGuard:
         self.steps = 0
         self._last: int | None = None
         self._same = 0
+
+    def event_dead(self, decision) -> bool:
+        """An event_choice whose buffer did not change after EVENT_DEAD_AFTER choose_option calls: the engine ignores the
+        choice (seen in act 2 on Amalgamator, Crystal Sphere, Colorful Philosophers, Potion Courier -- a finished event
+        still shown as pending), and only leave_room gets out."""
+        return decision.decision == "event_choice" and self._same >= EVENT_DEAD_AFTER
 
     def tripped(self, decision) -> str | None:
         self.steps += 1
@@ -365,7 +377,10 @@ class RunJob(Job):
             state = None
             if decision.decision in MACRO_DECISIONS:
                 state = rs.encode_from_buffer(decision.arr, session.character, session.ascension)
-            name, kwargs, policy, purpose = choose_action(decision, session, purpose)
+            if guard.event_dead(decision):
+                name, kwargs, policy = "leave_room", {}, None
+            else:
+                name, kwargs, policy, purpose = choose_action(decision, session, purpose)
             if policy is not None:
                 session.logger.attach_policy(policy)
             if state is not None:

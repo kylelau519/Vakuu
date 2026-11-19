@@ -16,7 +16,7 @@ import sts2_path  # noqa: F401  (sets sys.path to sts2-cli/python before the imp
 from checkpoint import Checkpoint
 from dedup import ForkDedup
 from facility_common import FacilityConfig, NewFacility, add_common_cli_args
-from jobs import ForkJob, Job, JobResult, MainlineJob
+from jobs import ForkJob, Job, JobResult, MainlineJob, load_act_checkpoint
 from utils import new_run
 
 
@@ -36,6 +36,11 @@ class FacilityClaws(NewFacility):
         self._dedups: dict[str, ForkDedup] = {}  # main_id -> its registry, while the run is open
         self._dup_stats: dict[str, dict[str, dict]] = {}  # main_id -> {"c001t01": {"forks", "discarded", "multiplicity"}}
         self._dups_discarded = 0
+        self.resume_pool: list[str] = []  # act-boundary saves a run can start from (cfg.resume_act), as facility_compass does
+        if cfg.resume_act:
+            self.resume_pool = sorted(glob.glob(os.path.join(cfg.ckpt_dir, f"*_act{cfg.resume_act}.ckpt.json")))
+            if not self.resume_pool:
+                raise SystemExit(f"--resume-act {cfg.resume_act}: no checkpoints in {cfg.ckpt_dir} yet")
 
     def _more_runs(self) -> bool:
         return self.cfg.n_main_trials is None or self._started < self.cfg.n_main_trials
@@ -45,18 +50,23 @@ class FacilityClaws(NewFacility):
         (self.priority_job_queue if priority else self.job_queue).put(job)
 
     def _start_run(self) -> None:
-        character = random.choice(self.cfg.characters)
-        seed, main_id = new_run(character, self.cfg.seeds, self._started)
-        self._started += 1
+        if self.resume_pool:  # start past the acts a past run already beat; floor offsets are not used by Claws
+            sidecar = random.choice(self.resume_pool)
+            src = os.path.basename(sidecar)[:-len(".ckpt.json")]
+            checkpoint, _offset, _acts = load_act_checkpoint(sidecar, f"{src}_r{os.urandom(3).hex()}")
+            main_id = checkpoint.main_id
+            self._started += 1
+        else:
+            character = random.choice(self.cfg.characters)
+            seed, main_id = new_run(character, self.cfg.seeds, self._started)
+            checkpoint = Checkpoint.fresh(main_id, character, seed, self.cfg.ascension)
+            self._started += 1
         self._forks_left[main_id] = 1  # the mainline itself; forks are added when it returns
         dedup = None
         if self.cfg.dedup_forks:
             dedup = self._dedups[main_id] = ForkDedup(self._manager.dict())
             self._dup_stats[main_id] = {}
-        self._submit(MainlineJob(
-            Checkpoint.fresh(main_id, character, seed, self.cfg.ascension), self._save_dir, self.cfg.raw_dir,
-            dedup=dedup,
-        ), priority=True)
+        self._submit(MainlineJob(checkpoint, self._save_dir, self.cfg.raw_dir, dedup=dedup), priority=True)
 
     def _fork_all(self, mainline: MainlineJob, result: JobResult) -> int:
         """Queues forks_per_turn forks of every turn of every combat the mainline played."""
@@ -167,6 +177,11 @@ if __name__ == "__main__":
                              "streams, draw order, monster queue) an earlier member of its group already "
                              "reached, instead of playing out the combat; discards are counted per group in "
                              "raw-dir/dedup/ (default: off)")
+    parser.add_argument("--ckpt-dir", default="data/act_checkpoints",
+                        help="where the act-boundary saves are (written by facility_compass.py), read by --resume-act")
+    parser.add_argument("--resume-act", type=int, default=0,
+                        help="start every run from a random saved checkpoint of this act (2 = just past the act-1 boss) "
+                             "instead of from floor 0 (default: 0 = fresh runs)")
     args = parser.parse_args()
 
     FacilityClaws(
@@ -180,6 +195,8 @@ if __name__ == "__main__":
             n_main_workers=args.main_workers,
             n_main_trials=args.trials,
             raw_dir=args.raw_dir,
+            ckpt_dir=args.ckpt_dir,
+            resume_act=args.resume_act,
             verbose=args.verbose,
         )
     ).run()

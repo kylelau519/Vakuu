@@ -31,8 +31,14 @@ import room_search  # noqa: E402
 import run_state as rs  # noqa: E402
 
 _CHECKPOINT = os.environ.get("GOLDEN_COMPASS_CHECKPOINT")
-_EPS = float(os.environ.get("COMPASS_EPS", "0.1"))  # share of uniform-random picks
-_TAU = float(os.environ.get("COMPASS_TAU", "0.5"))  # softmax temperature, in expected-floors units
+_EPS = float(os.environ.get("COMPASS_EPS", "0.03"))  # share of uniform-random picks (was 0.1: too many random routes for the labels to describe the deployed compass)
+_TAU = float(os.environ.get("COMPASS_TAU", "0.35"))  # softmax temperature, in expected-floors units
+# Test switch: COMPASS_DISABLE=map,card,rest,shop,select turns those decisions back to the fallback (random map,
+# tier-list cards, ...). Unset = the compass decides everything, as always.
+# Card rewards only: how many floors one full max-HP share of predicted combat cost is worth (the aux head is what the
+# branch data trains). 0 = the hazard score alone, as before.
+_CARD_AUX = float(os.environ.get("COMPASS_CARD_AUX", "0"))
+_DISABLED = {k.strip() for k in os.environ.get("COMPASS_DISABLE", "").split(",") if k.strip()}
 
 _net = None
 _encoder = None
@@ -51,15 +57,21 @@ def get_net():
     return _net
 
 
-def score(states: list[rs.RunState]) -> list[float]:
-    """Expected further floors survived, per state. Needs a loaded net."""
+def score(states: list[rs.RunState], aux_weight: float = 0.0) -> list[float]:
+    """Expected further floors survived, per state, minus aux_weight x the aux head's predicted HP cost (the share of
+    max HP the next AUX combats cost; 0 = hazard only, the original score). Needs a loaded net."""
     import hazard_net as hn
     net = get_net()
     assert net is not None, "score() needs a hazard net checkpoint"
     batch = _encoder.collate(states)
     with torch.no_grad():
-        logits, _aux = net(batch)
-        return hn.expected_floors(logits, batch["start"]).tolist()
+        logits, aux = net(batch)
+        # act 1 states: the floors after the boss are asked of the state healed to full HP at act 2's Ancient
+        healed = _encoder.collate([rs.at_ancient(st) if st.act <= 1 else st for st in states])
+        value = hn.expected_floors(logits, batch["start"], net(healed)[0])
+        if aux_weight:
+            value = value - aux_weight * aux.sum(1)
+        return value.tolist()
 
 
 def _sample(scores: list[float]) -> tuple[int, list[float]]:
@@ -74,7 +86,7 @@ def choose_map(decision, character: str | None, ascension: int):
     """-> (name, kwargs, policy|None) for a map_select decision."""
     arr = decision.arr
     net = get_net()
-    if net is None:
+    if net is None or "map" in _DISABLED:
         col, row = random.choice(rs.map_options(arr))
         return "select_map_node", {"col": col, "row": row}, None
 
@@ -96,7 +108,7 @@ def choose_card_reward(decision, cards: list[tuple[int, str | None, int]], can_s
     """cards: (index, card_id, upgraded) for each offered card. -> (name, kwargs, policy), or None
     when there is no net (the caller falls back to the tier list)."""
     net = get_net()
-    if net is None:
+    if net is None or "card" in _DISABLED:
         return None
     base = rs.encode_from_buffer(decision.arr, character, ascension)
     states = [rs.with_card(base, cid, up) for _i, cid, up in cards]
@@ -104,7 +116,7 @@ def choose_card_reward(decision, cards: list[tuple[int, str | None, int]], can_s
     if can_skip or not cards:
         states.append(base)
         labels.append({"skip": True})
-    scores = score(states)
+    scores = score(states, _CARD_AUX)
     idx, probs = _sample(scores)
     for label, s, p in zip(labels, scores, probs):
         label["score"], label["prob"] = s, p
@@ -127,7 +139,7 @@ def _pick(options: list, kind: str):
 
 def choose_rest(decision, character: str | None, ascension: int):
     """-> (name, kwargs, next_purpose, policy), or None (no net / nothing scoreable: caller falls back)."""
-    if get_net() is None:
+    if get_net() is None or "rest" in _DISABLED:
         return None
     base = rs.encode_from_buffer(decision.arr, character, ascension)
     options = room_search.rest_options(decision.arr, base, score)
@@ -139,7 +151,7 @@ def choose_rest(decision, character: str | None, ascension: int):
 
 def choose_shop(decision, character: str | None, ascension: int):
     """-> (name, kwargs, next_purpose, policy), or None without a net."""
-    if get_net() is None:
+    if get_net() is None or "shop" in _DISABLED:
         return None
     base = rs.encode_from_buffer(decision.arr, character, ascension)
     options = room_search.shop_options(decision.arr, base, score)
@@ -150,7 +162,7 @@ def choose_shop(decision, character: str | None, ascension: int):
 def choose_card_select(decision, purpose: str | None, character: str | None, ascension: int):
     """The follow-up pick after a Smith ("upgrade") or a shop removal ("remove"). -> (name, kwargs,
     policy), or None without a net or for any other kind of selection (caller picks at random)."""
-    if get_net() is None or purpose not in ("upgrade", "remove"):
+    if get_net() is None or "select" in _DISABLED or purpose not in ("upgrade", "remove"):
         return None
     base = rs.encode_from_buffer(decision.arr, character, ascension)
     options = room_search.select_options(decision.arr, base, purpose, score)

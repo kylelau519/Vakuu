@@ -23,7 +23,7 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import torch  # noqa: E402
 
-from hazard_net import AUX, FINAL_FLOOR  # noqa: E402
+from hazard_net import ACT2_END, AUX, FINAL_FLOOR, head_floor  # noqa: E402
 
 OUTCOME_CODE = {"lost": 0, "won": 1, "censored": 2}
 
@@ -39,29 +39,34 @@ def _aux_targets(combats: list[dict], start: int) -> tuple[list[float], list[flo
 
 
 def materialize_run(data: dict) -> list[dict]:
-    """Only act 1 is learned: floors restart at 2 in every act, so an act-2 floor would be read as an early
-    act-1 floor. A run that got into act 2 is, for its act-1 states, one that survived to the end of act 1
-    (censored there); its act-2 states and combats are dropped."""
+    """Act 1 and act 2 are learned; floors are the head index (hazard_net.head_floor, act 2 = 17 + the in-act floor).
+    An act 1 state of a run that got into act 2 is censored at the end of act 1: the floors after the boss would be
+    labelled from a state whose HP is about to be healed, so act 2's hazards are learned only from act 2 states (the
+    first of which, at the Ancient, has full HP). A run that went on to act 3 is censored at the end of act 2; act 3
+    states are dropped."""
     code = OUTCOME_CODE.get(data.get("outcome"))
     states = data.get("states") or []
     if code is None or not states or data.get("error"):
         return []
-    end = int(data["end_floor"])
-    if int(data.get("end_act") or 1) >= 2:
-        end, code = FINAL_FLOOR, 2
-    combats = [c for c in data.get("combats") or [] if int(c.get("act") or 1) == 1]
+    end_act, end_floor = int(data.get("end_act") or 1), int(data["end_floor"])
     samples = []
     for entry in states:
         state = entry["state"]
-        if int(state.get("act") or 1) != 1:
+        act = int(state.get("act") or 1)
+        if act == 1:
+            end, c = (FINAL_FLOOR, 2) if end_act >= 2 else (end_floor, code)
+        elif act == 2:
+            end, c = (ACT2_END, 2) if end_act >= 3 else (head_floor(2, end_floor), code)
+        else:
             continue
-        start = int(state["floor"])
-        if code == 0 and start > end:  # died in the room it was already in: nothing left to predict
+        start = head_floor(act, int(state["floor"]))
+        if c == 0 and start > end:  # died in the room it was already in: nothing left to predict
             continue
-        aux, aux_mask = _aux_targets(combats, start)
+        combats = [x for x in data.get("combats") or [] if int(x.get("act") or 1) == act]
+        aux, aux_mask = _aux_targets(combats, int(state["floor"]))
         samples.append({
             "run": data["main_id"], "decision": entry["decision"], "state": state,
-            "end": end, "outcome": code, "aux": aux, "aux_mask": aux_mask,
+            "end": end, "outcome": c, "aux": aux, "aux_mask": aux_mask,
         })
     return samples
 

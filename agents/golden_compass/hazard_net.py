@@ -36,6 +36,19 @@ AUX = 6  # combats whose HP cost the auxiliary head predicts
 ACT1_BOSS_FLOOR = 17  # floors restart in every act; act 1's boss is floor 17 (act 2 restarts at 2)
 FINAL_FLOOR = ACT1_BOSS_FLOOR + 1  # expected_floors() stops counting here: the compass looks only to the end of act 1
 NUM_FEATURES = 9
+# Act 2 lives in the same 64-wide head at index ACT2_OFFSET + (floor within the act), so it never collides with act 1 (floors
+# restart in every act). In-act floor 1 of act 2 is the Ancient: no combat, no death -- index ANCIENT_HEAD, hazard 0 -- and
+# it heals the run, so the hazards after it are asked of a state with full HP (run_state.healed). The first room after it is
+# in-act floor 2 (index 19). Scoring looks as far as ACT2_LAST (the Ancient and the seven floors after it).
+ACT2_OFFSET = 17
+ANCIENT_HEAD = ACT2_OFFSET + 1
+ACT2_LAST = ACT2_OFFSET + 8
+ACT2_END = ACT2_OFFSET + 17  # where a run that went on to act 3 is censored
+
+
+def head_floor(act: int, floor: int) -> int:
+    """Index in the hazard head of an in-act floor."""
+    return int(floor) if int(act) <= 1 else ACT2_OFFSET + int(floor)
 
 CHARACTERS = ["IRONCLAD", "SILENT", "DEFECT", "REGENT", "NECROBINDER"]
 _CHAR_IDX = {c: i + 2 for i, c in enumerate(CHARACTERS)}  # 0 = pad, 1 = unknown
@@ -76,7 +89,7 @@ class Encoder:
             mp.append([_MAP_IDX[t] for t in s.map if t in _MAP_IDX])
             char.append(_CHAR_IDX.get(s.character, 1))
             act.append(min(max(s.act, 0), 3) + 1)
-            start.append(min(max(s.floor, 0), FLOORS - 1))
+            start.append(min(max(head_floor(s.act, s.floor), 0), FLOORS - 1))
             hp_frac = s.hp / s.max_hp if s.max_hp else 0.0
             nums.append([
                 s.floor / 50.0, hp_frac, s.max_hp / 100.0, s.hp / 100.0, s.gold / 300.0,
@@ -96,9 +109,12 @@ def _bag(emb: nn.Embedding, ids: torch.Tensor) -> torch.Tensor:
 
 
 class HazardNet(nn.Module):
-    def __init__(self, sizes: dict[str, int], dim: int = 8, hidden: int = 128, body: int = 128):
+    def __init__(self, sizes: dict[str, int], dim: int = 8, hidden: int = 64, body: int = 64, remaining: bool = False):
         super().__init__()
-        self.config = {"sizes": sizes, "dim": dim, "hidden": hidden, "body": body}
+        # `remaining`: the encounter-pool bag. The buffer never fills it (always []), so new nets leave it out; checkpoints
+        # written before the flag existed had the (all-zero) input, and from_checkpoint turns it back on for them.
+        self.remaining = remaining
+        self.config = {"sizes": sizes, "dim": dim, "hidden": hidden, "body": body, "remaining": remaining}
         pad = {"padding_idx": 0}
         self.card = nn.Embedding(sizes["card"], dim, **pad)
         self.upgrade = nn.Embedding(3, dim)
@@ -106,11 +122,11 @@ class HazardNet(nn.Module):
         self.phi = nn.Sequential(nn.Linear(dim, hidden), nn.ReLU(), nn.Linear(hidden, dim), nn.ReLU())
         self.relic = nn.Embedding(sizes["relic"], dim, **pad)
         self.potion = nn.Embedding(sizes["potion"], dim, **pad)
-        self.encounter = nn.Embedding(sizes["encounter"], dim, **pad)  # boss and remaining share it
+        self.encounter = nn.Embedding(sizes["encounter"], dim, **pad)  # boss (and remaining, when on) share it
         self.map = nn.Embedding(sizes["map"], dim, **pad)
         self.character = nn.Embedding(sizes["character"], dim)
         self.act = nn.Embedding(5, dim)
-        width = dim * 9 + NUM_FEATURES  # deck mean+sum, relic, potion, boss, remaining, map, char, act
+        width = dim * (9 if remaining else 8) + NUM_FEATURES  # deck mean+sum, relic, potion, boss, [remaining], map, char, act
         self.norm = nn.LayerNorm(width)
         self.body = nn.Sequential(nn.Linear(width, body), nn.ReLU(), nn.Linear(body, body), nn.ReLU())
         self.hazard = nn.Linear(body, FLOORS)
@@ -122,11 +138,11 @@ class HazardNet(nn.Module):
         cards = self.phi(self.card(b["deck_id"]) + self.upgrade(b["deck_up"]) + self.enchant(b["deck_en"])) * mask
         n = mask.sum(1).clamp(min=1)
         deck = torch.cat([cards.sum(1) / n, cards.sum(1) / 16.0], dim=-1)
-        x = torch.cat([
-            deck, _bag(self.relic, b["relic"]), _bag(self.potion, b["potion"]),
-            _bag(self.encounter, b["boss"]), _bag(self.encounter, b["remaining"]),
-            _bag(self.map, b["map"]) / 4.0, self.character(b["char"]), self.act(b["act"]), b["nums"],
-        ], dim=-1)
+        parts = [deck, _bag(self.relic, b["relic"]), _bag(self.potion, b["potion"]), _bag(self.encounter, b["boss"])]
+        if self.remaining:
+            parts.append(_bag(self.encounter, b["remaining"]))
+        parts += [_bag(self.map, b["map"]) / 4.0, self.character(b["char"]), self.act(b["act"]), b["nums"]]
+        x = torch.cat(parts, dim=-1)
         h = self.body(self.norm(x))
         return self.hazard(h), self.aux(h)
 
@@ -140,7 +156,7 @@ class HazardNet(nn.Module):
     @classmethod
     def from_checkpoint(cls, path: str) -> "HazardNet":
         blob = torch.load(path, weights_only=True, map_location="cpu")
-        net = cls(**blob["config"])
+        net = cls(**{"remaining": True, **blob["config"]})  # a config without the flag is a pre-flag net: it had the bag
         net.load_state_dict(blob["state_dict"])
         return net.eval()
 
@@ -157,13 +173,28 @@ def win_chance(logits: torch.Tensor, start: torch.Tensor) -> torch.Tensor:
     return torch.exp((F.logsigmoid(-logits) * _live(logits, start)).sum(1))
 
 
-def expected_floors(logits: torch.Tensor, start: torch.Tensor) -> torch.Tensor:
-    """Expected number of further floors survived (capped at FINAL_FLOOR). Unlike win_chance this
-    isn't ~0 for every option while the combat agent is still weak, so it still ranks choices."""
-    live = _live(logits, start)
-    live[:, FINAL_FLOOR:] = 0.0
-    surv = torch.exp(torch.cumsum(F.logsigmoid(-logits) * live, dim=1))
-    return (surv * live).sum(1)
+def expected_floors(logits: torch.Tensor, start: torch.Tensor, healed_logits: torch.Tensor | None = None) -> torch.Tensor:
+    """Expected number of further floors survived. An act 1 state counts floors to the end of act 1 (FINAL_FLOOR), then --
+    given `healed_logits`, the head's output for the same state healed to full HP at act 2's Ancient -- adds
+    P(clear the act 1 boss) x the floors survived from the Ancient (hazard 0) to ACT2_LAST. An act 2 state counts its own
+    floors to ACT2_LAST. Unlike win_chance this isn't ~0 for every option while the combat agent is still weak, so it
+    still ranks choices."""
+    floors = torch.arange(logits.shape[1], device=logits.device)[None, :]
+    act1 = start <= FINAL_FLOOR
+    limit = torch.where(act1, torch.full_like(start, FINAL_FLOOR), torch.full_like(start, ACT2_LAST + 1))
+    live = _live(logits, start) * (floors < limit[:, None]).float()
+    log_keep = F.logsigmoid(-logits)
+    log_keep[:, ANCIENT_HEAD] = 0.0  # the Ancient has no combat: nobody dies there
+    surv = torch.exp(torch.cumsum(log_keep * live, dim=1))
+    total = (surv * live).sum(1)
+    if healed_logits is not None:
+        p_clear = surv[:, FINAL_FLOOR - 1]
+        live2 = ((floors >= ANCIENT_HEAD) & (floors <= ACT2_LAST)).float().expand_as(logits)
+        keep2 = F.logsigmoid(-healed_logits)
+        keep2[:, ANCIENT_HEAD] = 0.0
+        surv2 = torch.exp(torch.cumsum(keep2 * live2, dim=1))
+        total = total + act1.float() * p_clear * (surv2 * live2).sum(1)
+    return total
 
 
 def hazard_targets(start, end, outcome, floors: int = FLOORS) -> tuple[torch.Tensor, torch.Tensor]:
@@ -174,7 +205,10 @@ def hazard_targets(start, end, outcome, floors: int = FLOORS) -> tuple[torch.Ten
     died, won = outcome == 0, outcome == 1
     mask = (g >= start) & (won | (g < end) | (died & (g == end)))
     target = (died & (g == end)).float()
-    return target, mask.float()
+    mask = mask.float()
+    if floors > ANCIENT_HEAD:
+        mask[:, ANCIENT_HEAD] = 0.0  # no combat in the Ancient: its hazard is 0 by construction, never learned
+    return target, mask
 
 
 def hazard_loss(logits, start, end, outcome, weight) -> torch.Tensor:

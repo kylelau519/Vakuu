@@ -59,6 +59,13 @@ def with_card(state: RunState, card_id: str | None, upgraded: int = 0, enchant: 
     return replace(state, deck=state.deck + [[card_id, int(upgraded), enchant, 0 if upgraded else 1]])
 
 
+def at_ancient(state: RunState) -> RunState:
+    """The state at act 2's Ancient, reached from `state`: the same deck, relics and potions, full HP. What the hazard head
+    is asked for the floors after the act 1 boss, where the current HP no longer matters. The act 2 boss is not known yet
+    and the map is what an Ancient state carries (the boss's node), as in the logged act 2 starts."""
+    return replace(state, act=2, floor=2, hp=state.max_hp, boss=[], map=["Boss+1"], remaining=[])
+
+
 def with_hp(state: RunState, hp: int) -> RunState:
     return replace(state, hp=max(0, min(state.max_hp, int(hp))))
 
