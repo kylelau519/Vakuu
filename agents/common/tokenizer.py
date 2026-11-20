@@ -42,9 +42,10 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-_IDS_PATH = Path(__file__).parent / "vocab_ids.json"
+_IDS_PATH = Path(os.environ.get("VOCAB_IDS") or Path(__file__).parent / "vocab_ids.json")  # VOCAB_IDS: another game version's vocabulary (spire/extend_vocab.py)
 
 
 class EntityVocab:

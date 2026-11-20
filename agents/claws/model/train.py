@@ -207,16 +207,65 @@ def _l2_delta(before: dict[str, torch.Tensor], after: dict[str, torch.Tensor]) -
     return total_sq ** 0.5
 
 
+def split_holdout(examples: list[dict], frac: float, seed: int = 0) -> tuple[list[dict], list[dict]]:
+    """(train, held-out). Examples that carry a `run` id (spire/materialize.py writes it) are split BY RUN, so the forks and the
+    mainline of one combat never straddle the split; older datasets have none, and then the last `frac` of the list is held out
+    (materialize writes one run after another, so that block is run-aligned but for one boundary run)."""
+    if frac <= 0 or len(examples) < 50:
+        return examples, []
+    if all("run" in ex for ex in examples):
+        runs = sorted({ex["run"] for ex in examples})
+        if len(runs) >= 3:
+            rng = random.Random(seed)
+            rng.shuffle(runs)
+            held = set(runs[:max(1, round(len(runs) * frac))])
+            return [ex for ex in examples if ex["run"] not in held], [ex for ex in examples if ex["run"] in held]
+    cut = len(examples) - max(1, int(len(examples) * frac))
+    return examples[:cut], examples[cut:]
+
+
+@torch.no_grad()
+def evaluate(examples: list[dict], net: ClawsNet, value_only: bool, batch_size: int, device: torch.device) -> dict[str, float]:
+    """Held-out loss with the training objective (advantage-weighted log-likelihood + value MSE in V_SCALE units, per example), and
+    its parts, no gradient."""
+    net.eval()
+    pol = sq = 0.0
+    n_scored = 0
+    for start in range(0, len(examples), batch_size):
+        _loss, p, e, k = _batch_step(examples[start:start + batch_size], net, value_only, device)
+        pol, sq, n_scored = pol + p, sq + e, n_scored + k
+    net.train()
+    n = len(examples)
+    return {"loss": (pol + sq / V_SCALE ** 2) / n, "policy": pol / n_scored if n_scored else float("nan"), "rmse": (sq / n) ** 0.5}
+
+
 def train(
     examples: list[dict], net: ClawsNet, epochs: int, lr: float, seed: int = 0,
     value_only: bool = False, batch_size: int = 64, device: torch.device = torch.device("cpu"),
+    holdout: float = 0.1, patience: int = 10,
 ) -> None:
+    """Adam for up to `epochs` epochs. `holdout` of the runs is kept out of training and scored after every epoch; training stops
+    once the held-out loss has not improved for `patience` epochs, and the net ends as the best epoch's weights (epoch 0 = the weights
+    it started from, so a round that cannot beat them changes nothing). holdout=0: all examples train for all epochs, as before."""
+    examples, held = split_holdout(examples, holdout, seed)
     _normalize_advantages(examples)
+    if held:  # the same scale as the training split, not re-computed on the held-out one
+        scored = [ex["advantage"] for ex in examples if ex["action_index"] is not None]
+        std = (sum(a * a for a in scored) / len(scored)) ** 0.5 if scored else 0.0
+        for ex in held:
+            if ex["action_index"] is not None and std > 1e-8:
+                ex["advantage"] /= std
+        print(f"held out {len(held)} of {len(held) + len(examples)} examples (early stop: patience {patience})")
     target_std = torch.tensor([ex["value"] for ex in examples]).std().item() if len(examples) > 1 else 0.0
     net.to(device)
     opt = torch.optim.Adam(net.parameters(), lr=lr)
     rng = random.Random(seed)
     before = _snapshot(net)
+    best_loss, best_epoch, best_state = float("inf"), 0, None
+    if held:
+        v = evaluate(held, net, value_only, batch_size, device)
+        best_loss, best_state = v["loss"], {k: t.detach().cpu().clone() for k, t in net.state_dict().items()}
+        print(f"epoch 0/{epochs}: held-out loss={v['loss']:.4f} policy={v['policy']:.4f} value_rmse={v['rmse']:.2f}HP (the weights it started from)")
 
     for epoch in range(epochs):
         order = list(range(len(examples)))
@@ -244,10 +293,26 @@ def train(
         changed, total = _count_changed(before, after)
         l2_delta = _l2_delta(before, after)
         before = after
-        print(f"epoch {epoch + 1}/{epochs}: policy_loss={policy_avg} "
-              f"value_rmse={(total_sq_err / n) ** 0.5:.2f}HP (predicting the mean: {target_std:.2f}HP) "
-              f"params_changed={changed}/{total} ({changed / total:.1%}) "
-              f"param_delta_l2={l2_delta:.4f}")
+        line = (f"epoch {epoch + 1}/{epochs}: policy_loss={policy_avg} "
+                f"value_rmse={(total_sq_err / n) ** 0.5:.2f}HP (predicting the mean: {target_std:.2f}HP) "
+                f"params_changed={changed}/{total} ({changed / total:.1%}) "
+                f"param_delta_l2={l2_delta:.4f}")
+        if held:
+            v = evaluate(held, net, value_only, batch_size, device)
+            improved = v["loss"] < best_loss - 1e-6
+            if improved:
+                best_loss, best_epoch = v["loss"], epoch + 1
+                best_state = {k: t.detach().cpu().clone() for k, t in net.state_dict().items()}
+            line += (f" | held-out loss={v['loss']:.4f} policy={v['policy']:.4f} value_rmse={v['rmse']:.2f}HP"
+                     f"{' *best*' if improved else f' (no gain for {epoch + 1 - best_epoch}/{patience})'}")
+        print(line, flush=True)
+        if held and epoch + 1 - best_epoch >= patience:
+            print(f"early stop: no held-out gain for {patience} epochs")
+            break
+
+    if held:
+        net.load_state_dict(best_state)
+        print(f"kept epoch {best_epoch} (held-out loss {best_loss:.4f})" + (" -- the starting weights: no epoch beat them" if best_epoch == 0 else ""))
 
 
 def main() -> None:
@@ -268,6 +333,11 @@ def main() -> None:
     parser.add_argument("--init", default=None,
                          help="resume from an existing checkpoint, or pass \"\" to train from "
                               "a random init. Required no implicit default. ")
+    parser.add_argument("--holdout", type=float, default=0.1,
+                         help="share of the runs kept out of training and scored every epoch (default 0.1; 0 = train on everything for "
+                              "all --epochs)")
+    parser.add_argument("--patience", type=int, default=10,
+                         help="stop once the held-out loss has not improved for this many epochs; the best epoch's weights are kept")
     parser.add_argument("--value-only", action="store_true",
                          help="train V only, skipping the policy loss on every example -- for a "
                               "first round, where V is worth fitting before anything uses it")
@@ -304,7 +374,7 @@ def main() -> None:
             raise SystemExit("no examples loaded -- pass a dataset, or --epochs 0 to just save "
                               "an untrained init checkpoint")
         train(examples, net, epochs=args.epochs, lr=args.lr, value_only=args.value_only,
-              batch_size=args.batch_size, device=device)
+              batch_size=args.batch_size, device=device, holdout=args.holdout, patience=args.patience)
     else:
         print("--epochs 0: skipping training, saving weights as-is")
 

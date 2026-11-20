@@ -8,6 +8,7 @@ kill_stragglers() {
     pkill -9 -f "multiprocessing.spawn" 2>/dev/null
     pkill -9 -f "multiprocessing.forkserver" 2>/dev/null
     pkill -9 -f "sts2-cli/src/Sts2Headless" 2>/dev/null
+    pkill -9 -f "Sts2Ai.SimWorker.dll run" 2>/dev/null   # spire-zero hosts a worker left behind
     return 0
 }
 

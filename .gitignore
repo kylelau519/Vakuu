@@ -268,3 +268,6 @@ agents/whispering_earring/data/*/*
 .DS_Store
 agents/whispering_earring/data/claws_eval.jsonl
 agents/whispering_earring/data/progress_compass.jsonl
+agents/whispering_earring/data/progress_compass_before_restart.jsonl
+agents/whispering_earring/data/progress_compass_act2.jsonl
+agents/spire/__init__.py

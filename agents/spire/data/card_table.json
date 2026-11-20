@@ -1,0 +1,5075 @@
+{
+  "game": "v0.113.1",
+  "cards": {
+    "ABRASIVE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 32,
+      "upgradable": true
+    },
+    "ABUNDANCE": {
+      "type": 2,
+      "rarity": 5,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "ACCELERANT": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ACCURACY": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ACROBATICS": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ADAPTIVE_STRIKE": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ADRENALINE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "AFTERIMAGE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "AFTERLIFE": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "AGGRESSION": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ALCHEMIZE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "ALIGNMENT": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ALL_FOR_ONE": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ALL_IS_WELL": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "AMNESIA": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 0,
+      "upgradable": false
+    },
+    "ANGER": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ANGUISH": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ANOINTED": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "ANTICIPATE": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "APOTHEOSIS": {
+      "type": 2,
+      "rarity": 5,
+      "target": 1,
+      "keywords": 5,
+      "upgradable": true
+    },
+    "APPARITION": {
+      "type": 2,
+      "rarity": 5,
+      "target": 1,
+      "keywords": 3,
+      "upgradable": true
+    },
+    "ARCHERY": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ARMAMENTS": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ARROW_STAB": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ARSENAL": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ASCENDERS_BANE": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 74,
+      "upgradable": false
+    },
+    "ASHEN_STRIKE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ASSASSINATE": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 5,
+      "upgradable": true
+    },
+    "ASTRAL_PULSE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "AUTOMATION": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BACKFLIP": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BACKSTAB": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 5,
+      "upgradable": true
+    },
+    "BAD_LUCK": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 72,
+      "upgradable": false
+    },
+    "BALL_LIGHTNING": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BANSHEES_CRY": {
+      "type": 1,
+      "rarity": 4,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BARRAGE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BARRICADE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BASH": {
+      "type": 1,
+      "rarity": 1,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BATTLE_TRANCE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BEACON_OF_HOPE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BEAM_CELL": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BEAT_DOWN": {
+      "type": 2,
+      "rarity": 4,
+      "target": 4,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BEAT_INTO_SHAPE": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BECKON": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 0,
+      "upgradable": false
+    },
+    "BEGONE": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BELIEVE_IN_YOU": {
+      "type": 2,
+      "rarity": 3,
+      "target": 6,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BIASED_COGNITION": {
+      "type": 3,
+      "rarity": 5,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BIG_BANG": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "BLACK_HOLE": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BLADE_DANCE": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "BLADE_OF_INK": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BLADE_SYMPHONY": {
+      "type": 2,
+      "rarity": 3,
+      "target": 7,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BLAZE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 6,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BLIGHT_STRIKE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BLOODLETTING": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BLOOD_WALL": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BLOSSOM_SHOT": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BLOT_OUT_THE_SKY": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "BLUDGEON": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BLUR": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BODYGUARD": {
+      "type": 2,
+      "rarity": 1,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BODY_SLAM": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BOLAS": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BOMBARDMENT": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "BONE_SHARDS": {
+      "type": 1,
+      "rarity": 3,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BOOST_AWAY": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BOOT_SEQUENCE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 5,
+      "upgradable": true
+    },
+    "BORROWED_TIME": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BOUNCE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BOUNCING_FLASK": {
+      "type": 2,
+      "rarity": 3,
+      "target": 4,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BOW_SMACK": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BRACE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BRAND": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BREAK": {
+      "type": 1,
+      "rarity": 5,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BREAKTHROUGH": {
+      "type": 1,
+      "rarity": 2,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BRIGHTEN_UP": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "BRIGHTEST_FLAME": {
+      "type": 2,
+      "rarity": 5,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BUBBLE_BUBBLE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BUFFER": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BULK_UP": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BULLET_TIME": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BULLY": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BULWARK": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BUNDLE_OF_JOY": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "BURN": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "BURNING_PACT": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BURST": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BURY": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "BYRDONIS_EGG": {
+      "type": 6,
+      "rarity": 10,
+      "target": 0,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "BYRD_SWOOP": {
+      "type": 1,
+      "rarity": 6,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CACOPHONY": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CALAMITY": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CALCIFY": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CALCULATED_GAMBLE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "CALL_OF_THE_VOID": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CALTROPS": {
+      "type": 3,
+      "rarity": 6,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CAPACITOR": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CAPTURE_SPIRIT": {
+      "type": 2,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CASCADE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CATASTROPHE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CELESTIAL_MIGHT": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CHAOS": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CHARGE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CHARGE_BATTERY": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CHILD_OF_THE_STARS": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CHILL": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "CHO_BARBS": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CHO_CHORUS": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CHO_FIRM": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CHO_KI": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CHO_LIMBS": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CHO_READY": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CINDER": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CLASH": {
+      "type": 1,
+      "rarity": 6,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CLAW": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CLEANSE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CLOAK_AND_DAGGER": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CLOAK_OF_STARS": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CLUMSY": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 10,
+      "upgradable": false
+    },
+    "CODA": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "COLD_SNAP": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "COLLISION_COURSE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "COLOSSUS": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "COMET": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "COMPACT": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "COMPILE_DRIVER": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "COMPOST": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CONCOCT": {
+      "type": 2,
+      "rarity": 3,
+      "target": 6,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CONFLAGRATION": {
+      "type": 1,
+      "rarity": 4,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CONQUEROR": {
+      "type": 2,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CONSTELLATION": {
+      "type": 2,
+      "rarity": 3,
+      "target": 6,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CONSUMING_SHADOW": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CONVERGENCE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "COOLANT": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "COOLHEADED": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "COORDINATE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 6,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CORROSIVE_WAVE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CORRUPTION": {
+      "type": 3,
+      "rarity": 5,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "COSMIC_INDIFFERENCE": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "COUNTDOWN": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "COVERING_FIRE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CRASH_LANDING": {
+      "type": 1,
+      "rarity": 4,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CREATIVE_AI": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CRESCENT_SPEAR": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CRIMSON_MANTLE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CRUELTY": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CRUSH_UNDER": {
+      "type": 1,
+      "rarity": 2,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "CURSE_OF_THE_BELL": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 72,
+      "upgradable": false
+    },
+    "DAGGER_SPRAY": {
+      "type": 1,
+      "rarity": 2,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DAGGER_THROW": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DANSE_MACABRE": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DARKNESS": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DARK_EMBRACE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DARK_SHACKLES": {
+      "type": 2,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "DASH": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DAZED": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 10,
+      "upgradable": false
+    },
+    "DEADLY_POISON": {
+      "type": 2,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEATH": {
+      "type": 2,
+      "rarity": 7,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "DEATHBRINGER": {
+      "type": 2,
+      "rarity": 3,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEATHS_DOOR": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEATH_MARCH": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEBILITATE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEBRIS": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 1,
+      "upgradable": false
+    },
+    "DEBT": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "DECAY": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "DECISIONS_DECISIONS": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "DEEP_STRETCH": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEFEND_DEFECT": {
+      "type": 2,
+      "rarity": 1,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEFEND_FOOL": {
+      "type": 2,
+      "rarity": 1,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEFEND_IRONCLAD": {
+      "type": 2,
+      "rarity": 1,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEFEND_NECROBINDER": {
+      "type": 2,
+      "rarity": 1,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEFEND_REGENT": {
+      "type": 2,
+      "rarity": 1,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEFEND_SILENT": {
+      "type": 2,
+      "rarity": 1,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEFILE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 2,
+      "upgradable": true
+    },
+    "DEFLECT": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEFRAGMENT": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEFY": {
+      "type": 2,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 2,
+      "upgradable": true
+    },
+    "DELAY": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEMESNE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 2,
+      "upgradable": true
+    },
+    "DEMONIC_SHIELD": {
+      "type": 2,
+      "rarity": 3,
+      "target": 6,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "DEMON_FORM": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEPRECATED_CARD": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 1,
+      "upgradable": false
+    },
+    "DEVASTATE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DEVOUR_LIFE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DINGY_DAGGER": {
+      "type": 1,
+      "rarity": 6,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DIRGE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "DISCOVERY": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "DISINTEGRATION": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 0,
+      "upgradable": false
+    },
+    "DISLIKE_YOU": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DISMANTLE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DISTRACTION": {
+      "type": 2,
+      "rarity": 6,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "DIVINE_SHOT": {
+      "type": 1,
+      "rarity": 5,
+      "target": 2,
+      "keywords": 16,
+      "upgradable": true
+    },
+    "DODGE_AND_ROLL": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DOMINATE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "DOUBLE_ENERGY": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "DOUBT": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "DOWSING": {
+      "type": 6,
+      "rarity": 10,
+      "target": 0,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "DRAIN_POWER": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DRAMATIC_ENTRANCE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 3,
+      "keywords": 5,
+      "upgradable": true
+    },
+    "DREDGE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "DRUM_OF_BATTLE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DUALCAST": {
+      "type": 2,
+      "rarity": 1,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DUAL_WIELD": {
+      "type": 2,
+      "rarity": 6,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "DYING_STAR": {
+      "type": 1,
+      "rarity": 4,
+      "target": 3,
+      "keywords": 2,
+      "upgradable": true
+    },
+    "ECHOING_SLASH": {
+      "type": 1,
+      "rarity": 3,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ECHO_FORM": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 2,
+      "upgradable": true
+    },
+    "ECSTASY": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "EIDOLON": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "ENCORE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "END_OF_DAYS": {
+      "type": 2,
+      "rarity": 4,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ENERGY_SURGE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 7,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "ENFEEBLING_TOUCH": {
+      "type": 2,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 2,
+      "upgradable": true
+    },
+    "ENLIGHTENMENT": {
+      "type": 2,
+      "rarity": 6,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ENNUI": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ENRAPTURE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 6,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ENSEMBLE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "ENTHRALLED": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 64,
+      "upgradable": false
+    },
+    "ENTRENCH": {
+      "type": 2,
+      "rarity": 6,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ENTROPY": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ENVENOM": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "EPIC_RETRIEVAL": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "EQUILIBRIUM": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ERADICATE": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 16,
+      "upgradable": true
+    },
+    "ESCAPE_PLAN": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ETERNAL_ARMOR": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "EVIL_EYE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "EXPECT_A_FIGHT": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "EXPERTISE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "EXPLOSIVE_ARROWS": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "EXPOSE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "EXTERMINATE": {
+      "type": 1,
+      "rarity": 6,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FADE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 6,
+      "keywords": 16,
+      "upgradable": true
+    },
+    "FALLING_STAR": {
+      "type": 1,
+      "rarity": 1,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FAN_OF_KNIVES": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FASTEN": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FEAR": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 2,
+      "upgradable": true
+    },
+    "FEED": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "FEEDING_FRENZY": {
+      "type": 2,
+      "rarity": 6,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FEEL_NO_PAIN": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FERAL": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FETCH": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FIEND_FIRE": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "FIGHT_ME": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FIGHT_THROUGH": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FINESSE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FINISHER": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FISTICUFFS": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FLAK_CANNON": {
+      "type": 1,
+      "rarity": 4,
+      "target": 4,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FLAME_BARRIER": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FLANKING": {
+      "type": 2,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FLASH_OF_STEEL": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FLATTEN": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FLECHETTES": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FLICK_FLACK": {
+      "type": 1,
+      "rarity": 2,
+      "target": 3,
+      "keywords": 32,
+      "upgradable": true
+    },
+    "FLORESCENCE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "FOCUSED_STRIKE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FOLLY": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 78,
+      "upgradable": false
+    },
+    "FOOLISH_SHOT": {
+      "type": 1,
+      "rarity": 1,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FOOTWORK": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FORBIDDEN_GRIMOIRE": {
+      "type": 3,
+      "rarity": 5,
+      "target": 1,
+      "keywords": 64,
+      "upgradable": true
+    },
+    "FOREGONE_CONCLUSION": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FORGOTTEN_RITUAL": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "FRANTIC_ESCAPE": {
+      "type": 4,
+      "rarity": 8,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": false
+    },
+    "FRIENDSHIP": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FTL": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FUEL": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "FURNACE": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "FUSION": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "GAMMA_BLAST": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GANG_UP": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GATHER_LIGHT": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GENESIS": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GENETIC_ALGORITHM": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "GIANT_ROCK": {
+      "type": 1,
+      "rarity": 7,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GLACIER": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GLASSWORK": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GLIMMER": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GLIMPSE_BEYOND": {
+      "type": 2,
+      "rarity": 4,
+      "target": 7,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "GLITTERSTREAM": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GLOW": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GOD_BYRD": {
+      "type": 2,
+      "rarity": 6,
+      "target": 0,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GOLD_AXE": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GO_FOR_THE_EYES": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GRAND_FINALE": {
+      "type": 1,
+      "rarity": 4,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GRAVEBLAST": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "GRAVE_WARDEN": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GREED": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 72,
+      "upgradable": false
+    },
+    "GROWTH": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GUARDS": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "GUIDING_STAR": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "GUILTY": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "GUNK_UP": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HAILSTORM": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HAMMER_TIME": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HAND_OF_GREED": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HAND_TRICK": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HANG": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HARMONIC_SHIELD": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HAUNT": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HAVOC": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HAZE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HEADBUTT": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HEAVENLY_DRILL": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HEAVY_SHOT": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HEGEMONY": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HEIRLOOM_HAMMER": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HELIX_DRILL": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HELLO_WORLD": {
+      "type": 3,
+      "rarity": 6,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HELLRAISER": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HEMOKINESIS": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HIBERNATE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HIDDEN_CACHE": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HIDDEN_DAGGERS": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HIDDEN_GEM": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HIDDEN_ROOTS": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HIGH_FIVE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HOBBLING_SHOT": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HOLOGRAM": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "HONING": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HOTFIX": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "HOWL_FROM_BEYOND": {
+      "type": 1,
+      "rarity": 3,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "HUDDLE_UP": {
+      "type": 2,
+      "rarity": 3,
+      "target": 7,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "HYPERBEAM": {
+      "type": 1,
+      "rarity": 4,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ICE_LANCE": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "IGNITION": {
+      "type": 2,
+      "rarity": 3,
+      "target": 6,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "IMITATION_LEARNING": {
+      "type": 2,
+      "rarity": 4,
+      "target": 6,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "IMPATIENCE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "IMPERVIOUS": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "INFECTION": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "INFERNAL_BLADE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "INFERNO": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "INFINITE_BLADES": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "INFLAME": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "INJURY": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "INTERCEPT": {
+      "type": 2,
+      "rarity": 3,
+      "target": 6,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "INVOKE": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "IRON_WAVE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ITERATION": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "I_AM_INVINCIBLE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "JACKPOT": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "JACK_OF_ALL_TRADES": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "JEST": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "JOY": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "JUDGEMENT": {
+      "type": 2,
+      "rarity": 7,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "JUGGERNAUT": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "JUGGLING": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "JUSTICE": {
+      "type": 1,
+      "rarity": 7,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "KINGLY_KICK": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "KINGLY_PUNCH": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "KI_CHANT": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "KI_HOP": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "KI_REST": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "KI_VERSE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "KI_WHIP": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "KNIFE_TRAP": {
+      "type": 2,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "KNOCKDOWN": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "KNOCKOUT_BLOW": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "KNOW_THY_PLACE": {
+      "type": 2,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "LANTERN_KEY": {
+      "type": 6,
+      "rarity": 10,
+      "target": 1,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "LARGESSE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 6,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "LEADING_STRIKE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "LEAP": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "LEGION_OF_BONE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 7,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "LEG_SWEEP": {
+      "type": 2,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "LETHALITY": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 2,
+      "upgradable": true
+    },
+    "LIFT": {
+      "type": 2,
+      "rarity": 3,
+      "target": 6,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "LIGHTNING_ROD": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "LOCKED_IN": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "LOOP": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "LOST_LUTE": {
+      "type": 3,
+      "rarity": 5,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "LULLABY": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "LUMINESCE": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 17,
+      "upgradable": true
+    },
+    "LUNAR_BLAST": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MACHINE_LEARNING": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MAD_SCIENCE": {
+      "type": 0,
+      "rarity": 6,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MAKE_IT_SO": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MALAISE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "MANGLE": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MANIFEST_AUTHORITY": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MASTER_OF_STRATEGY": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "MASTER_PLANNER": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MAUL": {
+      "type": 1,
+      "rarity": 5,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MAYHEM": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MELANCHOLY": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MELODIC_SHOT": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MEMENTO_MORI": {
+      "type": 1,
+      "rarity": 3,
+      "target": 4,
+      "keywords": 32,
+      "upgradable": true
+    },
+    "METAMORPHOSIS": {
+      "type": 2,
+      "rarity": 6,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "METEOR_SHOWER": {
+      "type": 1,
+      "rarity": 5,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "METEOR_STRIKE": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MIDNIGHT": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MIGHTY_SHIELD": {
+      "type": 2,
+      "rarity": 6,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MIGHTY_WEAPON": {
+      "type": 1,
+      "rarity": 6,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MIMIC": {
+      "type": 2,
+      "rarity": 4,
+      "target": 6,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "MIND_BLAST": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 4,
+      "upgradable": true
+    },
+    "MIND_ROT": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 0,
+      "upgradable": false
+    },
+    "MINION_DIVE_BOMB": {
+      "type": 1,
+      "rarity": 7,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "MINION_SACRIFICE": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "MINION_STRIKE": {
+      "type": 1,
+      "rarity": 7,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "MIRAGE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "MISERY": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MODDED": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MOLTEN_FIST": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "MOMENTUM_STRIKE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MONARCHS_GAZE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MONOLOGUE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MOTIF": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MOURNING_BLOW": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MULTI_CAST": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MURDER": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MYTHIC_FORM": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "MY_SHINIES": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "NAIL": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "NECRO_MASTERY": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "NEGATIVE_PULSE": {
+      "type": 2,
+      "rarity": 2,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "NEOWS_FURY": {
+      "type": 1,
+      "rarity": 5,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "NEUROSURGE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "NEUTRALIZE": {
+      "type": 1,
+      "rarity": 1,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "NEUTRON_AEGIS": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "NIGHTMARE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "NOCK": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "NORMALITY": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "NOSTALGIA": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "NOT_YET": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "NOXIOUS_FUMES": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "NO_ESCAPE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "NULL": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "OBLIVION": {
+      "type": 2,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "OFFERING": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "OMNISLICE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ONE_FOR_ALL": {
+      "type": 3,
+      "rarity": 4,
+      "target": 7,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ONE_TWO_PUNCH": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ORBIT": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "OUTBREAK": {
+      "type": 2,
+      "rarity": 4,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "OUTMANEUVER": {
+      "type": 2,
+      "rarity": 6,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "OUTRAGE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "OVERCLOCK": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PACTS_END": {
+      "type": 1,
+      "rarity": 4,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PAGESTORM": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PALE_BLUE_DOT": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PANACHE": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PANIC_BUTTON": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "PARRY": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PARSE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 2,
+      "upgradable": true
+    },
+    "PARTICLE_WALL": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PATTER": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PECK": {
+      "type": 1,
+      "rarity": 6,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PERFECTED_STRIKE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PHANTOM_BLADES": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PHOTON_CUT": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PIERCING_WAIL": {
+      "type": 2,
+      "rarity": 2,
+      "target": 3,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "PILLAGE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PILLAR_OF_CREATION": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PINPOINT": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PLOT": {
+      "type": 2,
+      "rarity": 3,
+      "target": 7,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "POISONED_STAB": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "POKE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "POMMEL_STRIKE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "POOR_SLEEP": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 24,
+      "upgradable": false
+    },
+    "POUNCE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PRECISE_CUT": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PREDATOR": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PREPARED": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PREP_TIME": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PRIMAL_FORCE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PRODUCTION": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "PROLONG": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "PROPHESIZE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PROTECTOR": {
+      "type": 1,
+      "rarity": 5,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PROWESS": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PULL_AGGRO": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PULL_FROM_BELOW": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PUNCH_OF_JOY": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "PURITY": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 17,
+      "upgradable": true
+    },
+    "PUTREFY": {
+      "type": 2,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "PYRE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "QUADCAST": {
+      "type": 2,
+      "rarity": 5,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "QUASAR": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "QUICK_SHOT": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "QUIETUS": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "QUIVER": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "RADIATE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "RAGE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "RAINBOW": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "RAIN_SHOT": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "RALLY": {
+      "type": 2,
+      "rarity": 4,
+      "target": 7,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "RAMPAGE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "RAPID_SHOT": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "RATTLE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "REANIMATE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "REAP": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 16,
+      "upgradable": true
+    },
+    "REAPER_FORM": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "REAVE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "REBOOT": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "REBOUND": {
+      "type": 1,
+      "rarity": 6,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "RECALL": {
+      "type": 2,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "REFINE_BLADE": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "REFLECT": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "REFLEX": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 32,
+      "upgradable": true
+    },
+    "REFRACT": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "REGRET": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "RELAX": {
+      "type": 2,
+      "rarity": 5,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "REND": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "REPEAT_SHOT": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "RESONANCE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "RESTLESSNESS": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 16,
+      "upgradable": true
+    },
+    "RHYTHM_STRIKE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "RICOCHET": {
+      "type": 1,
+      "rarity": 2,
+      "target": 4,
+      "keywords": 32,
+      "upgradable": true
+    },
+    "RIGHT_HAND_HAND": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "RIP_AND_TEAR": {
+      "type": 1,
+      "rarity": 6,
+      "target": 4,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ROCKET_PUNCH": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ROLLING_BOULDER": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ROYALTIES": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ROYAL_GAMBLE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "RUMMAGE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "RUPTURE": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SACRIFICE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 16,
+      "upgradable": true
+    },
+    "SADNESS": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 24,
+      "upgradable": false
+    },
+    "SALVO": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SCAVENGE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SCOURGE": {
+      "type": 2,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SCRAPE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SCRAWL": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "SCULPTING_STRIKE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SEANCE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 2,
+      "upgradable": true
+    },
+    "SECOND_WIND": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SECRET_TECHNIQUE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "SECRET_WEAPON": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "SEEKER_STRIKE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SEEKING_EDGE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SELF_DEPRECATE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 7,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SENTRY_MODE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SERPENT_FORM": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SERRATED_ARROWS": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SETUP_STRIKE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SEVEN_STARS": {
+      "type": 1,
+      "rarity": 4,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SEVERANCE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SHADOWMELD": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SHADOW_SHIELD": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SHADOW_STEP": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SHAME": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "SHARED_FATE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "SHATTER": {
+      "type": 1,
+      "rarity": 4,
+      "target": 3,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "SHINING_STRIKE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SHIV": {
+      "type": 1,
+      "rarity": 7,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "SHOCKWAVE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 3,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "SHOW_OFF": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "SHROUD": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SHRUG_IT_OFF": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SIC_EM": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SIDESTEP": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SIGNAL_BOOST": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "SIMPLETON": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SKEWER": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SKIM": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SKY_SHOT": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 5,
+      "upgradable": true
+    },
+    "SLEIGHT_OF_FLESH": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SLICE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SLIMED": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 1,
+      "upgradable": false
+    },
+    "SLOTH": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 0,
+      "upgradable": false
+    },
+    "SMOKESTACK": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SNAKEBITE": {
+      "type": 2,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 16,
+      "upgradable": true
+    },
+    "SNAP": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SNEAKY": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 32,
+      "upgradable": true
+    },
+    "SOLAR_STRIKE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SONG_PATH": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SOOT": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "SORROWFUL_STRIKE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SOUL": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "SOULBOUND": {
+      "type": 3,
+      "rarity": 3,
+      "target": 6,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SOUL_STORM": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SOVEREIGN_BLADE": {
+      "type": 1,
+      "rarity": 7,
+      "target": 2,
+      "keywords": 16,
+      "upgradable": true
+    },
+    "SOW": {
+      "type": 1,
+      "rarity": 2,
+      "target": 3,
+      "keywords": 16,
+      "upgradable": true
+    },
+    "SPECTRUM_SHIFT": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SPEEDSTER": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SPINNER": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SPIRIT_OF_ASH": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SPITE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SPLASH": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SPOILS_MAP": {
+      "type": 6,
+      "rarity": 10,
+      "target": 1,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "SPOILS_OF_BATTLE": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SPORE_MIND": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 1,
+      "upgradable": false
+    },
+    "SPUR": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 16,
+      "upgradable": true
+    },
+    "SQUASH": {
+      "type": 1,
+      "rarity": 6,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SQUEEZE": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STACK": {
+      "type": 2,
+      "rarity": 6,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STAMPEDE": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STARDUST": {
+      "type": 1,
+      "rarity": 3,
+      "target": 4,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STEADY_CADENCE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STOKE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STOMP": {
+      "type": 1,
+      "rarity": 3,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STONE_ARMOR": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STORM": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STORM_OF_STEEL": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STRANGLE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STRATAGEM": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STRENGTH": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "STRIKE_DEFECT": {
+      "type": 1,
+      "rarity": 1,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STRIKE_FOOL": {
+      "type": 1,
+      "rarity": 1,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STRIKE_IRONCLAD": {
+      "type": 1,
+      "rarity": 1,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STRIKE_NECROBINDER": {
+      "type": 1,
+      "rarity": 1,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STRIKE_REGENT": {
+      "type": 1,
+      "rarity": 1,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "STRIKE_SILENT": {
+      "type": 1,
+      "rarity": 1,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SUBROUTINE": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SUCKER_PUNCH": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SUMMON_FORTH": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SUNDER": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SUPERCRITICAL": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "SUPERMASSIVE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SUPPRESS": {
+      "type": 1,
+      "rarity": 5,
+      "target": 2,
+      "keywords": 4,
+      "upgradable": true
+    },
+    "SURVIVOR": {
+      "type": 2,
+      "rarity": 1,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SWEEPING_BEAM": {
+      "type": 1,
+      "rarity": 2,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SWEEPING_GAZE": {
+      "type": 1,
+      "rarity": 7,
+      "target": 4,
+      "keywords": 3,
+      "upgradable": true
+    },
+    "SWORD_BOOMERANG": {
+      "type": 1,
+      "rarity": 2,
+      "target": 4,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SWORD_SAGE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SYNCHRONIZE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "SYNTHESIS": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TACTICIAN": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 32,
+      "upgradable": true
+    },
+    "TAG_TEAM": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TANK": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TAUNT": {
+      "type": 2,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TEAR_ASUNDER": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TEMPERANCE": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "TEMPEST": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TERRAFORMING": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TESLA_COIL": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "THE_BALL": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "THE_BOMB": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "THE_CHARIOT": {
+      "type": 1,
+      "rarity": 7,
+      "target": 3,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_DEVIL": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_EMPEROR": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_EMPRESS": {
+      "type": 2,
+      "rarity": 7,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_FOOL": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_GAMBIT": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "THE_HANGED_MAN": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_HERMIT": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_HIEROPHANT": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_HIGH_PRIESTESS": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 17,
+      "upgradable": true
+    },
+    "THE_HUNT": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_LOVERS": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_MAGICIAN": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_MOON": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_SCYTHE": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_SEALED_THRONE": {
+      "type": 3,
+      "rarity": 5,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "THE_SHOT": {
+      "type": 1,
+      "rarity": 7,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "THE_SMITH": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "THE_STAR": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_SUN": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_TOWER": {
+      "type": 1,
+      "rarity": 7,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THE_WORLD": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THINKING_AHEAD": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "THRASH": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "THRUMMING_HATCHET": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "THUNDER": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "THUNDERCLAP": {
+      "type": 1,
+      "rarity": 2,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TIMBER": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TIMES_UP": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TOOLS_OF_THE_TRADE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TORIC_TOUGHNESS": {
+      "type": 2,
+      "rarity": 6,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TOXIC": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 1,
+      "upgradable": false
+    },
+    "TRACKING": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TRANSFIGURE": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "TRASH_TO_TREASURE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TREMBLE": {
+      "type": 2,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "TRICK_SHOT": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TRUE_GRIT": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TUNE": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TURBO": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TUTOR": {
+      "type": 2,
+      "rarity": 4,
+      "target": 6,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TWIN_STRIKE": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "TYRANNY": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ULTIMATE_DEFEND": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ULTIMATE_STRIKE": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "UNDEATH": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "UNDERWORLD": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "UNLEASH": {
+      "type": 1,
+      "rarity": 1,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "UNMOVABLE": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "UNRELENTING": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "UNTOUCHABLE": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 32,
+      "upgradable": true
+    },
+    "UPPERCUT": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "UPROAR": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "UPROOT": {
+      "type": 2,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "UP_MY_SLEEVE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "VEILPIERCER": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "VENERATE": {
+      "type": 2,
+      "rarity": 1,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "VICIOUS": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "VIOLENT_CHORD": {
+      "type": 3,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "VITRIOL": {
+      "type": 2,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "VOID": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 10,
+      "upgradable": false
+    },
+    "VOID_FORM": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 2,
+      "upgradable": true
+    },
+    "VOLLEY": {
+      "type": 1,
+      "rarity": 3,
+      "target": 4,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "VOLTAIC": {
+      "type": 2,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "WAH_BLAST": {
+      "type": 1,
+      "rarity": 3,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "WAH_CHO": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "WAH_CHO_KI": {
+      "type": 1,
+      "rarity": 4,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "WAH_HAMMER": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "WAH_KI": {
+      "type": 1,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "WAH_SWEEP": {
+      "type": 1,
+      "rarity": 2,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "WAH_SYMPHONY": {
+      "type": 1,
+      "rarity": 4,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "WAH_TOUCH": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "WASTE_AWAY": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 0,
+      "upgradable": false
+    },
+    "WELL_LAID_PLANS": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "WHEEL_OF_FORTUNE": {
+      "type": 2,
+      "rarity": 7,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "WHIRLWIND": {
+      "type": 1,
+      "rarity": 3,
+      "target": 3,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "WHISTLE": {
+      "type": 1,
+      "rarity": 5,
+      "target": 2,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "WHISTLING_ARROWS": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "WHITE_NOISE": {
+      "type": 2,
+      "rarity": 3,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "WISH": {
+      "type": 2,
+      "rarity": 5,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "WISP": {
+      "type": 2,
+      "rarity": 2,
+      "target": 1,
+      "keywords": 1,
+      "upgradable": true
+    },
+    "WITHER": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "WOUND": {
+      "type": 4,
+      "rarity": 8,
+      "target": 0,
+      "keywords": 8,
+      "upgradable": false
+    },
+    "WRAITH_FORM": {
+      "type": 3,
+      "rarity": 5,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "WREST": {
+      "type": 2,
+      "rarity": 3,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "WRITHE": {
+      "type": 5,
+      "rarity": 9,
+      "target": 0,
+      "keywords": 12,
+      "upgradable": false
+    },
+    "WROUGHT_IN_WAR": {
+      "type": 1,
+      "rarity": 2,
+      "target": 2,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "YAH": {
+      "type": 3,
+      "rarity": 4,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "YOGA": {
+      "type": 2,
+      "rarity": 3,
+      "target": 7,
+      "keywords": 0,
+      "upgradable": true
+    },
+    "ZAP": {
+      "type": 2,
+      "rarity": 1,
+      "target": 1,
+      "keywords": 0,
+      "upgradable": true
+    }
+  },
+  "intent_types": [
+    "Attack",
+    "Buff",
+    "Debuff",
+    "DebuffStrong",
+    "Defend",
+    "Escape",
+    "Heal",
+    "Hidden",
+    "Summon",
+    "Sleep",
+    "Stun",
+    "StatusCard",
+    "CardDebuff",
+    "DeathBlow",
+    "Unknown"
+  ],
+  "card_types": [
+    "None",
+    "Attack",
+    "Skill",
+    "Power",
+    "Status",
+    "Curse",
+    "Quest"
+  ],
+  "card_rarities": [
+    "None",
+    "Basic",
+    "Common",
+    "Uncommon",
+    "Rare",
+    "Ancient",
+    "Event",
+    "Token",
+    "Status",
+    "Curse",
+    "Quest"
+  ],
+  "target_types": [
+    "None",
+    "Self",
+    "AnyEnemy",
+    "AllEnemies",
+    "RandomEnemy",
+    "AnyPlayer",
+    "AnyAlly",
+    "AllAllies",
+    "TargetedNoCreature",
+    "Osty"
+  ]
+}

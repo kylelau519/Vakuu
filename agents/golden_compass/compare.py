@@ -29,9 +29,11 @@ def _play(ckpt: str, runs: int, workers: int, raw: str, ckpt_dir: str, claws: Pa
     if claws.exists():
         env["CLAWS_CHECKPOINT"] = str(claws)
     extra = ["--resume-act", str(resume_act)] if resume_act else []
-    subprocess.run([sys.executable, str(WE / "facility_compass.py"), "--trials", str(runs), "--branch-workers", str(workers),
+    # COMPASS_FACILITY: another facility with the same command line (agents/spire/facility_compass.py plays on spire-zero)
+    facility = os.environ.get("COMPASS_FACILITY") or str(WE / "facility_compass.py")
+    subprocess.run([sys.executable, facility, "--trials", str(runs), "--branch-workers", str(workers),
                     "--ascension", "1", "--raw-dir", raw, "--ckpt-dir", ckpt_dir, *extra],
-                   cwd=WE, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                   cwd=os.path.dirname(facility), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
 
 def main() -> int:
