@@ -33,6 +33,7 @@ SNAP="$RUN/compass/claws_snapshot.pt"
 HISTORY_WINDOW="${HISTORY_WINDOW:-10}"
 RESUME_ACT="${RESUME_ACT:-0}"
 CHARACTERS="${CHARACTERS:-IRONCLAD}"
+ASCENSION="${ASCENSION:-1}"
 PY="${PY:-python}"
 export COMPASS_FACILITY="$SPIRE/facility_compass.py"   # golden_compass/compare.py plays its gate runs with this facility
 
@@ -43,7 +44,7 @@ kill_stragglers() { pkill -9 -P $$ 2>/dev/null; return 0; }
 install_traps
 
 [ -e "$SPIRE_ZERO/engine/target/release/libsts2ai_engine.so" ] || { echo "the spire-zero engine is not built ($SPIRE_ZERO)"; exit 1; }
-mkdir -p "$RUN/compass" "$RUN/claws" "$DATA/raw_runs" "$DATA/history/runs"
+mkdir -p "$RUN/compass" "$RUN/claws" "$DATA/raw_runs" "$DATA/history/runs" "$DATA/raw_branch" "$DATA/history/branch"
 if [ ! -f "$ACC" ]; then
     SRC="$GC_MAIN/golden_compass.pt"; [ -f "$vakuu/agents/run2/compass/golden_compass.pt" ] && SRC="$vakuu/agents/run2/compass/golden_compass.pt"
     $PY "$SPIRE/extend_vocab.py" compass "$SRC" "$ACC" || exit 1
@@ -73,15 +74,28 @@ while true; do
     $PY "$SPIRE/facility_compass.py" --trials "${COMPASS_TRIALS:-100}" --branch-workers "${WORKERS:-8}" --ascension "${ASCENSION:-1}" \
         --raw-dir "$DATA/raw_runs" --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
     $PY "$GC_MAIN/progress.py" "$DATA/raw_runs" --label "$ROUND" --log "$DATA/progress_compass.jsonl"
+    # Branch evaluation (card-reward and route forks with shuffled continuations, agents/spire/facility_branch.py): what one choice costs,
+    # as paired comparisons from the same state. Its files train the compass's aux head next to the run data (train.py --branch-dir).
+    # BRANCH_SCOUTS=0 turns the stage off.
+    BRANCH_ARGS=()
+    if [ "${BRANCH_SCOUTS:-6}" -gt 0 ]; then
+        archive_round_data "$DATA/raw_branch" "$DATA/history/branch" "${BRANCH_WINDOW:-5}"
+        rm -rf "$DATA/raw_branch/clones"
+        CLAWS_CHECKPOINT="$SNAP" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${COMPASS_CLAWS_NOISE:-0.05}" \
+        $PY "$SPIRE/facility_branch.py" --trials "${BRANCH_SCOUTS:-6}" --branch-workers "${WORKERS:-8}" --ascension "$ASCENSION" \
+            --raw-dir "$DATA/raw_branch" --forks-per-scout "${BRANCH_FORKS:-2}" --map-forks-per-scout "${BRANCH_MAP_FORKS:-1}" --horizon "${BRANCH_HORIZON:-6}" --characters $CHARACTERS
+        rm -rf "$DATA/raw_branch/clones"
+        BRANCH_ARGS=(--branch-dir "$DATA/raw_branch" "$DATA/history/branch"/*/)
+    fi
     $PY "$GC_MAIN/materialize.py" "$DATA/raw_runs" "$DATA/history/runs"/*/ --out "$RUN/compass/dataset.pt"
-    $PY "$GC_MAIN/train.py" "$RUN/compass/dataset.pt" --epochs "${COMPASS_EPOCHS:-20}" --lr "${COMPASS_LR:-2e-5}" --out "$CAND" --init "$CAND"
+    $PY "$GC_MAIN/train.py" "$RUN/compass/dataset.pt" --epochs "${COMPASS_EPOCHS:-100}" --patience "${COMPASS_PATIENCE:-10}" --lr "${COMPASS_LR:-2e-5}" --out "$CAND" --init "$CAND" "${BRANCH_ARGS[@]}"
     backup_checkpoint "$CAND"
     cleanup_procs
 
     if [ "$ROUND" = 1 ] || [ $((ROUND % ${GATE_EVERY:-5})) = 0 ]; then
         echo "=========================================== Spire compass round $ROUND: gate (candidate vs accepted)"
-        if $PY "$GC_MAIN/compare.py" "$CAND" "$ACC" --runs "${GATE_RUNS:-60}" --workers "${WORKERS:-8}" --claws "$SNAP" \
-                --resume-act "$RESUME_ACT" --ckpt-dir "$CKPT_DIR" | tee -a "$DATA/gate_compass.log"; then
+        if ( set -o pipefail; $PY "$GC_MAIN/compare.py" "$CAND" "$ACC" --runs "${GATE_RUNS:-60}" --workers "${WORKERS:-8}" --claws "$SNAP" \
+                --resume-act "$RESUME_ACT" --ckpt-dir "$CKPT_DIR" | tee -a "$DATA/gate_compass.log" ); then
             backup_checkpoint "$ACC"
             cp "$CAND" "$ACC"
             echo "gate: promoted the candidate" | tee -a "$DATA/gate_compass.log"

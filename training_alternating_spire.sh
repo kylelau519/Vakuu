@@ -52,10 +52,8 @@ install_traps
 
 [ -e "$SPIRE_ZERO/engine/target/release/libsts2ai_engine.so" ] || { echo "the spire-zero engine is not built ($SPIRE_ZERO)"; exit 1; }
 if [ "$RESUME_ACT" != 0 ]; then compgen -G "$CKPT_DIR/*_act$RESUME_ACT.json" > /dev/null || { echo "no act-$RESUME_ACT saves in $CKPT_DIR"; exit 1; }; fi
-mkdir -p "$RUN/claws" "$RUN/compass" "$DATA/raw" "$DATA/raw_runs" "$DATA/history/claws" "$DATA/history/runs"
+mkdir -p "$RUN/claws" "$RUN/compass" "$DATA/raw" "$DATA/raw_runs" "$DATA/raw_branch" "$DATA/history/claws" "$DATA/history/runs" "$DATA/history/branch"
 
-export VOCAB_IDS="${VOCAB_IDS:-$vakuu/agents/common/vocab_ids_v0.113.1.json}"
-[ -f "$VOCAB_IDS" ] || $PY "$SPIRE/extend_vocab.py" vocab
 if [ ! -f "$CLAWS_PT" ]; then
     SRC="$CLAWS_MAIN/claws.pt"; [ -f "$vakuu/agents/run2/claws/claws.pt" ] && SRC="$vakuu/agents/run2/claws/claws.pt"
     $PY "$SPIRE/extend_vocab.py" claws "$SRC" "$CLAWS_PT" || exit 1
@@ -101,16 +99,29 @@ while true; do
     $PY "$SPIRE/facility_compass.py" --trials "${COMPASS_TRIALS:-100}" --branch-workers "${WORKERS:-17}" --ascension "$ASCENSION" \
         --raw-dir "$DATA/raw_runs" --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
     $PY "$GC_MAIN/progress.py" "$DATA/raw_runs" --label "$ROUND" --log "$DATA/progress_compass.jsonl"
+    # Branch evaluation (card-reward and route forks with shuffled continuations, agents/spire/facility_branch.py): what one choice costs,
+    # as paired comparisons from the same state. Its files train the compass's aux head next to the run data (train.py --branch-dir).
+    # BRANCH_SCOUTS=0 turns the stage off.
+    BRANCH_ARGS=()
+    if [ "${BRANCH_SCOUTS:-6}" -gt 0 ]; then
+        archive_round_data "$DATA/raw_branch" "$DATA/history/branch" "${BRANCH_WINDOW:-5}"
+        rm -rf "$DATA/raw_branch/clones"
+        CLAWS_CHECKPOINT="$CLAWS_PT" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${COMPASS_CLAWS_NOISE:-0.05}" \
+        $PY "$SPIRE/facility_branch.py" --trials "${BRANCH_SCOUTS:-6}" --branch-workers "${WORKERS:-17}" --ascension "$ASCENSION" \
+            --raw-dir "$DATA/raw_branch" --forks-per-scout "${BRANCH_FORKS:-2}" --map-forks-per-scout "${BRANCH_MAP_FORKS:-1}" --horizon "${BRANCH_HORIZON:-6}" --characters $CHARACTERS
+        rm -rf "$DATA/raw_branch/clones"
+        BRANCH_ARGS=(--branch-dir "$DATA/raw_branch" "$DATA/history/branch"/*/)
+    fi
     $PY "$GC_MAIN/materialize.py" "$DATA/raw_runs" "$DATA/history/runs"/*/ --out "$RUN/compass/dataset.pt"
     # lr 2e-5: on a net that already trained for many rounds it kept the held-out loss nearly flat, where 1e-4 rose every epoch
-    $PY "$GC_MAIN/train.py" "$RUN/compass/dataset.pt" --epochs "${COMPASS_EPOCHS:-20}" --lr "${COMPASS_LR:-2e-5}" --out "$CAND" --init "$CAND"
+    $PY "$GC_MAIN/train.py" "$RUN/compass/dataset.pt" --epochs "${COMPASS_EPOCHS:-100}" --patience "${COMPASS_PATIENCE:-10}" --lr "${COMPASS_LR:-2e-5}" --out "$CAND" --init "$CAND" "${BRANCH_ARGS[@]}"
     backup_checkpoint "$CAND"
     cleanup_procs
 
     if [ "$ROUND" = 1 ] || [ $((ROUND % ${GATE_EVERY:-5})) = 0 ]; then
         echo "=========================================== Spire round $ROUND: compass gate (candidate vs accepted)"
-        if $PY "$GC_MAIN/compare.py" "$CAND" "$ACC" --runs "${GATE_RUNS:-60}" --workers "${WORKERS:-17}" --claws "$CLAWS_PT" \
-                --resume-act "$RESUME_ACT" --ckpt-dir "$CKPT_DIR" | tee -a "$DATA/gate_compass.log"; then
+        if ( set -o pipefail; $PY "$GC_MAIN/compare.py" "$CAND" "$ACC" --runs "${GATE_RUNS:-100}" --workers "${WORKERS:-17}" --claws "$CLAWS_PT" \
+                --resume-act "$RESUME_ACT" --ckpt-dir "$CKPT_DIR" | tee -a "$DATA/gate_compass.log" ); then
             backup_checkpoint "$ACC"
             cp "$CAND" "$ACC"
             echo "gate: promoted the candidate" | tee -a "$DATA/gate_compass.log"
