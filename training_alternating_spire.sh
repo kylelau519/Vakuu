@@ -122,11 +122,11 @@ while true; do
     $PY "$SPIRE/materialize.py" "$DATA/raw" "$DATA/history/claws"/*/ --out "$RUN/claws/dataset.pt" --advantage "${CLAWS_ADVANTAGE:-turn}"
     echo "--- claws training, round $ROUND ($(date +%H:%M:%S))" >> "$DATA/claws_train.log"
     if [ "${CLAWS_TRAIN_ASYNC:-1}" = 1 ]; then
-        $PY "$CLAWS_MAIN/train.py" "$RUN/claws/dataset.pt" --epochs "${CLAWS_EPOCHS:-70}" "${HELD_ARGS[@]}" --device cuda --batch-size "${CLAWS_BATCH:-512}" \
+        $PY "$CLAWS_MAIN/train.py" "$RUN/claws/dataset.pt" --epochs "${CLAWS_EPOCHS:-70}" "${HELD_ARGS[@]}" --device cuda --batch-size "${CLAWS_BATCH:-1024}" \
             --lr "${CLAWS_LR:-1e-5}" --out "$CLAWS_PT.new" --init "$CLAWS_PT" >> "$DATA/claws_train.log" 2>&1 &
         CLAWS_TRAIN_PID=$!
     else
-        $PY "$CLAWS_MAIN/train.py" "$RUN/claws/dataset.pt" --epochs "${CLAWS_EPOCHS:-70}" "${HELD_ARGS[@]}" --device cuda --batch-size "${CLAWS_BATCH:-512}" \
+        $PY "$CLAWS_MAIN/train.py" "$RUN/claws/dataset.pt" --epochs "${CLAWS_EPOCHS:-70}" "${HELD_ARGS[@]}" --device cuda --batch-size "${CLAWS_BATCH:-1024}" \
             --lr "${CLAWS_LR:-1e-5}" --out "$CLAWS_PT" --init "$CLAWS_PT" 2>&1 | tee -a "$DATA/claws_train.log"
         backup_checkpoint "$CLAWS_PT"
     fi
