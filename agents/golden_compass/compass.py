@@ -90,7 +90,7 @@ def choose_map(decision, character: str | None, ascension: int):
         col, row = random.choice(rs.map_options(arr))
         return "select_map_node", {"col": col, "row": row}, None
 
-    base = rs.encode_from_buffer(arr, character, ascension)
+    base = rs.encode_from_buffer(arr, character, ascension, getattr(decision, "remaining", None))
     options = rs.map_afterstates(arr, base)
     scores = score([state for _key, state in options])
     idx, probs = _sample(scores)
@@ -110,7 +110,7 @@ def choose_card_reward(decision, cards: list[tuple[int, str | None, int]], can_s
     net = get_net()
     if net is None or "card" in _DISABLED:
         return None
-    base = rs.encode_from_buffer(decision.arr, character, ascension)
+    base = rs.encode_from_buffer(decision.arr, character, ascension, getattr(decision, "remaining", None))
     states = [rs.with_card(base, cid, up) for _i, cid, up in cards]
     labels = [{"card_index": i, "card": cid} for i, cid, _up in cards]
     if can_skip or not cards:
@@ -141,7 +141,7 @@ def choose_rest(decision, character: str | None, ascension: int):
     """-> (name, kwargs, next_purpose, policy), or None (no net / nothing scoreable: caller falls back)."""
     if get_net() is None or "rest" in _DISABLED:
         return None
-    base = rs.encode_from_buffer(decision.arr, character, ascension)
+    base = rs.encode_from_buffer(decision.arr, character, ascension, getattr(decision, "remaining", None))
     options = room_search.rest_options(decision.arr, base, score)
     if not options:
         return None
@@ -153,7 +153,7 @@ def choose_shop(decision, character: str | None, ascension: int):
     """-> (name, kwargs, next_purpose, policy), or None without a net."""
     if get_net() is None or "shop" in _DISABLED:
         return None
-    base = rs.encode_from_buffer(decision.arr, character, ascension)
+    base = rs.encode_from_buffer(decision.arr, character, ascension, getattr(decision, "remaining", None))
     options = room_search.shop_options(decision.arr, base, score)
     chosen, policy = _pick(options, "shop")
     return chosen.name, chosen.kwargs, chosen.purpose, policy
@@ -164,7 +164,7 @@ def choose_card_select(decision, purpose: str | None, character: str | None, asc
     policy), or None without a net or for any other kind of selection (caller picks at random)."""
     if get_net() is None or "select" in _DISABLED or purpose not in ("upgrade", "remove"):
         return None
-    base = rs.encode_from_buffer(decision.arr, character, ascension)
+    base = rs.encode_from_buffer(decision.arr, character, ascension, getattr(decision, "remaining", None))
     options = room_search.select_options(decision.arr, base, purpose, score)
     if not options:
         return None

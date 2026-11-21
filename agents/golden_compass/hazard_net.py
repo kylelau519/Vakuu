@@ -111,8 +111,8 @@ def _bag(emb: nn.Embedding, ids: torch.Tensor) -> torch.Tensor:
 class HazardNet(nn.Module):
     def __init__(self, sizes: dict[str, int], dim: int = 8, hidden: int = 64, body: int = 64, remaining: bool = False):
         super().__init__()
-        # `remaining`: the encounter-pool bag. The buffer never fills it (always []), so new nets leave it out; checkpoints
-        # written before the flag existed had the (all-zero) input, and from_checkpoint turns it back on for them.
+        # `remaining`: the encounter-pool bag (the encounters the act can still roll; spire/pools.py fills it). Nets made before
+        # it was filled leave it out; widened() adds it to one of them. A config without the flag is a pre-flag net (it had the bag).
         self.remaining = remaining
         self.config = {"sizes": sizes, "dim": dim, "hidden": hidden, "body": body, "remaining": remaining}
         pad = {"padding_idx": 0}
@@ -126,9 +126,10 @@ class HazardNet(nn.Module):
         self.map = nn.Embedding(sizes["map"], dim, **pad)
         self.character = nn.Embedding(sizes["character"], dim)
         self.act = nn.Embedding(5, dim)
-        width = dim * (9 if remaining else 8) + NUM_FEATURES  # deck mean+sum, relic, potion, boss, [remaining], map, char, act
+        width = dim * 8 + NUM_FEATURES  # deck mean+sum, relic, potion, boss, map, char, act (+ nums); LayerNorm covers these
         self.norm = nn.LayerNorm(width)
-        self.body = nn.Sequential(nn.Linear(width, body), nn.ReLU(), nn.Linear(body, body), nn.ReLU())
+        # the remaining bag joins AFTER the norm (scaled), so adding it to an older net leaves its scores unchanged
+        self.body = nn.Sequential(nn.Linear(width + (dim if remaining else 0), body), nn.ReLU(), nn.Linear(body, body), nn.ReLU())
         self.hazard = nn.Linear(body, FLOORS)
         self.aux = nn.Linear(body, AUX)
 
@@ -139,11 +140,11 @@ class HazardNet(nn.Module):
         n = mask.sum(1).clamp(min=1)
         deck = torch.cat([cards.sum(1) / n, cards.sum(1) / 16.0], dim=-1)
         parts = [deck, _bag(self.relic, b["relic"]), _bag(self.potion, b["potion"]), _bag(self.encounter, b["boss"])]
-        if self.remaining:
-            parts.append(_bag(self.encounter, b["remaining"]))
         parts += [_bag(self.map, b["map"]) / 4.0, self.character(b["char"]), self.act(b["act"]), b["nums"]]
-        x = torch.cat(parts, dim=-1)
-        h = self.body(self.norm(x))
+        x = self.norm(torch.cat(parts, dim=-1))
+        if self.remaining:
+            x = torch.cat([x, _bag(self.encounter, b["remaining"]) / 8.0], dim=-1)
+        h = self.body(x)
         return self.hazard(h), self.aux(h)
 
     @classmethod
@@ -153,10 +154,23 @@ class HazardNet(nn.Module):
     def save(self, path: str) -> None:
         torch.save({"state_dict": {k: t.cpu() for k, t in self.state_dict().items()}, "config": self.config}, path)
 
+    def widened(self) -> "HazardNet":
+        """This net with the `remaining` bag added: the same weights, the new input starts at zero (the encounter table is the boss's,
+        shared, and joined after the LayerNorm), so it scores exactly as before until it has trained on states that carry the encounter pool."""
+        if self.remaining:
+            return self
+        new = HazardNet(**{**self.config, "remaining": True})
+        dim = self.config["dim"]
+        sd = {k: v.clone() for k, v in self.state_dict().items()}
+        w = sd["body.0.weight"]
+        sd["body.0.weight"] = torch.cat([w, torch.zeros(w.shape[0], dim)], dim=1)
+        new.load_state_dict(sd)
+        return new.eval()
+
     @classmethod
     def from_checkpoint(cls, path: str) -> "HazardNet":
         blob = torch.load(path, weights_only=True, map_location="cpu")
-        net = cls(**{"remaining": True, **blob["config"]})  # a config without the flag is a pre-flag net: it had the bag
+        net = cls(**blob["config"])
         net.load_state_dict(blob["state_dict"])
         return net.eval()
 

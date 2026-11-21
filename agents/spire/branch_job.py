@@ -103,20 +103,22 @@ class ScoutRun:
                     break
                 dec = encode_run(d)
                 if d.surface == "card_reward" and host.checkpoint is not None and dec is not None:
-                    state = rs.encode_from_buffer(dec.arr, run["character"], self.asc)
+                    state = rs.encode_from_buffer(dec.arr, run["character"], self.asc, dec.remaining)
                     forks.append({"index": len(forks), "floor": floor, "cards": _offered(d), "script_start": len(macro_log),
                                   "can_skip": "card_alt:Skip" in d.legal, "state": state.to_json(), "sig": _sig(d),
-                                  "checkpoint": host.checkpoint, "trace": list(d.trace or [])})
+                                  "checkpoint": host.checkpoint, "trace": list(d.trace or []),
+                                  "faced": [host.faced.act, sorted(host.faced.seen)]})
                 action = player.act(d, same)
                 if d.surface == "map" and host.checkpoint is not None and dec is not None:
-                    base = rs.encode_from_buffer(dec.arr, run["character"], self.asc)
+                    base = rs.encode_from_buffer(dec.arr, run["character"], self.asc, dec.remaining)
                     # the nodes the buffer can represent (it keeps 3 children per node: an Ancient with 4 exits shows 3)
                     after = {f"{c}_{r}": st.to_json() for (c, r), st in rs.map_afterstates(dec.arr, base)}
                     legal_nodes = {f"{t['col']}_{t['row']}" for t in d.obs["screen"]["travelable"]}
                     after = {k: v for k, v in after.items() if k in legal_nodes}
                     if len(after) >= 2:
                         map_forks.append({"index": len(map_forks), "floor": floor, "sig": _sig(d), "nodes": list(after), "state": base.to_json(),
-                                          "afterstates": after, "checkpoint": host.checkpoint, "trace": list(d.trace or [])})
+                                          "afterstates": after, "checkpoint": host.checkpoint, "trace": list(d.trace or []),
+                                          "faced": [host.faced.act, sorted(host.faced.seen)]})
                 if d.surface in FORCED:
                     macro_log.append((d.surface, action))
                 d = host.act(action)
@@ -142,15 +144,17 @@ class ScoutRun:
 class BranchRun:
     """One continuation: fork point `fork_id` (a card fork, or a map fork when `kind == "map"`), option, repetition k."""
 
-    def __init__(self, fork_id: str, clone_path: str, sig: list, option, k: int, asc: int, horizon: int = 6, shuffle: bool = True,
+    def __init__(self, fork_id: str, clone_path: str, sig: list, option, k: int, asc: int, horizon: int = 6, shuffle: bool = True, faced: list | None = None,
                  script: list | None = None, kind: str = "card"):
         self.fork_id, self.clone_path, self.sig, self.option, self.k, self.asc = fork_id, clone_path, sig, option, k, asc
-        self.horizon, self.shuffle, self.script, self.kind = horizon, shuffle, script or [], kind
+        self.horizon, self.shuffle, self.script, self.kind, self.faced = horizon, shuffle, script or [], kind, faced
         self.rng = random.Random(J.zlib_hash(f"{fork_id}|k{k}"))
 
     def run(self) -> dict:
         J._load()
         pair_key = f"{self.fork_id}|k{self.k}"  # the same for every option: the shared random numbers
+        if self.faced:
+            host.set_faced(*self.faced)  # the fights before the checkpoint (the host replays from it and knows none)
         J.seed_everything(J.zlib_hash(pair_key))
         player = MacroPlayer(self.rng, self.asc)
         host = SpireHost.start(clone=self.clone_path, asc=self.asc, env="NoSL")

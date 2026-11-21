@@ -196,7 +196,7 @@ def main() -> None:
     fresh = not args.init
     if fresh and os.path.exists(args.out):
         sys.exit(f"{args.out} exists and --init is empty: refusing to overwrite it with a random net")
-    net = hn.HazardNet.build(encoder) if fresh else hn.HazardNet.from_checkpoint(args.init)
+    net = hn.HazardNet.build(encoder, remaining=True) if fresh else hn.HazardNet.from_checkpoint(args.init).widened()  # an older net gains the encounter-pool input
 
     samples = torch.load(args.dataset, weights_only=False) if args.dataset else []
     if fresh and samples:

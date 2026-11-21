@@ -14,7 +14,12 @@ import json
 import os
 import socket
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+try:
+    from . import pools
+except ImportError:  # run as a script
+    from spire import pools
 
 _SZ = os.environ.get("SPIRE_ZERO", os.path.expanduser("~/Programming/spire-zero"))
 _WIRE_VERSION = 4
@@ -29,6 +34,7 @@ class Decision:
     legal: list[str]
     export: bytes | None = None  # the live combat for the engine (combat surface, SL env)
     trace: list | None = None    # SL env: the steps since the latest node checkpoint (with host.checkpoint, a fork point)
+    remaining: list = field(default_factory=list)  # encounter ids this act can still roll (pools.py), for the run-level decisions
 
 
 class HostError(RuntimeError):
@@ -41,6 +47,7 @@ class SpireHost:
         self._f = conn.makefile("rw", encoding="utf-8", newline="\n")
         self.decision: Decision | None = None
         self.checkpoint: str | None = None  # SL env: the latest node checkpoint the host sent
+        self.faced = pools.Faced()  # the encounters fought in the current act; each Decision carries what is left of the act's pool
         self.end: dict | None = None  # run_end message once the run is over
         self.hello: dict | None = None
 
@@ -112,6 +119,7 @@ class SpireHost:
             if ty == "decision":
                 self.decision = Decision(msg["decision_id"], msg["obs_hash"], msg["surface"], msg["obs"], msg["legal"],
                                          base64.b64decode(msg["export"]) if msg.get("export") else None, msg.get("trace"))
+                self._note(self.decision)
                 return
             if ty == "node_checkpoint":
                 self.checkpoint = msg["checkpoint"]
@@ -122,6 +130,21 @@ class SpireHost:
             if ty == "error":
                 raise HostError(msg.get("message"))
             # executed / node_checkpoint: nothing to do
+
+    def _note(self, d: Decision) -> None:
+        run = d.obs.get("run")
+        if not run:
+            return
+        combat = (d.obs.get("screen") or {}).get("combat")
+        if combat:
+            self.faced.combat(run, combat.get("encounter"))
+        d.remaining = self.faced.remaining(run)
+
+    def set_faced(self, act: int | None, seen: list[str]) -> None:
+        """A host started from a clone knows nothing of the fights before its checkpoint: give it the fork point's record."""
+        self.faced.act, self.faced.seen = act, set(seen)
+        if self.decision is not None:
+            self._note(self.decision)
 
     # --- driving ----------------------------------------------------------------------------------------------------
 

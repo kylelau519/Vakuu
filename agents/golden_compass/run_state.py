@@ -16,9 +16,8 @@ i.e. the floor of the room they are in now, plus one. A map choice's afterstate 
 becomes "here", prepended as "<Type>+0") has the same `floor`; the "+0" token is what tells the
 net the room is being entered rather than behind it.
 
-`remaining` is reserved for the encounter ids the act can still roll ("you already beat elite A,
-so you'll only see B or C"). The buffer doesn't export the act's encounter pool yet, so it is
-always [] today; the net already embeds it, so filling it in later needs no model change.
+`remaining` is the encounter ids the act can still roll ("you already beat elite A, so you'll only see B or C"). The buffer
+doesn't carry it: the facility computes it (spire/pools.py) and passes it to encode_from_buffer. [] for logs before it existed.
 """
 from __future__ import annotations
 
@@ -187,7 +186,7 @@ def map_options(arr) -> list[tuple[int, int]]:
     return list(graph[current][1])
 
 
-def encode_from_buffer(arr, character: str | None, ascension: int) -> RunState:
+def encode_from_buffer(arr, character: str | None, ascension: int, remaining: list[str] | None = None) -> RunState:
     import buffer_layout as bl
     from buffer_env import decode_token
 
@@ -222,6 +221,7 @@ def encode_from_buffer(arr, character: str | None, ascension: int) -> RunState:
         relics=relics,
         potions=potions,
         map=_tokens(graph, reach, here_row),
+        remaining=list(remaining or []),
     )
 
 

@@ -172,7 +172,9 @@ def encode_run(d, character: str | None = None) -> SpireDecision | None:
     _player_and_context(a, run)
     if s != "map":
         _map(a, run)  # the map section is part of every record (the compass's afterstates read it on map screens only)
-    return SpireDecision(a, meta)
+    dec = SpireDecision(a, meta)
+    dec.remaining = list(getattr(d, "remaining", None) or [])
+    return dec
 
 
 def to_host_action(name: str, kwargs: dict, dec: SpireDecision, d) -> str:
