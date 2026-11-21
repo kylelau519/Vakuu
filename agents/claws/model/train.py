@@ -154,7 +154,8 @@ def _batch_step(
             queries.append(q)
         spans.append((start, len(queries) - start))
 
-    all_logits = net.policy_mlp(torch.stack(queries)).squeeze(-1)  # [total options in batch]
+    all_logits = net.policy_mlp(net.with_action_features(
+        torch.stack(queries), [a for ex in examples for _, a in ex["options"]])).squeeze(-1)  # [total options in batch]
     player_h = torch.stack([h[b, ex["player_pos"]] for b, ex in enumerate(examples)])
     values = net.value_in_hp(net.value_mlp(player_h).squeeze(-1))  # [B], in HP
     targets = torch.tensor([ex["value"] for ex in examples], device=device)

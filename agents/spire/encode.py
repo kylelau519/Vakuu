@@ -2,7 +2,7 @@
 C# writer made, at the offsets of buffer_layout.py. No typed objects: dicts in, one preallocated float32 array out.
 
 combat_play is complete except what the engine's observation does not carry (zero-filled, and so are sts2-cli's for an
-empty slot): the per-turn history counters, a card's enchantment/affliction, star costs. Everything else follows
+empty slot): a card's enchantment/affliction, star costs. Everything else follows
 RunSimulator.States.Buffer.cs's BufferStateWriter.WriteCombatPlay."""
 from __future__ import annotations
 
@@ -18,13 +18,16 @@ _STAT_KEYS = bl.HAND_STAT_KEYS  # damage, block, magicnumber, ...
 _CARD = bl.CARD_SIZE
 _HAND = bl.HAND_SLOT_SIZE
 _ENEMY = bl.ENEMY_SLOT_SIZE
+LOOK = bl.TOTAL_SIZE  # past sts2-cli's record: per alive enemy slot, the 15 whole numbers of the observation's `look` (3 turns x 5)
+LOOK_SIZE = 32  # 15 of `look`, then the first attack intent's hits and damage per hit, then how many intents of each type (tables.INTENT_TYPES) it has
+LOOK_TAIL = bl.MAX_ENEMIES * LOOK_SIZE
 _EMPTY_CARD = np.array([0, 0, 0, 0, 0, 0, -1, -1, -1, -1, 0], np.float32)
 
 
 def _build_template() -> np.ndarray:
     """What a fresh record holds where nothing is written: sts2-cli's empty-slot conventions (an empty card is token 0 with
     -1 for enchantment and affliction, an empty enemy has token -1 and (-1, 0) powers, ...)."""
-    a = np.zeros(bl.TOTAL_SIZE, np.float32)
+    a = np.zeros(bl.TOTAL_SIZE + LOOK_TAIL, np.float32)
     def cards(base: int, n: int) -> None:
         for i in range(n):
             a[base + i * _CARD: base + (i + 1) * _CARD] = _EMPTY_CARD
@@ -151,7 +154,8 @@ def encode_combat(obs: dict, legal: list[str], ctx: dict | None = None) -> np.nd
     cp = bl.COMBAT_PLAY
     a[cp], a[cp + 1], a[cp + 2] = obs["round"], p["energy"], p["max_energy"]
     playable = {int(x.split(":")[1]) for x in legal if x.startswith("play:")}  # play:<card uid>[:<enemy uid>]
-    enemies = [e for e in obs["enemies"] if e["hp"] > 0][:bl.MAX_ENEMIES]
+    alive = [i for i, e in enumerate(obs["enemies"]) if e["hp"] > 0][:bl.MAX_ENEMIES]
+    enemies = [obs["enemies"][i] for i in alive]
     for i, c in enumerate(hand[:bl.MAX_HAND_CARDS]):
         o = cp + bl._CP_HAND_OFFSET + i * _HAND
         _card(a, o, c)
@@ -162,13 +166,35 @@ def encode_combat(obs: dict, legal: list[str], ctx: dict | None = None) -> np.nd
         v = {k.lower(): x for k, x in (c.get("vars") or {}).items()}
         if "calc" in c:
             v.setdefault("calculateddamage", c["calc"])
+        if c.get("blk") is not None:  # the game's preview of the block number (Dexterity, Frail, ... in it)
+            v["block"] = c["blk"]
         for j, key in enumerate(_STAT_KEYS):
             a[o + bl._HAND_STATS_OFFSET + j] = v.get(key, -1)
         dmg = v.get("damage")
         if dmg is not None:
-            for ti in range(len(enemies)):
-                a[o + bl._HAND_DAMAGE_BY_TARGET_OFFSET + 2 * ti] = dmg
+            per = c.get("dmg")  # the game's preview of the number against each enemy (Strength, Vulnerable, ... in it)
+            for ti, ei in enumerate(alive):
+                a[o + bl._HAND_DAMAGE_BY_TARGET_OFFSET + 2 * ti] = per[ei] if per else dmg
                 a[o + bl._HAND_DAMAGE_BY_TARGET_OFFSET + 2 * ti + 1] = v.get("repeat", 1)
+
+    for ti, ei in enumerate(alive):
+        e = obs["enemies"][ei]
+        o = LOOK + ti * LOOK_SIZE
+        if e.get("look"):
+            a[o: o + 15] = e["look"]
+        for x in e.get("intents") or []:
+            if "damage" in x and not a[o + 15]:
+                a[o + 15], a[o + 16] = x.get("hits", 1), x["damage"]
+            k = T.INTENT_INDEX.get(x.get("type"))
+            if k is not None:
+                a[o + 17 + k] += 1
+    hist = obs.get("hist")
+    if hist:  # row 0 the player's, then each enemy's of obs["enemies"]: pairs (this turn, this combat), buffer_layout's order
+        n = bl.HISTORY_CREATURE_SIZE
+        a[cp + bl._CP_PLAYER_HISTORY_OFFSET: cp + bl._CP_PLAYER_HISTORY_OFFSET + n] = hist[0]
+        for ti, ei in enumerate(alive):
+            o = cp + bl._CP_ENEMY_HISTORY_OFFSET + ti * n
+            a[o: o + n] = hist[1 + ei]
 
     for i, e in enumerate(enemies):
         o = cp + bl._CP_ENEMIES_OFFSET + i * _ENEMY

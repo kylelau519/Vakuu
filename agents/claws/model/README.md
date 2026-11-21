@@ -77,8 +77,12 @@ older checkpoints still load (`load_compatible`), with the pile weights freshly 
 
 ## Known gaps
 
-- **No multi-hit intent, orbs or history counters in the tokens.** What the enemies are
-  buffed with drives the HP still to be lost, so `V` is noisier than it needs to be.
+- **No orbs in the tokens.** The player and enemy tokens carry the history counters
+  (18 pairs: this turn, this combat), a card token the game's damage preview per target and an enemy token its next three
+  turns by the game's own move machine (expected damage, chances of attack/defend/other, uncertainty; the record's tail,
+  `Look` in the observation). `FEATURE_DIM` is 74 (a card token also carries the game's block preview, an enemy token its attack's hits, damage per hit and intent types) and an action's own numbers (damage against its
+  target, hits, product) enter its query through `act_proj`; a checkpoint of the 6-wide features loads with the new columns
+  at zero, but data tokenized with them must be made again.
 - **`V` is a mean.** A hazard model downstream needs how likely a loss at least as large as the player's
   HP is; a categorical head over loss buckets (with `V` as its mean) would give that.
 - **HP is the only cost.** Potions are free, so the policy has no reason to keep them; record them per combat

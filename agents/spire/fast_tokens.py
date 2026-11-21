@@ -113,7 +113,7 @@ def score_batch(net, batches: list, options: list[list]) -> tuple[list[torch.Ten
                 raise ValueError(f"unhandled combat action {action!r}")
             queries.append(q)
         spans.append((start, len(opts)))
-    logits = net.policy_mlp(torch.stack(queries)).squeeze(-1)
+    logits = net.policy_mlp(net.with_action_features(torch.stack(queries), [a for opts in options for _, a in opts])).squeeze(-1)
     player_h = torch.stack([h[i, b.player_pos] for i, b in enumerate(batches)])
     values = net.value_in_hp(net.value_mlp(player_h).squeeze(-1))
     return [logits[s:s + c] for s, c in spans], values

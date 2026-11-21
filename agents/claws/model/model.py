@@ -37,7 +37,22 @@ MAX_PILE = bl.MAX_DECK_CARDS  # the buffer pads every pile to this
 N_CARD_TYPES = 7  # CardType enum: None, Attack, Skill, Power, Status, Curse, Quest
 PILE_KEYS = ("pile_ids", "pile_cost", "pile_upg", "pile_type", "pile_mask", "pile_counts")
 
-FEATURE_DIM = 6
+# Per token type the 74 numbers mean (all flat x / 10 but for flags; unused tail zero):
+#   PLAYER  0 hp ratio, 1 hp, 2 block, 3 energy, 4 max energy, 5 stars (Regent), 6..41 history: 18 counters x (this turn, this combat)
+#   CARD    3 cost, 4 can play, 5 upgraded, 6..8 type attack/skill/power, 9..11 target self/one enemy/all enemies, 12 star cost,
+#           13 hits, 14 damage per hit against the first enemy, 15 against the enemy with the most HP, 16 total damage of the card,
+#           17 block it gives (the game's preview)
+#   ENEMY   0 hp ratio, 1 hp, 2 block, 3 intent damage (hits included), 4 intends attack, 5 -, 6..41 history as the player's,
+#           42..56 its next 3 moves by the game's own move machine: per turn expected damage/10, chance of attack, defend, other,
+#           and how uncertain the move is (1 - the likeliest move's chance); 57 hits of its attack, 58 its damage per hit / 10,
+#           59..73 how many of its intents are of each type (the game's IntentType order)
+# The first six are what the checkpoints before were trained on; a checkpoint's wider-input columns start at zero.
+FEATURE_DIM = 74
+ACT_DIM = 3  # an action's own numbers: damage per hit against its target, hits, their product / 10
+HIST_SIZE = 36
+LOOK_AT = 42  # an enemy's look-ahead numbers in its features
+LOOK_SIZE = 32
+_NO_AF = [0.0] * ACT_DIM
 V_SCALE = 20.0  # HP: the value head's output is V_SCALE * softplus(raw), so raw ~ 1 means ~ 20 HP
 
 
@@ -143,8 +158,8 @@ def tokenize_from_buffer(buf: BufferDecision, gvocab: GlobalVocab) -> TokenBatch
         types.append(_TYPE_TO_IDX[type_name])
         ids.append(global_id)
         owners.append(group)
-        assert len(feature) == FEATURE_DIM
-        feats.append(feature)
+        assert len(feature) <= FEATURE_DIM
+        feats.append(feature + [0.0] * (FEATURE_DIM - len(feature)))
         return pos
 
     hp, max_hp = bl.player_hp(arr), bl.player_max_hp(arr)
@@ -157,18 +172,27 @@ def tokenize_from_buffer(buf: BufferDecision, gvocab: GlobalVocab) -> TokenBatch
             _s10(bl.player_block(arr)),
             _s10(bl.energy(arr)),
             _s10(bl.max_energy(arr)),
-            0.0,
-        ],
+            _s10(max(bl.regent_stars(arr), 0)),
+        ] + _hist(arr, bl._CP_PLAYER_HISTORY_OFFSET) + [0.0] * (FEATURE_DIM - 6 - HIST_SIZE),
     )
 
     hand_pos: dict[int, int] = {}
+    alive = [(i, s_) for i, s_ in bl.enemies(arr)]
+    biggest = max(alive, key=lambda t: bl.enemy_hp(t[1]))[0] if alive else 0
     for idx, slot in bl.hand_cards(arr):
         entry = decode_token(bl.card_token(slot, 0))
+        ctype, ttype = int(slot[bl.CARD_TYPE]), bl.hand_target_type(slot)
+        d_first, hits, total = _damage_af(slot, [i for i, _ in alive], None, ttype)
+        d_big = _s10(max(bl.damage_by_target(slot, biggest)[0], 0.0)) if alive else 0.0
         pos = add(
             "CARD",
             gvocab.entity("card", entry),
             [0.0, 0.0, 0.0, float(slot[bl.CARD_COST]), float(bl.hand_can_play(slot)),
-             float(bool(slot[bl.CARD_UPGRADED]))],
+             float(bool(slot[bl.CARD_UPGRADED])),
+             float(ctype == 1), float(ctype == 2), float(ctype == 3),
+             float(ttype == "Self"), float(ttype in ("AnyEnemy", "RandomEnemy")), float(ttype == "AllEnemies"),
+             float(max(bl.hand_star_cost(slot), 0)), hits, d_first, d_big, total,
+             _s10(max(bl.hand_stat(slot, "block"), 0.0))],
         )
         hand_pos[idx] = pos
 
@@ -188,7 +212,7 @@ def tokenize_from_buffer(buf: BufferDecision, gvocab: GlobalVocab) -> TokenBatch
                 _s10(intent_damage),
                 float(bl.enemy_intends_attack(slot)),
                 0.0,
-            ],
+            ] + _hist(arr, bl._CP_ENEMY_HISTORY_OFFSET, idx) + _look(arr, idx),
             group=idx + 1,
         )
         enemy_pos[idx] = pos
@@ -234,6 +258,46 @@ def tokenize_from_buffer(buf: BufferDecision, gvocab: GlobalVocab) -> TokenBatch
 # --- legal options (the policy head's action space) -----------------------------------------------
 
 
+def _hist(arr, offset: int, row: int = 0) -> list[float]:
+    """One creature's history counters (pairs: this turn, this combat) as the buffer holds them, flat x / 10."""
+    o = bl.COMBAT_PLAY + offset + row * HIST_SIZE
+    return [float(x) / 10.0 for x in arr[o:o + HIST_SIZE]]
+
+
+def _look(arr, i: int) -> list[float]:
+    """An alive enemy's next moves (the record's tail, per enemy slot; none in a record that has no tail): the expected damage
+    in hundredths and the chances in thousandths become damage / 10 and chances in 0..1."""
+    o = bl.TOTAL_SIZE + i * LOOK_SIZE
+    if arr.shape[0] < o + LOOK_SIZE:
+        return [0.0] * LOOK_SIZE
+    v = [float(x) for x in arr[o:o + LOOK_SIZE]]
+    return [x / 1000.0 for x in v[:15]] + [v[15], v[16] / 10.0] + v[17:]
+
+
+def _damage_af(slot, enemy_indices: list[int], target: int | None, target_type: str | None) -> list[float]:
+    """The numbers of a play's own damage: per hit against its target (all of them for an every-enemy card, the only
+    enemy otherwise), the hits and their product."""
+    if target is not None:
+        picks = [target]
+    elif target_type == "AllEnemies":
+        picks = enemy_indices
+    else:
+        picks = enemy_indices[:1]
+    total = 0.0
+    hits = 0.0
+    first = 0.0
+    for k, e in enumerate(picks):
+        d, r = bl.damage_by_target(slot, e)
+        if d < 0:
+            continue
+        r = max(r, 1.0)
+        if k == 0:
+            first = d
+        total += d * r
+        hits = max(hits, r)
+    return [_s10(first), hits, _s10(total)]
+
+
 def legal_options_from_buffer(buf: BufferDecision) -> list[tuple[str, dict]]:
     """The policy head's action space at a combat_play decision."""
     arr = buf.arr
@@ -244,11 +308,13 @@ def legal_options_from_buffer(buf: BufferDecision) -> list[tuple[str, dict]]:
     for idx, slot in bl.hand_cards(arr):
         if not bl.hand_can_play(slot) or int(slot[bl.CARD_COST]) > en:
             continue
-        if bl.hand_target_type(slot) == "AnyEnemy" and len(enemy_indices) >= 2:
+        ttype = bl.hand_target_type(slot)
+        if ttype == "AnyEnemy" and len(enemy_indices) >= 2:
             for enemy_idx in enemy_indices:
-                options.append(("play_card", {"card_index": idx, "target_index": enemy_idx}))
+                options.append(("play_card", {"card_index": idx, "target_index": enemy_idx,
+                                              "af": _damage_af(slot, enemy_indices, enemy_idx, ttype)}))
         else:
-            options.append(("play_card", {"card_index": idx}))
+            options.append(("play_card", {"card_index": idx, "af": _damage_af(slot, enemy_indices, None, ttype)}))
 
     for idx, slot in bl.player_potions(arr):
         target_type = bl.POTION_TARGET_TYPES.get(int(slot[bl.POTION_TARGET_TYPE]))
@@ -365,6 +431,9 @@ class ClawsNet(nn.Module):
         self.final_ln = nn.LayerNorm(dim)
 
         self.end_turn_query = nn.Parameter(torch.randn(dim) * 0.02)
+        # An action's own numbers (ACT_DIM) added to its query; zero at the start so a checkpoint without them acts as before.
+        self.act_proj = nn.Linear(ACT_DIM, dim, bias=False)
+        nn.init.zeros_(self.act_proj.weight)
         self.policy_mlp = nn.Sequential(nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, 1))
         self.value_mlp = nn.Sequential(nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, 1))
 
@@ -376,8 +445,11 @@ class ClawsNet(nn.Module):
         old, cur = state["type_emb.weight"], self.type_emb.weight
         if old.shape[0] < cur.shape[0]:
             state["type_emb.weight"] = torch.cat([old, cur.detach().cpu()[old.shape[0]:]])
+        for k, w in list(state.items()):  # a narrower feature projection: its new columns start at zero
+            if k.startswith("feat_proj.") and k.endswith(".weight") and w.shape[1] < FEATURE_DIM:
+                state[k] = torch.cat([w, torch.zeros(w.shape[0], FEATURE_DIM - w.shape[1], dtype=w.dtype)], dim=1)
         res = self.load_state_dict(state, strict=False)
-        bad = [k for k in res.missing_keys if not k.startswith(("pile_encoder.", "group_emb."))]
+        bad = [k for k in res.missing_keys if not k.startswith(("pile_encoder.", "group_emb.", "act_proj."))]
         if bad or res.unexpected_keys:
             raise RuntimeError(f"checkpoint mismatch: missing {bad}, unexpected {res.unexpected_keys}")
 
@@ -454,8 +526,13 @@ class ClawsNet(nn.Module):
                 raise ValueError(f"unhandled combat action {action!r}")
             queries.append(q)
 
-        logits = self.policy_mlp(torch.stack(queries)).squeeze(-1)
+        logits = self.policy_mlp(self.with_action_features(torch.stack(queries), [a for _, a in options])).squeeze(-1)
         return logits, self.value_in_hp(self.value_mlp(h[batch.player_pos]).squeeze(-1))
+
+    def with_action_features(self, queries: torch.Tensor, args: list[dict]) -> torch.Tensor:
+        """The queries plus each action's own numbers (damage against its target, hits, their product)."""
+        af = torch.tensor([a.get("af", _NO_AF) for a in args], dtype=queries.dtype, device=queries.device)
+        return queries + self.act_proj(af)
 
     def forward(
         self, decision: BufferDecision
