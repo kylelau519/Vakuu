@@ -28,6 +28,7 @@ class Decision:
     obs: dict           # surface-specific: combat -> the engine's CombatObservation plus run; others -> {"run":..., "screen":...}
     legal: list[str]
     export: bytes | None = None  # the live combat for the engine (combat surface, SL env)
+    trace: list | None = None    # SL env: the steps since the latest node checkpoint (with host.checkpoint, a fork point)
 
 
 class HostError(RuntimeError):
@@ -39,19 +40,23 @@ class SpireHost:
         self.proc, self._server, self._conn = proc, server, conn
         self._f = conn.makefile("rw", encoding="utf-8", newline="\n")
         self.decision: Decision | None = None
+        self.checkpoint: str | None = None  # SL env: the latest node checkpoint the host sent
         self.end: dict | None = None  # run_end message once the run is over
         self.hello: dict | None = None
 
     @classmethod
     def start(cls, save: str | None = None, character: str | None = None, seed: int = 1, asc: int = 0, env: str = "SL",
-              auto_win: str | None = None, extra: list[str] | None = None) -> "SpireHost":
+              auto_win: str | None = None, extra: list[str] | None = None, clone: str | None = None) -> "SpireHost":
+        """`clone`: a JSON file {"checkpoint", "trace"} (a fork point): the host replays it and the first decision is the one it was taken at."""
         path = "\0sts2py-%d-%s" % (os.getpid(), os.urandom(3).hex())
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(path)
         server.listen(1)
         dll = os.path.join(_SZ, "src/Sts2Ai.SimWorker/bin/Release/net9.0/Sts2Ai.SimWorker.dll")
         cmd = ["dotnet", dll, "run", "--n", "1", "--asc", str(asc), "--env", env, "--seed", str(seed), "--brain-socket", "@" + path[1:]]
-        if save:
+        if clone:
+            cmd += ["--from-clone", os.path.abspath(clone)]
+        elif save:
             cmd += ["--from-save", os.path.abspath(save)]
         if character:
             cmd += ["--character", character]
@@ -106,8 +111,11 @@ class SpireHost:
             ty = msg["type"]
             if ty == "decision":
                 self.decision = Decision(msg["decision_id"], msg["obs_hash"], msg["surface"], msg["obs"], msg["legal"],
-                                         base64.b64decode(msg["export"]) if msg.get("export") else None)
+                                         base64.b64decode(msg["export"]) if msg.get("export") else None, msg.get("trace"))
                 return
+            if ty == "node_checkpoint":
+                self.checkpoint = msg["checkpoint"]
+                continue
             if ty == "run_end":
                 self.decision, self.end = None, msg
                 return
@@ -120,6 +128,11 @@ class SpireHost:
     def set_hp(self, hp: int) -> None:
         d = self.decision
         self._send({"type": "recommendation", "decision_id": d.id, "obs_hash": d.hash, "action": f"sethp:{int(hp)}", "brain": "python"})
+
+    def shuffle(self, seed: int) -> None:
+        """Not an action: shuffles the draw pile's order (System.Random(seed)); answered before the next act."""
+        d = self.decision
+        self._send({"type": "recommendation", "decision_id": d.id, "obs_hash": d.hash, "action": f"shuffle:{int(seed)}", "brain": "python"})
 
     def act(self, action: str) -> Decision | None:
         d = self.decision
