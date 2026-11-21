@@ -47,8 +47,26 @@ export COMPASS_FACILITY="$SPIRE/facility_compass.py"   # compare.py plays its ga
 source "$vakuu/training_lib.sh"
 # training_lib's kill_stragglers is machine-wide (pkill multiprocessing.spawn / forkserver); here it only ends this script's own children
 # (the facilities end their workers themselves), so another loop on the machine is not hurt.
-kill_stragglers() { pkill -9 -P $$ 2>/dev/null; return 0; }
-install_traps
+# The background Claws training (below) is a child too: the per-stage cleanups spare it, the exit/interrupt traps do not.
+kill_stragglers() { local p; for p in $(pgrep -P $$ 2>/dev/null); do [ "$p" = "${CLAWS_TRAIN_PID:-}" ] || kill -9 "$p" 2>/dev/null; done; return 0; }
+kill_all() { [ -n "${CLAWS_TRAIN_PID:-}" ] && kill -9 "$CLAWS_TRAIN_PID" 2>/dev/null; pkill -9 -P $$ 2>/dev/null; return 0; }
+trap 'echo; echo "Interrupted -- cleaning up leftover workers..."; kill_all; exit 130' INT TERM HUP
+trap kill_all EXIT
+
+# Claws training (GPU) overlaps the compass stage (CPU): CLAWS_TRAIN_ASYNC=1 (default) starts it in the background writing $CLAWS_PT.new, and
+# finish_claws_train swaps it in before anything needs the new weights (the gate, the eval, the next round's Claws lines). The compass lines
+# of that round are played by the previous round's Claws weights. CLAWS_TRAIN_ASYNC=0: the old sequential order. Its log: data/spire/claws_train.log.
+CLAWS_TRAIN_PID=""
+finish_claws_train() {
+    [ -n "$CLAWS_TRAIN_PID" ] || return 0
+    if wait "$CLAWS_TRAIN_PID" && [ -s "$CLAWS_PT.new" ]; then
+        mv "$CLAWS_PT.new" "$CLAWS_PT"; backup_checkpoint "$CLAWS_PT"
+        echo "claws training finished:"; tail -n 3 "$DATA/claws_train.log"
+    else
+        echo "claws training FAILED (kept the previous weights); see $DATA/claws_train.log"; rm -f "$CLAWS_PT.new"
+    fi
+    CLAWS_TRAIN_PID=""
+}
 
 [ -e "$SPIRE_ZERO/engine/target/release/libsts2ai_engine.so" ] || { echo "the spire-zero engine is not built ($SPIRE_ZERO)"; exit 1; }
 if [ "$RESUME_ACT" != 0 ]; then compgen -G "$CKPT_DIR/*_act$RESUME_ACT.json" > /dev/null || { echo "no act-$RESUME_ACT saves in $CKPT_DIR"; exit 1; }; fi
@@ -102,9 +120,16 @@ while true; do
         fi
     fi
     $PY "$SPIRE/materialize.py" "$DATA/raw" "$DATA/history/claws"/*/ --out "$RUN/claws/dataset.pt" --advantage "${CLAWS_ADVANTAGE:-turn}"
-    $PY "$CLAWS_MAIN/train.py" "$RUN/claws/dataset.pt" --epochs "${CLAWS_EPOCHS:-70}" "${HELD_ARGS[@]}" --device cuda --batch-size "${CLAWS_BATCH:-512}" \
-        --lr "${CLAWS_LR:-1e-5}" --out "$CLAWS_PT" --init "$CLAWS_PT"
-    backup_checkpoint "$CLAWS_PT"
+    echo "--- claws training, round $ROUND ($(date +%H:%M:%S))" >> "$DATA/claws_train.log"
+    if [ "${CLAWS_TRAIN_ASYNC:-1}" = 1 ]; then
+        $PY "$CLAWS_MAIN/train.py" "$RUN/claws/dataset.pt" --epochs "${CLAWS_EPOCHS:-70}" "${HELD_ARGS[@]}" --device cuda --batch-size "${CLAWS_BATCH:-512}" \
+            --lr "${CLAWS_LR:-1e-5}" --out "$CLAWS_PT.new" --init "$CLAWS_PT" >> "$DATA/claws_train.log" 2>&1 &
+        CLAWS_TRAIN_PID=$!
+    else
+        $PY "$CLAWS_MAIN/train.py" "$RUN/claws/dataset.pt" --epochs "${CLAWS_EPOCHS:-70}" "${HELD_ARGS[@]}" --device cuda --batch-size "${CLAWS_BATCH:-512}" \
+            --lr "${CLAWS_LR:-1e-5}" --out "$CLAWS_PT" --init "$CLAWS_PT" 2>&1 | tee -a "$DATA/claws_train.log"
+        backup_checkpoint "$CLAWS_PT"
+    fi
     cleanup_procs
 
     echo "=========================================== Spire round $ROUND: golden compass"
@@ -146,6 +171,7 @@ while true; do
     backup_checkpoint "$CAND"
     cleanup_procs
 
+    finish_claws_train
     if [ "$ROUND" = 1 ] || [ $((ROUND % ${GATE_EVERY:-5})) = 0 ]; then
         echo "=========================================== Spire round $ROUND: compass gate (candidate vs accepted)"
         if ( set -o pipefail; $PY "$GC_MAIN/compare.py" "$CAND" "$ACC" --runs "${GATE_RUNS:-100}" --workers "${WORKERS:-17}" --claws "$CLAWS_PT" \
