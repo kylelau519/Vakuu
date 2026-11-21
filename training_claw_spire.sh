@@ -103,7 +103,7 @@ while true; do
 
     if [ "${EVAL_RUNS:-60}" -gt 0 ] && { [ "$ROUND" = 1 ] || [ $((ROUND % ${EVAL_EVERY:-1})) = 0 ]; }; then
         CLAWS_GREEDY=1 $PY "$SPIRE/eval_claws.py" --runs "${EVAL_RUNS:-60}" --workers "${WORKERS:-16}" --ascension "${ASCENSION:-1}" --resume-act "$RESUME_ACT" --characters $CHARACTERS \
-            --ckpt-dir "$CKPT_DIR" --log "$DATA/eval_claws.jsonl" --label "$(date +%d.%H%M)#$ROUND" | tail -2
+            --ckpt-dir "$CKPT_DIR" --log "$DATA/eval_claws.jsonl" --detail-log "$DATA/eval_combats.jsonl" --label "$(date +%d.%H%M)#$ROUND" | tail -2
         cleanup_procs
     fi
     [ -n "${MAX_ROUNDS:-}" ] && [ "$ROUND" -ge "$MAX_ROUNDS" ] && break   # MAX_ROUNDS: a dry run

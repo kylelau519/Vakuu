@@ -20,6 +20,37 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, ".."))
 
 
+def _cid(c) -> str:
+    if not isinstance(c, dict):
+        return str(c)
+    up = c.get("upgrade") or c.get("upgrades") or c.get("upgraded") or c.get("up")
+    return f"{c.get('id')}{'+' if up else ''}"
+
+
+def _hazard_probe(d, asc: int):
+    """The compass's death hazard for the next floor, from a map decision (None without a compass checkpoint or off a map screen)."""
+    if d.surface != "map" or not os.environ.get("GOLDEN_COMPASS_CHECKPOINT"):
+        return None
+    try:
+        import torch
+        from spire.run_encode import encode_run
+        sys.path.insert(0, os.path.join(_HERE, "..", "golden_compass"))
+        import compass, run_state as rs, hazard_net as hn
+        net = compass.get_net()
+        dec = encode_run(d)
+        if net is None or dec is None:
+            return None
+        st = rs.encode_from_buffer(dec.arr, d.obs["run"]["character"], asc, getattr(d, "remaining", None))
+        with torch.no_grad():
+            lg, _aux = net(compass._encoder.collate([st]))
+        h = torch.sigmoid(lg)[0]
+        i = hn.head_floor(st.act, st.floor)
+        return {"floor": int(st.floor), "act": int(st.act), "hazard": round(float(h[i]), 4), "next": [round(float(x), 4) for x in h[i:i + 6]],
+                "h": [round(float(x), 3) for x in h]}  # the whole head: index = hn.head_floor(act, floor) of the combat it precedes
+    except Exception:  # noqa: BLE001 -- a probe must never end a run
+        return None
+
+
 def _play(task: tuple) -> dict:
     save, main_id, asc, character, seed = task
     import torch
@@ -36,15 +67,22 @@ def _play(task: tuple) -> dict:
     host = None
     try:
         host = SpireHost.start(save=save, character=character, seed=seed, asc=asc, env="NoSL")  # no exports: nothing forks here
-        d, n, same, last = host.decision, 0, 0, None
+        d, n, same, last, probe = host.decision, 0, 0, None, None
         while d is not None and n < 4000:
             n += 1
             run = d.obs.get("run", {})
             out["floor"], out["act"] = run.get("floor", out["floor"]), run.get("act", out["act"])
+            if d.surface == "map":
+                probe = _hazard_probe(d, asc) or probe
             if d.surface == "combat":
                 obs = d.obs["screen"]["combat"]
                 if not out["combats"] or out["combats"][-1].get("_enc") != (obs["encounter"], run.get("floor")):
-                    out["combats"].append({"encounter": obs["encounter"], "act": run.get("act"), "floor": run.get("floor"), "hp_in": obs["player"]["hp"], "_enc": (obs["encounter"], run.get("floor")), "won": None})
+                    out["combats"].append({"encounter": obs["encounter"], "act": run.get("act"), "floor": run.get("floor"), "hp_in": obs["player"]["hp"],
+                                           "max_hp": run.get("max_hp"), "deck_n": len(run.get("deck") or []), "relics_n": len(run.get("relics") or []),
+                                           "pred": probe, "turns": 0, "potions_n": len(run.get("potions") or []), "gold": run.get("gold"),
+                                           **({"deck": sorted(_cid(c) for c in run.get("deck") or []), "relics": [r.get("id") for r in run.get("relics") or []]}
+                                              if str(obs["encounter"]).endswith(("_BOSS", "_ELITE")) else {}), "_enc": (obs["encounter"], run.get("floor")), "won": None})
+                out["combats"][-1]["turns"] = max(out["combats"][-1]["turns"], int(obs.get("round") or 0))
                 dec, options, idx, _p, _v = J.decide(obs, d.legal, J.run_context(run))
                 d = host.act(to_action(*options[idx], obs, d.legal))
                 continue
@@ -54,6 +92,7 @@ def _play(task: tuple) -> dict:
                 continue
             if out["combats"] and out["combats"][-1]["won"] is None:
                 out["combats"][-1]["won"] = True
+                out["combats"][-1]["hp_out"] = run.get("hp")
             sig = (d.surface, json.dumps(d.legal), run.get("hp"))
             same = same + 1 if sig == last else 0
             last = sig
@@ -64,6 +103,7 @@ def _play(task: tuple) -> dict:
         if d is None:
             if out["combats"] and out["combats"][-1]["won"] is None:
                 out["combats"][-1]["won"] = False
+                out["combats"][-1]["hp_out"] = 0
             out["won"] = bool(host.end and host.end.get("won"))
             if host.end and "floor" in host.end:
                 out["floor"] = host.end["floor"]
@@ -106,6 +146,7 @@ def main() -> None:
     ap.add_argument("--resume-act", type=int, default=0, help="0: fresh runs from the start (default); N: from random act-N saves")
     ap.add_argument("--characters", nargs="*", default=["IRONCLAD"])
     ap.add_argument("--log", default=None)
+    ap.add_argument("--detail-log", default=None, help="one JSON line per run with every combat (encounter, hp in/out, turns, the compass's hazard), for the analysis panel")
     ap.add_argument("--label", default=time.strftime("%d.%H%M"))
     ap.add_argument("--seed", type=int, default=None, help="fix the games (game seeds and run ids), so two checkpoints play the same ones")
     args = ap.parse_args()
@@ -148,6 +189,10 @@ def main() -> None:
         os.makedirs(os.path.dirname(os.path.abspath(args.log)), exist_ok=True)
         with open(args.log, "a") as fh:
             fh.write(json.dumps(row) + "\n")
+    if args.detail_log:
+        with open(args.detail_log, "a") as fh:
+            for r in rows:
+                fh.write(json.dumps({"label": args.label, **{k: r[k] for k in ("main_id", "floor", "act", "won", "error", "combats")}}) + "\n")
     for child in mp.active_children():  # the workers (spawned by the executor) hold native threads: end them all
         try:
             child.terminate()

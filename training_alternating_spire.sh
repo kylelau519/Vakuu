@@ -188,7 +188,7 @@ while true; do
     if [ "${EVAL_RUNS:-100}" -gt 0 ] && { [ "$ROUND" = 1 ] || [ $((ROUND % ${EVAL_EVERY:-1})) = 0 ]; }; then
         CLAWS_CHECKPOINT="$CLAWS_PT" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_GREEDY=1 COMPASS_EPS=0 COMPASS_TAU=0 \
         $PY "$SPIRE/eval_claws.py" --runs "${EVAL_RUNS:-100}" --workers "${WORKERS:-17}" --ascension "$ASCENSION" --resume-act "$RESUME_ACT" \
-            --characters $CHARACTERS --ckpt-dir "$CKPT_DIR" --log "$DATA/eval_claws.jsonl" --label "$(date +%d.%H%M)#$ROUND" | tail -2
+            --characters $CHARACTERS --ckpt-dir "$CKPT_DIR" --log "$DATA/eval_claws.jsonl" --detail-log "$DATA/eval_combats.jsonl" --label "$(date +%d.%H%M)#$ROUND" | tail -2
         cleanup_procs
     fi
 
