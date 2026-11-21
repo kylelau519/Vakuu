@@ -209,17 +209,21 @@ def _l2_delta(before: dict[str, torch.Tensor], after: dict[str, torch.Tensor]) -
 
 
 def split_holdout(examples: list[dict], frac: float, seed: int = 0) -> tuple[list[dict], list[dict]]:
-    """(train, held-out). Examples that carry a `run` id (spire/materialize.py writes it) are split BY RUN, so the forks and the
-    mainline of one combat never straddle the split; older datasets have none, and then the last `frac` of the list is held out
-    (materialize writes one run after another, so that block is run-aligned but for one boundary run)."""
+    """(train, held-out). The held-out runs must be runs the starting weights have NOT been trained on. materialize marks the current
+    round's examples `fresh` (older rounds were part of earlier rounds' training), so when there are fresh runs the held-out set is
+    drawn from them only (`frac` of those fresh runs, by run id, so a mainline and its forks never straddle the split). Without that marking
+    but with run ids: random runs. Without either (an old dataset): the last `frac` of the list."""
     if frac <= 0 or len(examples) < 50:
         return examples, []
     if all("run" in ex for ex in examples):
         runs = sorted({ex["run"] for ex in examples})
-        if len(runs) >= 3:
+        fresh = sorted({ex["run"] for ex in examples if ex.get("fresh")})
+        pool = fresh if len(fresh) >= 2 else runs
+        if len(runs) >= 3 and len(pool) >= 2:
             rng = random.Random(seed)
-            rng.shuffle(runs)
-            held = set(runs[:max(1, round(len(runs) * frac))])
+            rng.shuffle(pool)
+            k = min(max(1, round(len(pool) * frac)), len(pool) - 1 if pool is fresh else len(pool))  # frac of the POOL it is drawn from
+            held = set(pool[:k])
             return [ex for ex in examples if ex["run"] not in held], [ex for ex in examples if ex["run"] in held]
     cut = len(examples) - max(1, int(len(examples) * frac))
     return examples[:cut], examples[cut:]
