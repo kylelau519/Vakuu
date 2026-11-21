@@ -81,13 +81,13 @@ while true; do
     $PY "$SPIRE/facility_claws.py" \
         --trials "${CLAWS_TRIALS:-30}" --branch-workers "${WORKERS:-16}" --forks-per-turn "${CLAWS_FORKS:-40}" \
         --ascension "${ASCENSION:-1}" --raw-dir "$DATA/raw" --dedup-forks --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
-    $PY "$SPIRE/materialize.py" "$DATA/raw" "$DATA/history"/*/ --out "$RUN/claws/dataset.pt"
+    $PY "$SPIRE/materialize.py" "$DATA/raw" "$DATA/history"/*/ --out "$RUN/claws/dataset.pt" --advantage "${CLAWS_ADVANTAGE:-turn}"
     $PY "$CLAWS_MAIN/train.py" "$RUN/claws/dataset.pt" --epochs "${CLAWS_EPOCHS:-70}" --device cuda --batch-size "${CLAWS_BATCH:-512}" \
         --lr "${CLAWS_LR:-5e-5}" --out "$CLAWS_PT" --init "$CLAWS_PT"
     backup_checkpoint "$CLAWS_PT"
     cleanup_procs
 
-    if [ "${EVAL_RUNS:-60}" -gt 0 ] && { [ "$ROUND" = 1 ] || [ $((ROUND % ${EVAL_EVERY:-2})) = 0 ]; }; then
+    if [ "${EVAL_RUNS:-60}" -gt 0 ] && { [ "$ROUND" = 1 ] || [ $((ROUND % ${EVAL_EVERY:-1})) = 0 ]; }; then
         CLAWS_GREEDY=1 $PY "$SPIRE/eval_claws.py" --runs "${EVAL_RUNS:-60}" --workers "${WORKERS:-16}" --ascension "${ASCENSION:-1}" --resume-act "$RESUME_ACT" --characters $CHARACTERS \
             --ckpt-dir "$CKPT_DIR" --log "$DATA/eval_claws.jsonl" --label "$(date +%d.%H%M)#$ROUND" | tail -2
         cleanup_procs

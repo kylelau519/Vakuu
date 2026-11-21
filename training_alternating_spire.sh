@@ -85,11 +85,11 @@ while true; do
     archive_pkl "$DATA/raw" "$DATA/history/claws" "$((CLAWS_WINDOW - 1))"
     CLAWS_CHECKPOINT="$CLAWS_PT" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${CLAWS_FORK_NOISE:-0.4}" \
     $PY "$SPIRE/facility_claws.py" \
-        --trials "${CLAWS_TRIALS:-30}" --branch-workers "${WORKERS:-17}" --forks-per-turn "${CLAWS_FORKS:-40}" \
+        --trials "${CLAWS_TRIALS:-20}" --branch-workers "${WORKERS:-17}" --forks-per-turn "${CLAWS_FORKS:-20}" \
         --ascension "$ASCENSION" --raw-dir "$DATA/raw" --dedup-forks --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
-    $PY "$SPIRE/materialize.py" "$DATA/raw" "$DATA/history/claws"/*/ --out "$RUN/claws/dataset.pt"
-    $PY "$CLAWS_MAIN/train.py" "$RUN/claws/dataset.pt" --epochs "${CLAWS_EPOCHS:-70}" --device cuda --batch-size "${CLAWS_BATCH:-512}" \
-        --lr "${CLAWS_LR:-5e-5}" --out "$CLAWS_PT" --init "$CLAWS_PT"
+    $PY "$SPIRE/materialize.py" "$DATA/raw" "$DATA/history/claws"/*/ --out "$RUN/claws/dataset.pt" --advantage "${CLAWS_ADVANTAGE:-turn}"
+    $PY "$CLAWS_MAIN/train.py" "$RUN/claws/dataset.pt" --epochs "${CLAWS_EPOCHS:-70}" --holdout "${CLAWS_HOLDOUT:-0.25}" --device cuda --batch-size "${CLAWS_BATCH:-512}" \
+        --lr "${CLAWS_LR:-1e-5}" --out "$CLAWS_PT" --init "$CLAWS_PT"
     backup_checkpoint "$CLAWS_PT"
     cleanup_procs
 
