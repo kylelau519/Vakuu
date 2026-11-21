@@ -101,15 +101,15 @@ ROUND=1
 while true; do
     echo "=========================================== Spire round $ROUND: claws (engine forks)"
     archive_pkl "$DATA/raw" "$DATA/history/claws" "$((CLAWS_WINDOW - 1))"
-    CLAWS_CHECKPOINT="$CLAWS_PT" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${CLAWS_FORK_NOISE:-0.4}" \
+    CLAWS_CHECKPOINT="$CLAWS_PT" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${CLAWS_FORK_NOISE:-0.25}" \
     $PY "$SPIRE/facility_claws.py" \
         --trials "${CLAWS_TRIALS:-20}" --branch-workers "${WORKERS:-17}" --forks-per-turn "${CLAWS_FORKS:-20}" \
         --ascension "$ASCENSION" --raw-dir "$DATA/raw" --dedup-forks --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
-    # Held-out set: HELDOUT_RUNS greedy lines (default CLAWS_HOLDOUT = 25% of the round's CLAWS_TRIALS) (no exploration, no forks) played by the weights this round starts from, so the net has
+    # Held-out set: HELDOUT_RUNS greedy lines  (default 20) (no exploration, no forks) played by the weights this round starts from, so the net has
     # never trained on them. Early stopping follows their value RMSE (only the draw order and the net's own errors are left) and every
     # fresh example trains. HELDOUT_RUNS=0: the old split of the fresh runs (--holdout).
     HELD_ARGS=(--holdout "${CLAWS_HOLDOUT:-0.25}")
-    HELDOUT_N="${HELDOUT_RUNS:-$(awk -v n="${CLAWS_TRIALS:-20}" -v f="${CLAWS_HOLDOUT:-0.25}" 'BEGIN{h=int(n*f+0.5); print (h<1?1:h)}')}"
+    HELDOUT_N="${HELDOUT_RUNS:-20}"
     if [ "$HELDOUT_N" -gt 0 ]; then
         rm -rf "$DATA/raw_greedy"
         GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_CHECKPOINT="$CLAWS_PT" CLAWS_GREEDY=1 \
