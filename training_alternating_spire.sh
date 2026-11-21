@@ -7,7 +7,7 @@
 #   2. Compass: COMPASS_TRIALS whole real-HP runs played by that Claws -> train a candidate on the last HISTORY_WINDOW rounds.
 #   3. Gate (round 1, then every GATE_EVERY): the candidate replaces the accepted compass only if it beats it on >= 60% of the non-tied
 #      fresh runs by hazard accuracy (golden_compass/compare.py); the outcome is appended to data/spire/gate_compass.log.
-#   4. Eval (round 1, then every EVAL_EVERY): EVAL_RUNS greedy real-HP runs with the accepted compass -> data/spire/eval_claws.jsonl.
+#   4. Eval (every EVAL_EVERY rounds, default 1 = every round): EVAL_RUNS greedy real-HP runs with the accepted compass -> data/spire/eval_claws.jsonl.
 #
 # Models live in agents/spire_run/ (warm start: made on the first start from agents/run2/, else the main nets, with their embedding
 # tables moved onto this game's vocabulary by spire/extend_vocab.py); data in data/spire/. The main loop's files are never touched.
@@ -131,9 +131,9 @@ while true; do
         cleanup_procs
     fi
 
-    if [ "${EVAL_RUNS:-60}" -gt 0 ] && { [ "$ROUND" = 1 ] || [ $((ROUND % ${EVAL_EVERY:-5})) = 0 ]; }; then
+    if [ "${EVAL_RUNS:-100}" -gt 0 ] && { [ "$ROUND" = 1 ] || [ $((ROUND % ${EVAL_EVERY:-1})) = 0 ]; }; then
         CLAWS_CHECKPOINT="$CLAWS_PT" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_GREEDY=1 COMPASS_EPS=0 COMPASS_TAU=0 \
-        $PY "$SPIRE/eval_claws.py" --runs "${EVAL_RUNS:-60}" --workers "${WORKERS:-17}" --ascension "$ASCENSION" --resume-act "$RESUME_ACT" \
+        $PY "$SPIRE/eval_claws.py" --runs "${EVAL_RUNS:-100}" --workers "${WORKERS:-17}" --ascension "$ASCENSION" --resume-act "$RESUME_ACT" \
             --characters $CHARACTERS --ckpt-dir "$CKPT_DIR" --log "$DATA/eval_claws.jsonl" --label "$(date +%d.%H%M)#$ROUND" | tail -2
         cleanup_procs
     fi

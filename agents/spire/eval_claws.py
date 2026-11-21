@@ -35,7 +35,7 @@ def _play(task: tuple) -> dict:
     out = {"main_id": main_id, "floor": 0, "act": 0, "won": False, "combats": [], "error": None}
     host = None
     try:
-        host = SpireHost.start(save=save, character=character, seed=seed, asc=asc)
+        host = SpireHost.start(save=save, character=character, seed=seed, asc=asc, env="NoSL")  # no exports: nothing forks here
         d, n, same, last = host.decision, 0, 0, None
         while d is not None and n < 4000:
             n += 1
@@ -107,14 +107,16 @@ def main() -> None:
     ap.add_argument("--characters", nargs="*", default=["IRONCLAD"])
     ap.add_argument("--log", default=None)
     ap.add_argument("--label", default=time.strftime("%d.%H%M"))
+    ap.add_argument("--seed", type=int, default=None, help="fix the games (game seeds and run ids), so two checkpoints play the same ones")
     args = ap.parse_args()
-    rng = random.Random(os.urandom(4))
+    rng = random.Random(args.seed if args.seed is not None else os.urandom(4))
+    run_id = (lambda: f"eval{rng.randrange(16**6):06x}") if args.seed is not None else (lambda: f"eval{os.urandom(3).hex()}")
     tasks = []
     if args.resume_act > 0:
         saves = [p for p in sorted(glob.glob(os.path.join(args.ckpt_dir, f"*_act{args.resume_act}.json"))) if not p.endswith(".ckpt.json")]
-        tasks = [(rng.choice(saves), f"eval{os.urandom(3).hex()}", args.ascension, None, 1) for _ in range(args.runs)]
+        tasks = [(rng.choice(saves), run_id(), args.ascension, None, 1) for _ in range(args.runs)]
     else:
-        tasks = [(None, f"eval{os.urandom(3).hex()}", args.ascension, rng.choice(args.characters).upper(), rng.randrange(1, 2**31 - 1))
+        tasks = [(None, run_id(), args.ascension, rng.choice(args.characters).upper(), rng.randrange(1, 2**31 - 1))
                  for _ in range(args.runs)]
     from concurrent.futures import ProcessPoolExecutor, as_completed
     pool = ProcessPoolExecutor(max_workers=args.workers, mp_context=mp.get_context("spawn"))
