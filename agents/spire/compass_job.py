@@ -21,6 +21,7 @@ import run_state as rs  # noqa: E402
 from spire import claws_job as J, macro  # noqa: E402
 from spire import tables  # noqa: E402,F401
 from spire.actions import random_pick, to_action  # noqa: E402
+from spire.branch_job import FORCED, _offered, _sig, _write_clone  # noqa: E402
 from spire.host import HostError, SpireHost  # noqa: E402
 from spire.run_encode import act_floor, encode_run, to_host_action  # noqa: E402
 
@@ -37,8 +38,13 @@ class _Session:
 
 
 class CompassRun:
-    def __init__(self, save: str | None, main_id: str, asc: int, raw_dir: str, character: str | None = None, seed: int = 1):
+    def __init__(self, save: str | None, main_id: str, asc: int, raw_dir: str, character: str | None = None, seed: int = 1,
+                 fork_dir: str | None = None, card_forks: int = 0, map_forks: int = 0):
+        """`fork_dir` with card_forks / map_forks > 0: the run is hosted in SL mode and card_forks card rewards and map_forks route
+        choices of it (picked at random when the run is over) are kept as FORK POINTS for facility_branch.py --points: fork_dir/points/
+        {main_id}.json plus a clone file each in fork_dir/clones. Without them the run is hosted in NoSL (faster, nothing to fork)."""
         self.save, self.main_id, self.asc, self.raw_dir, self.character, self.seed = save, main_id, asc, raw_dir, character, seed
+        self.fork_dir, self.card_forks, self.map_forks = fork_dir, card_forks, map_forks
         self.rng = random.Random(J.zlib_hash(main_id))
 
     def run(self) -> dict:
@@ -51,7 +57,11 @@ class CompassRun:
         outcome, error, capped = None, None, None
         floor = floor_offset = 0
         act, acts_seen = 0, 1
-        host = SpireHost.start(save=self.save, character=self.character, seed=self.seed, asc=self.asc, env="NoSL")
+        forking = bool(self.fork_dir) and (self.card_forks > 0 or self.map_forks > 0)
+        fork_card: list[dict] = []
+        fork_map: list[dict] = []
+        macro_log: list[tuple] = []
+        host = SpireHost.start(save=self.save, character=self.character, seed=self.seed, asc=self.asc, env="SL" if forking else "NoSL")
         try:
             d = host.decision
             ch = d.obs["run"]["character"]
@@ -81,19 +91,36 @@ class CompassRun:
                     break
                 dec = encode_run(d, ch)
                 if dec is None:  # a screen the agents never decide: rewards, treasure, proceed
-                    d = host.act(macro.choose(d, self.rng, repeat=same))
+                    action = macro.choose(d, self.rng, repeat=same)
+                    if d.surface in FORCED:
+                        macro_log.append((d.surface, action))
+                    d = host.act(action)
                     continue
-                state = rs.encode_from_buffer(dec.arr, session.character, session.ascension)
+                state = rs.encode_from_buffer(dec.arr, session.character, session.ascension, dec.remaining)
                 if d.surface == "event" and same >= 3 and "proceed" in d.legal:
                     name, kwargs, policy = "leave_room", {}, None
                 else:
                     name, kwargs, policy, purpose = P.choose_action(dec, session, purpose)
                 states.append({"decision": dec.decision, "action": name, "state": state.to_json()})
+                faced = [host.faced.act, sorted(host.faced.seen)]
+                if forking and d.surface == "card_reward" and host.checkpoint is not None:
+                    fork_card.append({"index": len(fork_card), "floor": floor, "cards": _offered(d), "script_start": len(macro_log),
+                                      "can_skip": "card_alt:Skip" in d.legal, "state": state.to_json(), "sig": _sig(d),
+                                      "checkpoint": host.checkpoint, "trace": list(d.trace or []), "faced": faced})
                 if name == "select_map_node":
-                    for key, entered in rs.map_afterstates(dec.arr, state):
+                    afters = rs.map_afterstates(dec.arr, state)
+                    for key, entered in afters:
                         if key == (kwargs["col"], kwargs["row"]):
                             states.append({"decision": "map_entered", "action": name, "state": entered.to_json()})
+                    if forking and host.checkpoint is not None:
+                        legal_nodes = {f"{t['col']}_{t['row']}" for t in d.obs["screen"]["travelable"]}
+                        after = {f"{c}_{r}": st.to_json() for (c, r), st in afters if f"{c}_{r}" in legal_nodes}
+                        if len(after) >= 2:
+                            fork_map.append({"index": len(fork_map), "floor": floor, "sig": _sig(d), "nodes": list(after), "state": state.to_json(),
+                                             "afterstates": after, "checkpoint": host.checkpoint, "trace": list(d.trace or []), "faced": faced})
                 action = to_host_action(name, kwargs, dec, d)
+                if d.surface in FORCED:
+                    macro_log.append((d.surface, action))
                 if d.surface == "card_reward" and action.startswith("card_alt:"):
                     macro.mark_skipped(d)
                 d = host.act(action)
@@ -117,12 +144,31 @@ class CompassRun:
         }
         if capped:
             data["capped"] = capped
+        if forking and (fork_card or fork_map):
+            self._write_forks(fork_card, fork_map, macro_log)
         os.makedirs(self.raw_dir, exist_ok=True)
         tmp = os.path.join(self.raw_dir, f".{self.main_id}.json.tmp")
         with open(tmp, "w") as f:
             json.dump(data, f)
         os.replace(tmp, os.path.join(self.raw_dir, f"{self.main_id}.json"))
         return data
+
+    def _write_forks(self, fork_card: list[dict], fork_map: list[dict], macro_log: list) -> None:
+        """Keeps card_forks / map_forks of the run's fork points (random picks), with the clone file of each."""
+        rng = random.Random(J.zlib_hash(f"{self.main_id}|forks"))
+        cards = rng.sample(fork_card, min(self.card_forks, len(fork_card)))
+        maps = rng.sample(fork_map, min(self.map_forks, len(fork_map)))
+        for f in cards:
+            f["script"] = [list(x) for x in macro_log[f.pop("script_start"):]]
+        for kind, lst in (("c", cards), ("m", maps)):
+            for f in lst:
+                f["clone_path"] = os.path.abspath(os.path.join(self.fork_dir, "clones", f"{self.main_id}_{kind}{f['index']:02d}.json"))
+                _write_clone(f["clone_path"], f.pop("checkpoint"), f.pop("trace"))
+        os.makedirs(os.path.join(self.fork_dir, "points"), exist_ok=True)
+        path = os.path.join(self.fork_dir, "points", f"{self.main_id}.json")
+        with open(path + ".tmp", "w") as fh:
+            json.dump({"main_id": self.main_id, "forks": cards, "map_forks": maps}, fh)
+        os.replace(path + ".tmp", path)
 
     def _combat(self, host: SpireHost, d, combats: list[dict]):
         """One combat at real HP with Claws. -> (the first decision after it or None, stalled)."""

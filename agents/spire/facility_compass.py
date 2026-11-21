@@ -20,12 +20,12 @@ sys.path.insert(0, os.path.join(_HERE, ".."))
 
 
 def _work(task: tuple) -> dict:
-    save, main_id, asc, raw_dir, character, seed = task
+    save, main_id, asc, raw_dir, character, seed, fork_dir, card_forks, map_forks = task
     import torch
     torch.set_num_threads(1)
     from spire.compass_job import CompassRun
     try:
-        r = CompassRun(save, main_id, asc, raw_dir, character=character, seed=seed).run()
+        r = CompassRun(save, main_id, asc, raw_dir, character=character, seed=seed, fork_dir=fork_dir, card_forks=card_forks, map_forks=map_forks).run()
         return {"main_id": main_id, "outcome": r["outcome"], "error": r["error"], "floor": r["total_floor"], "act": r["end_act"], "seconds": r["seconds"]}
     except BaseException as e:  # noqa: BLE001
         return {"main_id": main_id, "outcome": "error", "error": f"{type(e).__name__}: {e}", "floor": 0, "act": 0, "seconds": 0}
@@ -39,6 +39,9 @@ def main() -> None:
     ap.add_argument("--raw-dir", default="data/spire/raw_runs")
     ap.add_argument("--ckpt-dir", default="data/act_checkpoints")
     ap.add_argument("--resume-act", type=int, default=0)
+    ap.add_argument("--fork-dir", default=None, help="keep fork points of the runs here (hosts them in SL mode); read by facility_branch.py --points")
+    ap.add_argument("--forks-per-run", type=int, default=1, help="card-reward fork points kept per run (with --fork-dir)")
+    ap.add_argument("--map-forks-per-run", type=int, default=1, help="route fork points kept per run (with --fork-dir)")
     ap.add_argument("--characters", nargs="*", default=["IRONCLAD"])
     args, _ = ap.parse_known_args()
     os.makedirs(args.raw_dir, exist_ok=True)
@@ -50,12 +53,12 @@ def main() -> None:
             raise SystemExit(f"no act-{args.resume_act} saves in {args.ckpt_dir}")
         for _ in range(args.trials):
             src = rng.choice(pool_files)
-            tasks.append((src, f"{os.path.basename(src)[:-5]}_r{os.urandom(3).hex()}", args.ascension, args.raw_dir, None, 1))
+            tasks.append((src, f"{os.path.basename(src)[:-5]}_r{os.urandom(3).hex()}", args.ascension, args.raw_dir, None, 1, args.fork_dir, args.forks_per_run, args.map_forks_per_run))
     else:
         for _ in range(args.trials):
             ch = rng.choice(args.characters).upper()
             seed = rng.randrange(1, 2**31 - 1)
-            tasks.append((None, f"{ch.capitalize()}_{seed}", args.ascension, args.raw_dir, ch, seed))
+            tasks.append((None, f"{ch.capitalize()}_{seed}", args.ascension, args.raw_dir, ch, seed, args.fork_dir, args.forks_per_run, args.map_forks_per_run))
     done = err = 0
     t0 = time.time()
     from concurrent.futures import ProcessPoolExecutor, as_completed

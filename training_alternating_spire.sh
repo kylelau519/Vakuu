@@ -109,21 +109,35 @@ while true; do
 
     echo "=========================================== Spire round $ROUND: golden compass"
     archive_round_data "$DATA/raw_runs" "$DATA/history/runs" "$HISTORY_WINDOW"
+    # Fork points for the branch stage: the compass runs are hosted in SL mode and keep BRANCH_FORKS card-reward and BRANCH_MAP_FORKS route
+    # fork points each (random picks); both 0 (or BRANCH_SCOUTS>0: the old separate scout runs) = NoSL, nothing kept.
+    FORK_ARGS=()
+    rm -rf "$DATA/fork_points"
+    if [ "${BRANCH_SCOUTS:-0}" -eq 0 ] && [ $(( ${BRANCH_FORKS:-1} + ${BRANCH_MAP_FORKS:-1} )) -gt 0 ]; then
+        FORK_ARGS=(--fork-dir "$DATA/fork_points" --forks-per-run "${BRANCH_FORKS:-1}" --map-forks-per-run "${BRANCH_MAP_FORKS:-1}")
+    fi
     CLAWS_CHECKPOINT="$CLAWS_PT" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${COMPASS_CLAWS_NOISE:-0.05}" \
     $PY "$SPIRE/facility_compass.py" --trials "${COMPASS_TRIALS:-100}" --branch-workers "${WORKERS:-17}" --ascension "$ASCENSION" \
-        --raw-dir "$DATA/raw_runs" --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
+        --raw-dir "$DATA/raw_runs" --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS "${FORK_ARGS[@]}"
     $PY "$GC_MAIN/progress.py" "$DATA/raw_runs" --label "$ROUND" --log "$DATA/progress_compass.jsonl"
     # Branch evaluation (card-reward and route forks with shuffled continuations, agents/spire/facility_branch.py): what one choice costs,
     # as paired comparisons from the same state. Its files train the compass's aux head next to the run data (train.py --branch-dir).
-    # BRANCH_SCOUTS=0 turns the stage off.
+    # Default: replay fork points kept by the compass runs; BRANCH_FORKS=0 BRANCH_MAP_FORKS=0 turns the stage off, BRANCH_SCOUTS=N the old scouts.
     BRANCH_ARGS=()
-    if [ "${BRANCH_SCOUTS:-6}" -gt 0 ]; then
+    BRANCH_K=(--k-per-unique 2 --k-min "${BRANCH_K_MIN:-2}" --k-max "${BRANCH_K_MAX:-4}" --map-k "${BRANCH_MAP_K:-4}" --horizon "${BRANCH_HORIZON:-8}")
+    if [ "${#FORK_ARGS[@]}" -gt 0 ] || [ "${BRANCH_SCOUTS:-0}" -gt 0 ]; then
         archive_round_data "$DATA/raw_branch" "$DATA/history/branch" "${BRANCH_WINDOW:-5}"
         rm -rf "$DATA/raw_branch/clones"
-        CLAWS_CHECKPOINT="$CLAWS_PT" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${COMPASS_CLAWS_NOISE:-0.05}" \
-        $PY "$SPIRE/facility_branch.py" --trials "${BRANCH_SCOUTS:-6}" --branch-workers "${WORKERS:-17}" --ascension "$ASCENSION" \
-            --raw-dir "$DATA/raw_branch" --forks-per-scout "${BRANCH_FORKS:-2}" --map-forks-per-scout "${BRANCH_MAP_FORKS:-1}" --horizon "${BRANCH_HORIZON:-6}" --characters $CHARACTERS
-        rm -rf "$DATA/raw_branch/clones"
+        if [ "${#FORK_ARGS[@]}" -gt 0 ]; then   # replay the compass runs' own fork points
+            CLAWS_CHECKPOINT="$CLAWS_PT" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${COMPASS_CLAWS_NOISE:-0.05}" \
+            $PY "$SPIRE/facility_branch.py" --points "$DATA/fork_points" --branch-workers "${WORKERS:-17}" --ascension "$ASCENSION" \
+                --raw-dir "$DATA/raw_branch" --max-forks "${BRANCH_MAX_FORKS:-40}" "${BRANCH_K[@]}" --characters $CHARACTERS
+        else   # old: separate scout runs
+            CLAWS_CHECKPOINT="$CLAWS_PT" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${COMPASS_CLAWS_NOISE:-0.05}" \
+            $PY "$SPIRE/facility_branch.py" --trials "$BRANCH_SCOUTS" --branch-workers "${WORKERS:-17}" --ascension "$ASCENSION" \
+                --raw-dir "$DATA/raw_branch" --forks-per-scout "${BRANCH_FORKS:-2}" --map-forks-per-scout "${BRANCH_MAP_FORKS:-1}" "${BRANCH_K[@]}" --characters $CHARACTERS
+        fi
+        rm -rf "$DATA/raw_branch/clones" "$DATA/fork_points/clones"
         BRANCH_ARGS=(--branch-dir "$DATA/raw_branch" "$DATA/history/branch"/*/)
     fi
     $PY "$GC_MAIN/materialize.py" "$DATA/raw_runs" "$DATA/history/runs"/*/ --out "$RUN/compass/dataset.pt"

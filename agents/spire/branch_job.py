@@ -61,8 +61,8 @@ def _write_clone(path: str, checkpoint: str, trace: list) -> None:
 
 
 class ScoutRun:
-    def __init__(self, main_id: str, asc: int, character: str, seed: int, clone_dir: str, max_floor: int = 17):
-        self.main_id, self.asc, self.character, self.seed, self.clone_dir, self.max_floor = main_id, asc, character, seed, clone_dir, max_floor
+    def __init__(self, main_id: str, asc: int, character: str, seed: int, clone_dir: str):
+        self.main_id, self.asc, self.character, self.seed, self.clone_dir = main_id, asc, character, seed, clone_dir
         self.rng = random.Random(J.zlib_hash(main_id))
 
     def run(self) -> dict:
@@ -83,9 +83,6 @@ class ScoutRun:
                 run = d.obs.get("run") or {}
                 if run:
                     floor = act_floor(run)
-                    if run["act"] != 0 or floor > self.max_floor:
-                        outcome = "stopped"
-                        break
                 if _in_combat(d):
                     if d.surface == "card_choice":
                         ch = d.obs["screen"]["choice"]
@@ -153,11 +150,11 @@ class BranchRun:
     def run(self) -> dict:
         J._load()
         pair_key = f"{self.fork_id}|k{self.k}"  # the same for every option: the shared random numbers
-        if self.faced:
-            host.set_faced(*self.faced)  # the fights before the checkpoint (the host replays from it and knows none)
         J.seed_everything(J.zlib_hash(pair_key))
         player = MacroPlayer(self.rng, self.asc)
         host = SpireHost.start(clone=self.clone_path, asc=self.asc, env="NoSL")
+        if self.faced:
+            host.set_faced(*self.faced)  # the fights before the checkpoint (the host replays from it and knows none)
         combats: list[dict] = []
         taken: list = []
         outcome, error = None, None
