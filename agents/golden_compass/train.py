@@ -57,7 +57,7 @@ def _load_branch(dirs: list[str]) -> list[dict]:
             base = RunState.from_json(fk["state"])
             is_map = fk.get("kind") == "map"  # a route fork: every option is a node, there is no skip
             cards = {} if is_map else {str(i): (cid, up) for i, cid, up in fk["cards"]}
-            states, t, m, skip = [], [], [], None
+            states, t, m, q, skip = [], [], [], [], None
             for key, opt in fk["options"].items():
                 runs = [r for r in opt["runs"] if "cum_lost" in r]
                 if len(runs) < 3:
@@ -79,15 +79,38 @@ def _load_branch(dirs: list[str]) -> list[dict]:
                 states.append(state)
                 t.append(ti)
                 m.append(mi)
+                # what the option was worth: combats survived of the horizon, minus the HP share lost doing it
+                q.append(sum(r["ended_at"] for r in runs) / len(runs) - sum((r["cum_lost"][-1] if r["cum_lost"] else 0.0) for r in runs) / len(runs))
             if (skip is not None or is_map) and len(states) >= 2:
-                forks.append({"run": fk["main_id"], "fork": fk["fork_id"], "states": states, "t": t, "m": m, "skip": skip})
+                forks.append({"run": fk["main_id"], "fork": fk["fork_id"], "states": states, "t": t, "m": m, "q": q, "skip": skip})
     return forks
 
 
-def _branch_loss(net, encoder, forks: list[dict], contrast_weight: float) -> tuple[torch.Tensor, dict]:
-    """Aux-head regression on the options' group means + contrast (card - skip) loss, over a list of forks."""
+def _rank_loss(score: torch.Tensor, forks: list[dict]) -> torch.Tensor:
+    """Pairwise ranking of the decision score (expected floors) inside each fork: for options i, j whose measured worth q differs,
+    -log sigmoid(score_i - score_j) if i was worth more, weighted by the gap (capped at 1). The head that DECIDES is the one trained."""
+    total, den, off = score.new_zeros(()), 0.0, 0
+    for f in forks:
+        n = len(f["states"])
+        q = torch.tensor(f["q"], dtype=torch.float)
+        for i in range(n):
+            for j in range(n):
+                gap = q[i] - q[j]
+                if gap > 0.05:
+                    w = gap.clamp(max=1.0)
+                    total = total + w * torch.nn.functional.softplus(-(score[off + i] - score[off + j]))
+                    den += float(w)
+        off += n
+    return total / den if den > 0 else total
+
+
+def _branch_loss(net, encoder, forks: list[dict], contrast_weight: float, rank_weight: float = 1.0, aux_weight: float = 0.3) -> tuple[torch.Tensor, dict]:
+    """Branch loss over a list of forks: the pairwise ranking of expected floors (rank_weight) + the aux head's regression on the
+    options' group means and its contrast (card - skip) loss (aux_weight; the aux head no longer decides, it is a side task)."""
     states = [s for f in forks for s in f["states"]]
-    _logits, aux = net(encoder.collate(states))
+    b = encoder.collate(states)
+    _logits, aux = net(b)
+    rank = _rank_loss(hn.expected_floors(_logits, b["start"]), forks)
     t = torch.tensor([row for f in forks for row in f["t"]], dtype=torch.float)
     m = torch.tensor([row for f in forks for row in f["m"]], dtype=torch.float)
     absolute = (m * (aux - t) ** 2).sum() / m.sum().clamp(min=1e-6)
@@ -114,24 +137,23 @@ def _branch_loss(net, encoder, forks: list[dict], contrast_weight: float) -> tup
             den = den + w.sum()
         off += n
     contrast = num / den if torch.is_tensor(den) and den > 0 else torch.zeros(())
-    return absolute + contrast_weight * contrast, {"abs": absolute.item(), "contrast": float(contrast.detach())}
+    return rank_weight * rank + aux_weight * (absolute + contrast_weight * contrast), {"rank": float(rank.detach()), "abs": absolute.item(), "contrast": float(contrast.detach())}
 
 
 @torch.no_grad()
 def _branch_eval(net, encoder, forks: list[dict], contrast_weight: float) -> dict:
-    """Held-out forks: the loss, plus how often the net's lowest predicted total HP cost is the option the branches
-    found cheapest (top-1), over forks with at least three options."""
+    """Held-out forks: the loss, plus how often the net's highest expected floors is the option the branches found best
+    (top-1), over forks with at least three options."""
     net.eval()
     loss, parts = _branch_loss(net, encoder, forks, contrast_weight)
     hit = n = 0
     for f in forks:
         if len(f["states"]) < 3:
             continue
-        _l, aux = net(encoder.collate(f["states"]))
-        t, m = torch.tensor(f["t"]), torch.tensor(f["m"])
-        measured = (t * (m > 0)).sum(1)
+        b = encoder.collate(f["states"])
+        logits, _aux = net(b)
         n += 1
-        hit += int(aux.sum(1).argmin() == measured.argmin())
+        hit += int(hn.expected_floors(logits, b["start"]).argmax() == torch.tensor(f["q"]).argmax())
     return {"loss": loss.item(), **parts, "top1": hit / n if n else float("nan"), "forks": len(forks)}
 
 
@@ -189,6 +211,8 @@ def main() -> None:
     parser.add_argument("--branch-dir", nargs="*", default=[], help="facility_branch.py output directories (card-reward forks)")
     parser.add_argument("--branch-weight", type=float, default=1.0, help="weight of the branch loss next to the hazard loss")
     parser.add_argument("--branch-contrast", type=float, default=1.0, help="weight of the card-minus-skip contrast inside it")
+    parser.add_argument("--branch-rank", type=float, default=1.0, help="weight of the pairwise ranking of expected floors inside the branch loss")
+    parser.add_argument("--branch-aux", type=float, default=0.3, help="weight of the aux-head regression + contrast inside the branch loss")
     parser.add_argument("--branch-forks", type=int, default=16, help="fork points per branch step")
     args = parser.parse_args()
 
@@ -234,7 +258,7 @@ def main() -> None:
             b = _batch(encoder, train[i:i + args.batch_size], weights)
             loss, _, _ = _loss(net, b, args.aux_weight)
             if step in b_at:  # each branch batch once per epoch, spread over the epoch's steps
-                b_loss, _ = _branch_loss(net, encoder, b_at[step], args.branch_contrast)
+                b_loss, _ = _branch_loss(net, encoder, b_at[step], args.branch_contrast, args.branch_rank, args.branch_aux)
                 loss = loss + args.branch_weight * b_loss
             opt.zero_grad()
             loss.backward()
@@ -245,7 +269,7 @@ def main() -> None:
         line = f"epoch {epoch:3d}  train {total / len(train):.4f}  held-out hazard {hz:.4f} aux {ax:.4f}"
         if b_held:
             be = _branch_eval(net, encoder, b_held, args.branch_contrast)
-            line += f"  branch loss {be['loss']:.4f} (abs {be['abs']:.4f} contrast {be['contrast']:.4f}) top1 {be['top1']:.2f} on {be['forks']} forks"
+            line += f"  branch loss {be['loss']:.4f} (rank {be['rank']:.3f} abs {be['abs']:.4f} contrast {be['contrast']:.4f}) top1 {be['top1']:.2f} on {be['forks']} forks"
         print(line)
         if score < best:
             best, best_epoch = score, epoch
