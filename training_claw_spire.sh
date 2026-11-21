@@ -81,8 +81,21 @@ while true; do
     $PY "$SPIRE/facility_claws.py" \
         --trials "${CLAWS_TRIALS:-30}" --branch-workers "${WORKERS:-16}" --forks-per-turn "${CLAWS_FORKS:-40}" \
         --ascension "${ASCENSION:-1}" --raw-dir "$DATA/raw" --dedup-forks --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
+    # Held-out set: HELDOUT_RUNS greedy lines (no exploration, no forks) played by the weights this round starts from, so the net has
+    # never trained on them. Early stopping follows their value RMSE (only the draw order and the net's own errors are left) and every
+    # fresh example trains. HELDOUT_RUNS=0: the old split of the fresh runs (--holdout).
+    HELD_ARGS=(--holdout "${CLAWS_HOLDOUT:-0.25}")
+    if [ "${HELDOUT_RUNS:-12}" -gt 0 ]; then
+        rm -rf "$DATA/raw_greedy"
+        CLAWS_CHECKPOINT="$CLAWS_PT" CLAWS_GREEDY=1 \
+        $PY "$SPIRE/facility_claws.py" --trials "${HELDOUT_RUNS:-12}" --branch-workers "${WORKERS:-16}" --forks-per-turn 0 \
+            --ascension "${ASCENSION:-1}" --raw-dir "$DATA/raw_greedy" --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
+        if $PY "$SPIRE/materialize.py" "$DATA/raw_greedy" --out "$RUN/claws/heldout.pt"; then
+            HELD_ARGS=(--holdout 0 --heldout-file "$RUN/claws/heldout.pt")
+        fi
+    fi
     $PY "$SPIRE/materialize.py" "$DATA/raw" "$DATA/history"/*/ --out "$RUN/claws/dataset.pt" --advantage "${CLAWS_ADVANTAGE:-turn}"
-    $PY "$CLAWS_MAIN/train.py" "$RUN/claws/dataset.pt" --epochs "${CLAWS_EPOCHS:-70}" --device cuda --batch-size "${CLAWS_BATCH:-512}" \
+    $PY "$CLAWS_MAIN/train.py" "$RUN/claws/dataset.pt" --epochs "${CLAWS_EPOCHS:-70}" "${HELD_ARGS[@]}" --device cuda --batch-size "${CLAWS_BATCH:-512}" \
         --lr "${CLAWS_LR:-5e-5}" --out "$CLAWS_PT" --init "$CLAWS_PT"
     backup_checkpoint "$CLAWS_PT"
     cleanup_procs

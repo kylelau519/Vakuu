@@ -247,14 +247,20 @@ def evaluate(examples: list[dict], net: ClawsNet, value_only: bool, batch_size: 
 def train(
     examples: list[dict], net: ClawsNet, epochs: int, lr: float, seed: int = 0,
     value_only: bool = False, batch_size: int = 64, device: torch.device = torch.device("cpu"),
-    holdout: float = 0.1, patience: int = 10,
+    holdout: float = 0.1, patience: int = 10, held_examples: list[dict] | None = None,
 ) -> None:
     """Adam for up to `epochs` epochs. `holdout` of the runs is kept out of training and scored after every epoch; training stops
     once the held-out loss has not improved for `patience` epochs, and the net ends as the best epoch's weights (epoch 0 = the weights
     it started from, so a round that cannot beat them changes nothing). holdout=0: all examples train for all epochs, as before."""
-    examples, held = split_holdout(examples, holdout, seed)
+    if held_examples:  # an external held-out set (greedy lines): every example trains, the held-out ones are only scored
+        held = held_examples
+    else:
+        examples, held = split_holdout(examples, holdout, seed)
     _normalize_advantages(examples)
-    if held:  # the same scale as the training split, not re-computed on the held-out one
+    if held and held_examples:
+        print(f"held out {len(held)} external examples (value only: no exploration, no advantages), train on all {len(examples)} "
+              f"(early stop: patience {patience})")
+    elif held:  # the same scale as the training split, not re-computed on the held-out one
         scored = [ex["advantage"] for ex in examples if ex["action_index"] is not None]
         std = (sum(a * a for a in scored) / len(scored)) ** 0.5 if scored else 0.0
         for ex in held:
@@ -341,6 +347,9 @@ def main() -> None:
     parser.add_argument("--holdout", type=float, default=0.1,
                          help="share of the runs kept out of training and scored every epoch (default 0.1; 0 = train on everything for "
                               "all --epochs)")
+    parser.add_argument("--heldout-file", nargs="*", default=None,
+                         help="materialize.py output(s) of greedy lines the net never trained on: used as the held-out set instead of "
+                              "--holdout (all examples then train); early stopping follows their value RMSE")
     parser.add_argument("--patience", type=int, default=10,
                          help="stop once the held-out loss has not improved for this many epochs; the best epoch's weights are kept")
     parser.add_argument("--value-only", action="store_true",
@@ -374,12 +383,19 @@ def main() -> None:
     else:
         print("--init \"\": training from a random init")
 
+    held_examples = None
+    if args.heldout_file:
+        held_examples = [ex for path in args.heldout_file for ex in torch.load(path, weights_only=False)]
+        print(f"{len(held_examples)} held-out examples from {len(args.heldout_file)} file(s)")
+        if not held_examples:  # the greedy lines produced nothing: fall back to splitting the fresh runs
+            print(f"no held-out examples: falling back to --holdout {args.holdout or 0.25}")
+            args.holdout = args.holdout or 0.25
     if args.epochs > 0:
         if not examples:
             raise SystemExit("no examples loaded -- pass a dataset, or --epochs 0 to just save "
                               "an untrained init checkpoint")
         train(examples, net, epochs=args.epochs, lr=args.lr, value_only=args.value_only,
-              batch_size=args.batch_size, device=device, holdout=args.holdout, patience=args.patience)
+              batch_size=args.batch_size, device=device, holdout=args.holdout, patience=args.patience, held_examples=held_examples or None)
     else:
         print("--epochs 0: skipping training, saving weights as-is")
 
