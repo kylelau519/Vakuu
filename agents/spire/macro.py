@@ -9,6 +9,24 @@ import sys
 import tier_policy  # noqa: E402  (whispering_earring/, put on sys.path by the caller)
 
 
+# A skipped card reward stays listed on the rewards screen (reward:N opens it again), so a policy that takes "the first reward" would
+# reopen and skip it for ever. SKIPPED remembers the ones answered with a skip (floor + the cards offered); reset() starts a run clean.
+SKIPPED: set = set()
+
+
+def reset() -> None:
+    SKIPPED.clear()
+
+
+def _key(floor, cards) -> tuple:
+    return (floor, tuple(c["id"] for c in cards))
+
+
+def mark_skipped(d) -> None:
+    """Call when a card_reward decision `d` is answered without taking a card."""
+    SKIPPED.add(_key(d.obs["run"]["floor"], d.obs["screen"]["cards"]))
+
+
 class _Card:
     def __init__(self, index: int, cid: str):
         self.index, self.id = index, cid
@@ -24,12 +42,14 @@ def choose(d, rng: random.Random, repeat: int = 0) -> str:
     if s == "map":
         return rng.choice(pick("map:") or legal)
     if s == "rewards":
-        take = pick("reward:")
+        skipped = {e["index"] for e in sc["rewards"] if e.get("kind") == "card" and _key(run["floor"], e.get("cards") or []) in SKIPPED}
+        take = [a for a in pick("reward:") if int(a.split(":")[1]) not in skipped]
         return take[0] if take else ("rewards_done" if "rewards_done" in legal else legal[0])
     if s == "card_reward":
         cards = [_Card(i, c["id"]) for i, c in enumerate(sc["cards"])]
         idx = tier_policy.choose_card_reward(cards, "card_alt:Skip" in legal, len(run["deck"]))
         if idx is None:
+            mark_skipped(d)
             return "card_alt:Skip" if "card_alt:Skip" in legal else legal[0]
         return f"card:{idx}"
     if s == "rest":

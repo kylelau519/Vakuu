@@ -44,13 +44,14 @@ class CompassRun:
     def run(self) -> dict:
         J._load()
         J.seed_everything(J.zlib_hash(self.main_id))
+        macro.reset()
         t0 = time.time()
         states: list[dict] = []
         combats: list[dict] = []
         outcome, error, capped = None, None, None
         floor = floor_offset = 0
         act, acts_seen = 0, 1
-        host = SpireHost.start(save=self.save, character=self.character, seed=self.seed, asc=self.asc)
+        host = SpireHost.start(save=self.save, character=self.character, seed=self.seed, asc=self.asc, env="NoSL")
         try:
             d = host.decision
             ch = d.obs["run"]["character"]
@@ -92,7 +93,10 @@ class CompassRun:
                     for key, entered in rs.map_afterstates(dec.arr, state):
                         if key == (kwargs["col"], kwargs["row"]):
                             states.append({"decision": "map_entered", "action": name, "state": entered.to_json()})
-                d = host.act(to_host_action(name, kwargs, dec, d))
+                action = to_host_action(name, kwargs, dec, d)
+                if d.surface == "card_reward" and action.startswith("card_alt:"):
+                    macro.mark_skipped(d)
+                d = host.act(action)
             if outcome is None:
                 if d is None:
                     outcome = "won" if host.end and host.end.get("won") else "lost"

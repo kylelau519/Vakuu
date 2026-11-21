@@ -29,6 +29,7 @@ class MacroPlayer:
         self.use_compass = bool(ck) and os.path.exists(ck)
         self.rng, self.asc = rng, ascension
         self.purpose: str | None = None
+        macro.reset()  # a new run: no card reward has been skipped yet
 
     def act(self, d, same: int = 0) -> str:
         if not self.use_compass:
@@ -38,4 +39,7 @@ class MacroPlayer:
             return macro.choose(d, self.rng, repeat=same)
         session = _Session(d.obs["run"]["character"], self.asc)
         name, kwargs, _policy, self.purpose = P.choose_action(dec, session, self.purpose)
-        return to_host_action(name, kwargs, dec, d)
+        action = to_host_action(name, kwargs, dec, d)
+        if d.surface == "card_reward" and action.startswith("card_alt:"):
+            macro.mark_skipped(d)
+        return action
