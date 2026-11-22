@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from vakuu.workers import act_saves
+from vakuu.whispering_earring.workers import act_saves
 
 
 def test_act_saves_picks_only_that_acts_saves_not_sidecars(tmp_path):

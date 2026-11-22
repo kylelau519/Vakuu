@@ -61,7 +61,7 @@ Not covered, still random: events, and card selections that are not a single upg
 ## Data and training
 
 ```sh
-python -m vakuu.golden_compass.facility --trials 200 --branch-workers 15 --ascension 1 \
+python -m vakuu.whispering_earring.facility_compass --trials 200 --branch-workers 15 --ascension 1 \
     --raw-dir data/spire/raw_runs        # real-HP runs, nothing healed (job.py)
 python -m vakuu.golden_compass.materialize <run dirs...> --out runs/spire/compass/dataset.pt
 python -m vakuu.golden_compass.train runs/spire/compass/dataset.pt --epochs 20 \
@@ -94,7 +94,7 @@ existed hold `[]`.
 | `hazard_net.py` | `Encoder` (RunState -> tensors), `HazardNet`, survival maths, losses |
 | `agent.py` | Decision time: scoring, exploration, per-process checkpoint load |
 | `policy.py` | `choose_action`: the run-level chooser on a buffer record (the net, else the tier list / random) |
-| `job.py`, `facility.py` | Data generation: whole real-HP runs, one per worker task |
+| `job.py` | Data generation: whole real-HP runs, one per worker task (run by `whispering_earring/facility_compass.py`) |
 | `compare.py` | The gate: does a candidate beat the accepted compass on fresh runs? |
 | `progress.py` | One progress row per round of runs |
 | `room_search.py` | Rest / shop / card_select options and the shop beam search |

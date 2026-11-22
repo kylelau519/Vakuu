@@ -78,10 +78,10 @@ while true; do
         FORK_ARGS=(--fork-dir "$DATA/fork_points" --forks-per-run "${BRANCH_FORKS:-1}" --map-forks-per-run "${BRANCH_MAP_FORKS:-1}")
     fi
     CLAWS_CHECKPOINT="$SNAP" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${COMPASS_CLAWS_NOISE:-0}" \
-    $PY -m vakuu.golden_compass.facility --trials "${COMPASS_TRIALS:-250}" --branch-workers "${WORKERS:-8}" --ascension "${ASCENSION:-1}" \
+    $PY -m vakuu.whispering_earring.facility_compass --trials "${COMPASS_TRIALS:-250}" --branch-workers "${WORKERS:-8}" --ascension "${ASCENSION:-1}" \
         --raw-dir "$DATA/raw_runs" --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS "${FORK_ARGS[@]}"
     $PY -m vakuu.golden_compass.progress "$DATA/raw_runs" --label "$ROUND" --log "$DATA/progress_compass.jsonl"
-    # Branch evaluation (card-reward and route forks with shuffled continuations, vakuu/branch/facility.py): what one choice costs,
+    # Branch evaluation (card-reward and route forks with shuffled continuations, vakuu/whispering_earring/facility_branch.py): what one choice costs,
     # as paired comparisons from the same state. Its files train the compass's aux head next to the run data (train.py --branch-dir).
     # Default: replay fork points kept by the compass runs; BRANCH_FORKS=0 BRANCH_MAP_FORKS=0 turns the stage off, BRANCH_SCOUTS=N the old scouts.
     BRANCH_ARGS=()
@@ -91,11 +91,11 @@ while true; do
         rm -rf "$DATA/raw_branch/clones"
         if [ "${#FORK_ARGS[@]}" -gt 0 ]; then   # replay the compass runs' own fork points
             CLAWS_CHECKPOINT="$SNAP" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${COMPASS_CLAWS_NOISE:-0}" \
-            $PY -m vakuu.branch.facility --points "$DATA/fork_points" --branch-workers "${WORKERS:-8}" --ascension "$ASCENSION" \
+            $PY -m vakuu.whispering_earring.facility_branch --points "$DATA/fork_points" --branch-workers "${WORKERS:-8}" --ascension "$ASCENSION" \
                 --raw-dir "$DATA/raw_branch" --max-forks "${BRANCH_MAX_FORKS:-40}" "${BRANCH_K[@]}" --characters $CHARACTERS
         else   # old: separate scout runs
             CLAWS_CHECKPOINT="$SNAP" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${COMPASS_CLAWS_NOISE:-0}" \
-            $PY -m vakuu.branch.facility --trials "$BRANCH_SCOUTS" --branch-workers "${WORKERS:-8}" --ascension "$ASCENSION" \
+            $PY -m vakuu.whispering_earring.facility_branch --trials "$BRANCH_SCOUTS" --branch-workers "${WORKERS:-8}" --ascension "$ASCENSION" \
                 --raw-dir "$DATA/raw_branch" --forks-per-scout "${BRANCH_FORKS:-2}" --map-forks-per-scout "${BRANCH_MAP_FORKS:-1}" "${BRANCH_K[@]}" --characters $CHARACTERS
         fi
         rm -rf "$DATA/raw_branch/clones" "$DATA/fork_points/clones"

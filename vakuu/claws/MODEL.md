@@ -7,7 +7,7 @@ until the combat ends** (0 once it is won). There is no search at deployment.
 - `model.py` -- tokenizer -> transformer -> policy/value heads (`ClawsNet`), reading the buffer
   record (`BufferDecision`) directly.
 - `policy.py` -- the checkpoint and the sampling settings (`CLAWS_CHECKPOINT`, `CLAWS_GREEDY`, `CLAWS_NOISE_EPS`).
-- `job.py` / `facility.py` -- data generation: one mainline run and its forks per worker process.
+- `job.py` -- data generation: one mainline run and its forks (run by `whispering_earring/facility_claws.py`, one run per worker process).
 - `materialize.py` -- turns the mainline + fork files into training examples.
 - `train.py` -- trains `ClawsNet` on them.
 - `evaluate.py` / `eval_panel.py` -- greedy real-HP evaluation and its text report.
@@ -26,7 +26,7 @@ until the combat ends** (0 once it is won). There is no search at deployment.
 
 ## Data
 
-`facility.py` starts `--branch-workers` processes; each plays mainline runs (`ClawsRun`) from random act-boundary saves in
+`whispering_earring/facility_claws.py` starts `--branch-workers` processes; each plays mainline runs (`ClawsRun`) from random act-boundary saves in
 `--ckpt-dir` (`--resume-act N`) or from floor 0. The mainline plays straight from the policy; at every turn of every combat it
 exports the live combat into spire-zero's Rust engine and clones it `--forks-per-turn` times, each clone playing the turn out with the
 policy sampled differently (later turns greedy). Forks that reach an already-seen end-of-turn state are dropped (`--dedup-forks`,

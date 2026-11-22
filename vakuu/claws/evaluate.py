@@ -13,7 +13,7 @@ import os
 import random
 import time
 
-from vakuu.workers import act_saves, end_pool, exit_now, make_pool
+from vakuu.whispering_earring.workers import act_saves, end_pool, exit_now, make_pool
 
 
 def _cid(c) -> str:

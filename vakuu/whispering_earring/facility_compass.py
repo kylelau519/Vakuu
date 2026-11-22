@@ -1,7 +1,7 @@
 """Golden Compass data generation on spire-zero: a pool of worker processes, each playing whole real-HP runs (Claws in combat, the
 compass deciding the rest) from floor 0 (or from an act-N save) and writing raw_dir/{main_id}.json for golden_compass/materialize.py.
 
-    CLAWS_CHECKPOINT=... GOLDEN_COMPASS_CHECKPOINT=... python -m vakuu.golden_compass.facility --trials 100 --branch-workers 8 \
+    CLAWS_CHECKPOINT=... GOLDEN_COMPASS_CHECKPOINT=... python -m vakuu.whispering_earring.facility_compass --trials 100 --branch-workers 8 \
         --ascension 1 --raw-dir data/spire/raw_runs
 """
 from __future__ import annotations
@@ -11,7 +11,7 @@ import os
 import random
 import time
 
-from vakuu.workers import act_saves, end_pool, exit_now, make_pool
+from vakuu.whispering_earring.workers import act_saves, end_pool, exit_now, make_pool
 
 
 def _work(task: tuple) -> dict:

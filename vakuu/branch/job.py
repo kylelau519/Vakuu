@@ -10,7 +10,7 @@ BranchRun   starts a host at a fork point (`run --from-clone`), takes ONE option
             (fork id, k, combat ordinal), so the options share what luck they can. Card branches repeat the scout's route / event / rest
             choices, buy nothing and skip later rewards, so only the pick differs; map branches let the policy play everything.
 
-Same output as the old facility, so golden_compass/train.py --branch-dir reads it unchanged."""
+Its output is what golden_compass/train.py --branch-dir reads (run by whispering_earring/facility_branch.py)."""
 from __future__ import annotations
 
 import json

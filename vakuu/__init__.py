@@ -7,4 +7,5 @@
     golden_compass/  run-level hazard net (map path, card rewards, shops, rests), its data generation and training
     branch/          paired-branch evaluation of out-of-combat choices (extra training signal for the compass)
     macro/           the heuristics that carry a run through the screens no net decides
+    whispering_earring/  the self-play facility: worker pools that play runs and record the training data
 """

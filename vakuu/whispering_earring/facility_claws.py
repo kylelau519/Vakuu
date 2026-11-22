@@ -2,7 +2,7 @@
 forking every combat turn in the Rust engine (claws_job.ClawsRun). No job queue, no reload.
 --branch-workers sets the number of processes (--main-workers is accepted and ignored).
 
-    CLAWS_CHECKPOINT=... python -m vakuu.claws.facility --trials 30 --branch-workers 17 --forks-per-turn 40 \
+    CLAWS_CHECKPOINT=... python -m vakuu.whispering_earring.facility_claws --trials 30 --branch-workers 17 --forks-per-turn 40 \
         --ascension 1 --raw-dir data/run2/raw --dedup-forks --ckpt-dir data/act_checkpoints --resume-act 2
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ import os
 import random
 import time
 
-from vakuu.workers import act_saves, end_pool, exit_now, make_pool
+from vakuu.whispering_earring.workers import act_saves, end_pool, exit_now, make_pool
 
 
 def _work(task: tuple) -> dict:

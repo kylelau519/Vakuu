@@ -4,7 +4,7 @@
 
 Loss = per-floor masked BCE on the death hazard (hazard_net.hazard_loss) + AUX_WEIGHT * the auxiliary
 HP-cost MSE. Each run gets one vote however many states it logged (weight 1 / states in the run).
-Branch data (--branch-dir, from branch/facility.py): for each card-reward fork point, every option
+Branch data (--branch-dir, from whispering_earring/facility_branch.py): for each card-reward fork point, every option
 (each offered card, and skip) was played K times for AUX combats with the draw pile reshuffled. The option's state (the
 deck with that card; the base state for skip) is trained to predict its group-mean HP-cost share per combat (the aux
 head, masked to the combats the continuations reached), plus a contrast loss: the predicted difference card - skip must

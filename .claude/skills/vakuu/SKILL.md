@@ -16,9 +16,9 @@ Two nets, deliberately not yet merged — whether they stay separate is an open 
 | **Golden Compass** | `vakuu/golden_compass` | Map path, card rewards, shops, rests, upgrade/remove prompts: a per-floor death-hazard net over run-state afterstates, trained on whole real-HP runs; paired branch evaluations (`vakuu/branch`) are an extra signal |
 
 `vakuu/macro` carries a run through the screens neither net decides, and is the fallback when no compass checkpoint exists.
-(The older "Choices Paradox" and "Whispering Earring" names are gone: the compass absorbed the former, and the facilities —
-`*/facility.py` — are the latter. The retired sts2-cli engine and its facility code are in git history before the
-`spire_only_refactor` branch.)
+**Whispering Earring** (`vakuu/whispering_earring`) is the self-play facility: it decides nothing itself, it plays full runs and
+records every decision as training data for the two nets. (The older "Choices Paradox" name is gone: the compass absorbed it. The
+retired sts2-cli engine and its facility code are in git history before the `spire_only_refactor` branch.)
 
 Python env: `source .venv/bin/activate` (see `scripts/setup_env.sh`). Everything runs from the repo root as `python -m vakuu...`.
 
@@ -30,8 +30,9 @@ vakuu/engine/          spire-zero binding: host.py (game process, wire protocol)
 vakuu/buffer/          the fixed-width float32 decision record (decision.arr): layout.py, decision.py, encode.py (combat),
                        run_encode.py (run-level screens), state_key.py (fork dedup)
 vakuu/common/          entity vocabulary, embeddings, extend_vocab.py
-vakuu/claws/           model, train, job + facility (data), materialize, evaluate, policy (CLAWS_* env), fast_tokens
-vakuu/golden_compass/  hazard_net, run_state, room_search, agent, policy, job + facility, materialize, train, compare (gate)
+vakuu/claws/           model, train, job (data), materialize, evaluate, policy (CLAWS_* env), fast_tokens
+vakuu/golden_compass/  hazard_net, run_state, room_search, agent, policy, job (data), materialize, train, compare (gate)
+vakuu/whispering_earring/  facility_claws, facility_compass, facility_branch (the self-play pools), workers
 vakuu/branch/          card-reward / route branch evaluation
 vakuu/macro/           heuristics, player, tier_policy + tier_data
 scripts/               train_claws.sh, train_compass.sh, train_alternating.sh, watchdog.sh, reset.sh, setup_env.sh, lib.sh
@@ -54,7 +55,7 @@ data/  runs/           generated, gitignored: act saves + raw data + logs; train
 
 ## How data flows
 
-1. A facility (`claws/facility.py`, `golden_compass/facility.py`, `branch/facility.py`) starts a pool of spawned worker processes;
+1. A facility (`whispering_earring/facility_claws.py`, `facility_compass.py`, `facility_branch.py`) starts a pool of spawned worker processes;
    each owns one game host and plays runs from an act-boundary save (`data/act_checkpoints`, `--resume-act N`) or from floor 0.
 2. Claws data: the mainline's every combat turn is exported into the Rust engine and cloned `--forks-per-turn` times
    (`claws/job.py`); forks reaching a seen end-of-turn state are dropped (`buffer/state_key.py`). Output: `raw/*.pkl`, already tokenized.

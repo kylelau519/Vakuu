@@ -79,7 +79,7 @@ while true; do
     snapshot_compass
     archive_pkl "$DATA/raw" "$DATA/history" "$((CLAWS_WINDOW - 1))"
     CLAWS_NOISE_EPS="${CLAWS_FORK_NOISE:-0.25}" \
-    $PY -m vakuu.claws.facility \
+    $PY -m vakuu.whispering_earring.facility_claws \
         --trials "${CLAWS_TRIALS:-30}" --branch-workers "${WORKERS:-16}" --forks-per-turn "${CLAWS_FORKS:-40}" \
         --ascension "${ASCENSION:-1}" --raw-dir "$DATA/raw" --dedup-forks --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
     # Held-out set: HELDOUT_RUNS greedy lines  (default 20) (no exploration, no forks) played by the weights this round starts from, so the net has
@@ -90,7 +90,7 @@ while true; do
     if [ "$HELDOUT_N" -gt 0 ]; then
         rm -rf "$DATA/raw_greedy"
         CLAWS_CHECKPOINT="$CLAWS_PT" CLAWS_GREEDY=1 \
-        $PY -m vakuu.claws.facility --trials "$HELDOUT_N" --branch-workers "${WORKERS:-16}" --forks-per-turn 0 \
+        $PY -m vakuu.whispering_earring.facility_claws --trials "$HELDOUT_N" --branch-workers "${WORKERS:-16}" --forks-per-turn 0 \
             --ascension "${ASCENSION:-1}" --raw-dir "$DATA/raw_greedy" --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
         if $PY -m vakuu.claws.materialize "$DATA/raw_greedy" --out "$RUN/claws/heldout.pt"; then
             HELD_ARGS=(--holdout 0 --heldout-file "$RUN/claws/heldout.pt")

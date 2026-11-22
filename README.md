@@ -37,9 +37,9 @@ Runs are deterministic (seed + action log), and so is every fork of a saved comb
 `claws/materialize.py`.
 
 ```
-claws/facility.py        ->  data/spire/raw/*.pkl       claws/materialize.py   ->  dataset.pt  ->  claws/train.py        ->  claws.pt
-golden_compass/facility  ->  data/spire/raw_runs/*.json golden_compass/materialize.py -> dataset.pt -> golden_compass/train.py -> golden_compass.pt
-branch/facility          ->  data/spire/raw_branch/*.json          (extra signal for golden_compass/train.py --branch-dir)
+whispering_earring/facility_claws    ->  data/spire/raw/*.pkl        claws/materialize.py           ->  dataset.pt  ->  claws/train.py        ->  claws.pt
+whispering_earring/facility_compass  ->  data/spire/raw_runs/*.json  golden_compass/materialize.py  ->  dataset.pt  ->  golden_compass/train.py ->  golden_compass.pt
+whispering_earring/facility_branch   ->  data/spire/raw_branch/*.json          (extra signal for golden_compass/train.py --branch-dir)
          ^                                                                                |
          '-- the facilities load the nets (CLAWS_CHECKPOINT, GOLDEN_COMPASS_CHECKPOINT) <-'
 ```
@@ -51,9 +51,10 @@ branch/facility          ->  data/spire/raw_branch/*.json          (extra signal
 | `vakuu/engine/` | spire-zero binding: `host.py` (game process), `engine.py` (Rust combat engine), `pools.py` (encounter pools), `actions.py`, `tables.py` + `data/` (id tables of the game version) |
 | `vakuu/buffer/` | The decision record: `layout.py` (offsets and accessors), `decision.py` (`BufferDecision`, token decode), `encode.py`, `run_encode.py`, `state_key.py` (position equality for fork dedup) |
 | `vakuu/common/` | Entity vocabulary (`vocab_ids.json`, `tokenizer.py`), embeddings, `extend_vocab.py` |
-| `vakuu/claws/` | `model.py` (`ClawsNet`), `train.py`, `job.py` + `facility.py` (data), `materialize.py`, `evaluate.py` + `eval_panel.py`, `policy.py` (checkpoint and sampling settings), `fast_tokens.py`. See [`README.md`](vakuu/claws/README.md) (the feature table) and [`MODEL.md`](vakuu/claws/MODEL.md) |
-| `vakuu/golden_compass/` | `hazard_net.py`, `run_state.py`, `room_search.py`, `agent.py` (decision time), `policy.py`, `job.py` + `facility.py` (data), `materialize.py`, `train.py`, `compare.py` (the gate), `progress.py`. See its [README](vakuu/golden_compass/README.md) |
-| `vakuu/branch/` | Paired branch evaluation of card-reward and route choices (`job.py`, `facility.py`) |
+| `vakuu/claws/` | `model.py` (`ClawsNet`), `train.py`, `job.py` (data), `materialize.py`, `evaluate.py` + `eval_panel.py`, `policy.py` (checkpoint and sampling settings), `fast_tokens.py`. See [`README.md`](vakuu/claws/README.md) (the feature table) and [`MODEL.md`](vakuu/claws/MODEL.md) |
+| `vakuu/golden_compass/` | `hazard_net.py`, `run_state.py`, `room_search.py`, `agent.py` (decision time), `policy.py`, `job.py` (data), `materialize.py`, `train.py`, `compare.py` (the gate), `progress.py`. See its [README](vakuu/golden_compass/README.md) |
+| `vakuu/branch/` | Paired branch evaluation of card-reward and route choices (`job.py`) |
+| `vakuu/whispering_earring/` | The self-play facility: `facility_claws.py`, `facility_compass.py`, `facility_branch.py` start a pool of worker processes that play runs and record every decision as training data; `workers.py` is the pool lifecycle they share. The jobs they run (`claws/job.py`, `golden_compass/job.py`, `branch/job.py`) live with the subsystem whose data they produce |
 | `vakuu/macro/` | `heuristics.py`, `player.py` (compass or heuristics), `tier_policy.py` + `tier_data/` (shop / remove / upgrade tier lists) |
 | `vakuu/paths.py` | Default locations (`SPIRE_DATA`, `SPIRE_RUN` override) |
 | `scripts/` | `train_claws.sh`, `train_compass.sh`, `train_alternating.sh` (generate -> materialize -> train loops), `watchdog.sh`, `reset.sh`, `setup_env.sh`, `lib.sh` |
@@ -84,7 +85,7 @@ python -m pytest tests            # no engine needed
 Smoke test (a couple of runs from act-2 saves, tiny settings):
 
 ```sh
-CLAWS_CHECKPOINT=runs/spire/claws/claws.pt python -m vakuu.claws.facility --trials 2 --branch-workers 2 \
+CLAWS_CHECKPOINT=runs/spire/claws/claws.pt python -m vakuu.whispering_earring.facility_claws --trials 2 --branch-workers 2 \
     --forks-per-turn 2 --raw-dir /tmp/smoke_raw --ckpt-dir data/act_checkpoints --resume-act 2
 ```
 

@@ -102,7 +102,7 @@ while true; do
     echo "=========================================== Spire round $ROUND: claws (engine forks)"
     archive_pkl "$DATA/raw" "$DATA/history/claws" "$((CLAWS_WINDOW - 1))"
     CLAWS_CHECKPOINT="$CLAWS_PT" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${CLAWS_FORK_NOISE:-0.25}" \
-    $PY -m vakuu.claws.facility \
+    $PY -m vakuu.whispering_earring.facility_claws \
         --trials "${CLAWS_TRIALS:-20}" --branch-workers "${WORKERS:-17}" --forks-per-turn "${CLAWS_FORKS:-20}" \
         --ascension "$ASCENSION" --raw-dir "$DATA/raw" --dedup-forks --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
     # Held-out set: HELDOUT_RUNS greedy lines  (default 20) (no exploration, no forks) played by the weights this round starts from, so the net has
@@ -113,7 +113,7 @@ while true; do
     if [ "$HELDOUT_N" -gt 0 ]; then
         rm -rf "$DATA/raw_greedy"
         GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_CHECKPOINT="$CLAWS_PT" CLAWS_GREEDY=1 \
-        $PY -m vakuu.claws.facility --trials "$HELDOUT_N" --branch-workers "${WORKERS:-17}" --forks-per-turn 0 \
+        $PY -m vakuu.whispering_earring.facility_claws --trials "$HELDOUT_N" --branch-workers "${WORKERS:-17}" --forks-per-turn 0 \
             --ascension "${ASCENSION:-1}" --raw-dir "$DATA/raw_greedy" --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
         if $PY -m vakuu.claws.materialize "$DATA/raw_greedy" --out "$RUN/claws/heldout.pt"; then
             HELD_ARGS=(--holdout 0 --heldout-file "$RUN/claws/heldout.pt")
@@ -142,10 +142,10 @@ while true; do
         FORK_ARGS=(--fork-dir "$DATA/fork_points" --forks-per-run "${BRANCH_FORKS:-1}" --map-forks-per-run "${BRANCH_MAP_FORKS:-1}")
     fi
     CLAWS_CHECKPOINT="$CLAWS_PT" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${COMPASS_CLAWS_NOISE:-0}" \
-    $PY -m vakuu.golden_compass.facility --trials "${COMPASS_TRIALS:-250}" --branch-workers "${WORKERS:-17}" --ascension "$ASCENSION" \
+    $PY -m vakuu.whispering_earring.facility_compass --trials "${COMPASS_TRIALS:-250}" --branch-workers "${WORKERS:-17}" --ascension "$ASCENSION" \
         --raw-dir "$DATA/raw_runs" --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS "${FORK_ARGS[@]}"
     $PY -m vakuu.golden_compass.progress "$DATA/raw_runs" --label "$ROUND" --log "$DATA/progress_compass.jsonl"
-    # Branch evaluation (card-reward and route forks with shuffled continuations, vakuu/branch/facility.py): what one choice costs,
+    # Branch evaluation (card-reward and route forks with shuffled continuations, vakuu/whispering_earring/facility_branch.py): what one choice costs,
     # as paired comparisons from the same state. Its files train the compass's aux head next to the run data (train.py --branch-dir).
     # Default: replay fork points kept by the compass runs; BRANCH_FORKS=0 BRANCH_MAP_FORKS=0 turns the stage off, BRANCH_SCOUTS=N the old scouts.
     BRANCH_ARGS=()
@@ -155,11 +155,11 @@ while true; do
         rm -rf "$DATA/raw_branch/clones"
         if [ "${#FORK_ARGS[@]}" -gt 0 ]; then   # replay the compass runs' own fork points
             CLAWS_CHECKPOINT="$CLAWS_PT" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${COMPASS_CLAWS_NOISE:-0}" \
-            $PY -m vakuu.branch.facility --points "$DATA/fork_points" --branch-workers "${WORKERS:-17}" --ascension "$ASCENSION" \
+            $PY -m vakuu.whispering_earring.facility_branch --points "$DATA/fork_points" --branch-workers "${WORKERS:-17}" --ascension "$ASCENSION" \
                 --raw-dir "$DATA/raw_branch" --max-forks "${BRANCH_MAX_FORKS:-40}" "${BRANCH_K[@]}" --characters $CHARACTERS
         else   # old: separate scout runs
             CLAWS_CHECKPOINT="$CLAWS_PT" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${COMPASS_CLAWS_NOISE:-0}" \
-            $PY -m vakuu.branch.facility --trials "$BRANCH_SCOUTS" --branch-workers "${WORKERS:-17}" --ascension "$ASCENSION" \
+            $PY -m vakuu.whispering_earring.facility_branch --trials "$BRANCH_SCOUTS" --branch-workers "${WORKERS:-17}" --ascension "$ASCENSION" \
                 --raw-dir "$DATA/raw_branch" --forks-per-scout "${BRANCH_FORKS:-2}" --map-forks-per-scout "${BRANCH_MAP_FORKS:-1}" "${BRANCH_K[@]}" --characters $CHARACTERS
         fi
         rm -rf "$DATA/raw_branch/clones" "$DATA/fork_points/clones"

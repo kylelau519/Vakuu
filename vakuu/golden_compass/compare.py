@@ -2,7 +2,7 @@
 
     python -m vakuu.golden_compass.compare CANDIDATE.pt ACCEPTED.pt [--runs 40] [--workers 8]   # exit 0 = candidate passes, 1 = it does not
 
-Plays fresh random-seed runs with golden_compass/facility.py (Claws greedy, half the runs with each compass choosing the
+Plays fresh random-seed runs with whispering_earring/facility_compass.py (Claws greedy, half the runs with each compass choosing the
 route, so neither net's own trajectories are favoured), written to a temp dir so nothing trains on them, and scores
 both nets' death-hazard BCE on every run (the per-run mean over its logged states). The candidate wins a run when its
 loss is lower. PASS: it wins >= 60% of the non-tied runs and its mean loss is lower. Floors reached play no part.
@@ -28,7 +28,7 @@ def _play(ckpt: str, runs: int, workers: int, raw: str, ckpt_dir: str, claws: Pa
     if claws.exists():
         env["CLAWS_CHECKPOINT"] = str(claws)
     extra = ["--resume-act", str(resume_act)] if resume_act else []
-    subprocess.run([sys.executable, "-m", "vakuu.golden_compass.facility", "--trials", str(runs), "--branch-workers", str(workers),
+    subprocess.run([sys.executable, "-m", "vakuu.whispering_earring.facility_compass", "--trials", str(runs), "--branch-workers", str(workers),
                     "--ascension", "1", "--raw-dir", raw, "--ckpt-dir", ckpt_dir, *extra],
                    cwd=REPO, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 

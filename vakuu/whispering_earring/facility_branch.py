@@ -4,7 +4,7 @@ Scout runs play act 1 and record fork points; every offered card (and skip) of a
 fork point, is then played `k` times for `horizon` combats with the draw pile reshuffled at each combat's start (branch_job.py). One JSON
 file per fork point in --raw-dir: the encoded RunState, the options, every continuation's metrics and each option's mean.
 
-    CLAWS_CHECKPOINT=... GOLDEN_COMPASS_CHECKPOINT=... python -m vakuu.branch.facility --trials 10 --branch-workers 16 \
+    CLAWS_CHECKPOINT=... GOLDEN_COMPASS_CHECKPOINT=... python -m vakuu.whispering_earring.facility_branch --trials 10 --branch-workers 16 \
         --forks-per-scout 3 --horizon 6 --raw-dir data/spire/raw_branch
 --trials is the number of scout runs. Workers are processes; a scout and its branches share the pool."""
 from __future__ import annotations
@@ -16,7 +16,7 @@ import os
 import random
 import time
 
-from vakuu.workers import end_pool, exit_now, make_pool
+from vakuu.whispering_earring.workers import end_pool, exit_now, make_pool
 
 METRICS = ("died", "hp_lost_share", "hp_lost", "hp_frac_end", "floors", "combats")
 
