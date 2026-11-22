@@ -1,110 +1,112 @@
 # Vakuu
 
-# Huge refactoring going on in refractor branch. The signal is too weak to be trained. RL Ideas cannot be tested because of unexpected problems. 
+An AI that plays Slay the Spire 2, trained by self-play on [spire-zero](https://github.com/shinnku-nikaidou/spire-zero)'s
+engine.
 
-An AI that plays Slay the Spire 2.
-
-Four subsystems, currently kept separate:
+Two models, deliberately kept separate:
 
 | Subsystem | Decides | Training |
 |---|---|---|
-| **Choices Paradox** | Meta options: card reward take/skip, removal, upgrade, rest site, event choices | Self-play branch-and-score |
-| **Golden Compass** | Which map path to take | Whole-run win/loss reward, with a local Elite/Boss shaping bonus |
-| **Claws** | Playing combat itself (policy + value network) | Self-play turn-branching, TD-bootstrapped value |
-| **Whispering Earring** | Nothing itself. The self-play facility that plays full runs and records every decision as training data for the other three | n/a |
+| **Claws** (`vakuu/claws`) | Playing combat itself: a policy + value network over one combat decision | Self-play turn-branching: every combat turn of a mainline run is forked in the engine, each fork's cost is compared against its siblings; value is TD-bootstrapped |
+| **Golden Compass** (`vakuu/golden_compass`) | The run-level choices: map path, card rewards, shops, rests, upgrade / remove prompts | A per-floor death-hazard net over run-state afterstates, trained on whole real-HP runs (Claws plays the combats), with paired branch evaluations as an extra signal |
 
-Whether these stay separate models or converge on a shared policy-value network is an open question.
-The split is how the problem is carved up today, not a committed architecture.
+`vakuu/macro` carries a run through the screens neither net decides (rewards, treasure, plain proceed) and is the fallback while
+no compass checkpoint exists. Whether the two nets stay separate or converge on a shared policy-value network is an open question;
+the split is how the problem is carved up today, not a committed architecture.
 
-The long-term goal is a live in-game suggestion mod. Deployment would be a single forward pass per
+The long-term goal is a live in-game suggestion mod (spire-zero ships its own). Deployment would be a single forward pass per
 decision, with no live search, so training doesn't need deep per-decision search.
 
 ## How it works
 
-The game is driven by [`sts2-cli`](https://github.com/kylelau519/sts2-cli), a fork of
-[wuhao21/sts2-cli](https://github.com/wuhao21/sts2-cli). It runs `sts2.dll` on bare .NET with no
-Godot process. This repo talks to it in two ways:
+The game is [spire-zero](https://github.com/shinnku-nikaidou/spire-zero)'s: the real game (v0.113.1) hosted headless by its
+`SimWorker` (deterministic, single-threaded pump), plus a Rust port of the combat rules. `vakuu/engine` talks to both:
 
-- **JSON session** (`Sts2Session`): pydantic-typed decisions. Used by the main self-play line for
-  map, shop and reward decisions.
-- **Buffer session** (`Sts2BufferSession`): an in-process CoreCLR host with no subprocess, JSON or
-  pydantic decode. Used by branch workers for combat. It supports native checkpoints
-  (`save`/`load_save`) and `HealAndEnterCombat`.
+- **`SpireHost`** (`engine/host.py`): one game process, driven over its wire protocol. It asks (one *decision* per thing the player
+  must answer: map, rewards, card reward, rest, shop, event, card prompt, combat), Python answers with one of the decision's own legal
+  action strings. A run can start from floor 0 or from an act-boundary save.
+- **`World`** (`engine/engine.py`): the Rust combat engine over ctypes. A live combat the host exports is imported, cloned and played
+  out any number of times, with no game and no reload. This is what makes turn-branching cheap.
 
-Runs are deterministic: seed + action log reproduces a run. Branching works by forking from a
-checkpoint at every combat turn (Claws) or every meta decision (Choices Paradox), exploring
-alternatives in a shared pool of worker processes, and recording every branch. The branches feed a
-REINFORCE-style baseline in each subsystem's `materialize.py`.
+Every decision the nets see is encoded into one fixed-width float32 **buffer record** (`decision.arr`; layout in
+`buffer/layout.py`, writers `buffer/encode.py` for combat and `buffer/run_encode.py` for the run-level screens). Token numbers come
+from spire-zero's own id tables (`engine/data/`), so a net is tied to the game version it trained on; `common/extend_vocab.py` moves
+a net onto a newer version's vocabulary.
+
+Runs are deterministic (seed + action log), and so is every fork of a saved combat. The branches feed a REINFORCE-style baseline in
+`claws/materialize.py`.
 
 ```
-whispering_earring/facility_*.py  ->  data/raw*/ (trial JSON)
-        ^                                  |
-        |                       <subsystem>/model/materialize.py  ->  dataset.pt
-   policy.py loads                         |
-   the checkpoints  <------  <subsystem>/model/train.py  ->  *.pt
+claws/facility.py        ->  data/spire/raw/*.pkl       claws/materialize.py   ->  dataset.pt  ->  claws/train.py        ->  claws.pt
+golden_compass/facility  ->  data/spire/raw_runs/*.json golden_compass/materialize.py -> dataset.pt -> golden_compass/train.py -> golden_compass.pt
+branch/facility          ->  data/spire/raw_branch/*.json          (extra signal for golden_compass/train.py --branch-dir)
+         ^                                                                                |
+         '-- the facilities load the nets (CLAWS_CHECKPOINT, GOLDEN_COMPASS_CHECKPOINT) <-'
 ```
 
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `agents/claws/` | Combat model (`ClawsNet`): feature table in the README, transformer trunk, policy/value heads, `materialize.py`, `train.py` |
-| `agents/golden_compass/` | Hazard net for map and card-reward choices (replaces the old Golden Compass and Choices Paradox): per-floor death hazard from the run state, choices scored as afterstates. See its README |
-| `agents/whispering_earring/` | Self-play facility: `facility_claws.py` (combat data), `facility_compass.py` (real-HP runs for the hazard net), shared core in `facility_common.py`, `policy.py`, `recorder.py`, `checkpoint.py`, `tier_policy.py` (shop / remove / upgrade fallback), and `debug/` repro scripts |
-| `agents/common/` | Shared tokenizer, embeddings and vocab |
-| `training_*.sh` | Generate -> materialize -> train loops (see below) |
-| `watchdog_overnight.sh` | Runs a training loop under a hard wall-clock limit and restarts it (there is a known, not-yet-root-caused hang inside a round) |
-| `setup_env.sh`, `reset.sh` | Fresh-machine setup; wipe all generated state and reinitialize random checkpoints |
-| `data/` | Generated trial data. Gitignored; the recipe is versioned, not the data (see `data/README.md`) |
-| `mod/` | Placeholder for a C# Godot mod. Probably unnecessary now that `sts2-cli` drives the game; see `mod/README.md` |
-
-Each subsystem directory has its own README with the design and open questions. Start with
-[`agents/whispering_earring/README.md`](agents/whispering_earring/README.md).
+| `vakuu/engine/` | spire-zero binding: `host.py` (game process), `engine.py` (Rust combat engine), `pools.py` (encounter pools), `actions.py`, `tables.py` + `data/` (id tables of the game version) |
+| `vakuu/buffer/` | The decision record: `layout.py` (offsets and accessors), `decision.py` (`BufferDecision`, token decode), `encode.py`, `run_encode.py`, `state_key.py` (position equality for fork dedup) |
+| `vakuu/common/` | Entity vocabulary (`vocab_ids.json`, `tokenizer.py`), embeddings, `extend_vocab.py` |
+| `vakuu/claws/` | `model.py` (`ClawsNet`), `train.py`, `job.py` + `facility.py` (data), `materialize.py`, `evaluate.py` + `eval_panel.py`, `policy.py` (checkpoint and sampling settings), `fast_tokens.py`. See [`README.md`](vakuu/claws/README.md) (the feature table) and [`MODEL.md`](vakuu/claws/MODEL.md) |
+| `vakuu/golden_compass/` | `hazard_net.py`, `run_state.py`, `room_search.py`, `agent.py` (decision time), `policy.py`, `job.py` + `facility.py` (data), `materialize.py`, `train.py`, `compare.py` (the gate), `progress.py`. See its [README](vakuu/golden_compass/README.md) |
+| `vakuu/branch/` | Paired branch evaluation of card-reward and route choices (`job.py`, `facility.py`) |
+| `vakuu/macro/` | `heuristics.py`, `player.py` (compass or heuristics), `tier_policy.py` + `tier_data/` (shop / remove / upgrade tier lists) |
+| `vakuu/paths.py` | Default locations (`SPIRE_DATA`, `SPIRE_RUN` override) |
+| `scripts/` | `train_claws.sh`, `train_compass.sh`, `train_alternating.sh` (generate -> materialize -> train loops), `watchdog.sh`, `reset.sh`, `setup_env.sh`, `lib.sh` |
+| `tests/`, `tools/` | Engine-free tests; `tools/verify_encode.py` round-trips the encoder over spire-zero's combat fixtures |
+| `data/` | Generated game data (gitignored; see `data/README.md`). `act_checkpoints/` holds the act-boundary saves runs resume from, `spire/` the active run's raw data, history and logs |
+| `runs/` | Trained nets (gitignored): `spire/` is the active run (`claws/claws.pt`, `compass/golden_compass.pt`, with backups); `run2/` and `base/` are earlier nets used as warm starts |
 
 ## Setup
 
-Prerequisites: .NET 9+ SDK, Slay the Spire 2 installed via Steam, Python 3.11+.
+Prerequisites: Slay the Spire 2 v0.113.1 on Steam, the .NET 9+ SDK and a Rust toolchain (for spire-zero), Python 3.11+.
 
 ```sh
-# From a directory that should hold both repos as siblings
-./Vakuu/setup_env.sh   # clones Vakuu + sts2-cli, creates .venv, installs deps, runs sts2-cli/setup.sh
+git clone https://github.com/shinnku-nikaidou/spire-zero.git ~/Programming/spire-zero   # then build it: see its README
+./scripts/setup_env.sh      # .venv, requirements, and a check that spire-zero is built
 ```
 
-`sts2-cli` must sit next to this repo (or set `STS2_CLI_ROOT`). Its `setup.sh` copies and IL-patches
-game DLLs from your Steam install; those binaries are never vendored here.
+Vakuu looks for spire-zero at `$SPIRE_ZERO` (default `~/Programming/spire-zero`) and needs its
+`engine/target/release/libsts2ai_engine.so` and `src/Sts2Ai.SimWorker`. Its binaries and the game's assemblies are never vendored here.
+
+Everything runs from the repo root: `python -m vakuu.<package>.<module>`.
+
+```sh
+python -m pytest tests            # no engine needed
+```
 
 ## Running
 
-Smoke test:
+Smoke test (a couple of runs from act-2 saves, tiny settings):
 
 ```sh
-python agents/whispering_earring/facility_compass.py --trials 1 --branch-workers 1 --ascension 1 \
-  --raw-dir /tmp/smoke_test
+CLAWS_CHECKPOINT=runs/spire/claws/claws.pt python -m vakuu.claws.facility --trials 2 --branch-workers 2 \
+    --forks-per-turn 2 --raw-dir /tmp/smoke_raw --ckpt-dir data/act_checkpoints --resume-act 2
 ```
 
-Training loops, each repeating generate -> materialize -> train per round:
+Training loops, each repeating generate -> materialize -> train per round (`MAX_ROUNDS=1` is a dry run; every knob is an environment
+variable, listed at the top of each script):
 
 | Script | Trains |
 |---|---|
-| `training_claws.sh` | Claws |
-| `training_compass.sh` | Golden Compass (real-HP runs, played by the current Claws) |
-| `training_alternating.sh` | One round of Claws, then one of Golden Compass |
+| `scripts/train_claws.sh` | Claws only (macro decisions from the heuristics or the compass if one exists) |
+| `scripts/train_compass.sh` | The compass (real-HP runs played by the current Claws), with the gate |
+| `scripts/train_alternating.sh` | Both in one loop: Claws trains in the background while the compass stage runs; the gate decides whether a candidate compass replaces the accepted one |
 
-Shared helpers are in `training_lib.sh`. Set `vakuu` in the environment if the repo isn't at the default path. `reset.sh` wipes all generated
-data and checkpoints and writes fresh random-init `.pt` files.
+`scripts/watchdog.sh train_alternating.sh 3600` runs a loop under a hard wall-clock limit and restarts it (there is a known,
+not-yet-root-caused hang inside a round). `scripts/reset.sh` wipes the active run and writes random-init nets.
 
-Set `CLAWS_CHECKPOINT` / `GOLDEN_COMPASS_CHECKPOINT` to make `policy.py` sample from a trained
-network instead of the placeholder heuristics.
+`CLAWS_CHECKPOINT` / `GOLDEN_COMPASS_CHECKPOINT` make the facilities play with trained nets; `CLAWS_GREEDY` and `CLAWS_NOISE_EPS`
+set how Claws samples (see `vakuu/claws/policy.py`).
 
 ## Status
 
-Active, pre-deployment. The self-play facility, buffer-protocol branch workers, native checkpoint
-branching and both training pipelines are wired end to end. Open problems include a known hang
-inside training rounds, an Act 1 boss wall that may come from deck quality rather than combat skill,
-and the open question of a unified network.
+Active, pre-deployment. The turn-branching Claws loop, the compass with its gate and the branch evaluation all run end to end on
+spire-zero. Open problems: a known hang inside training rounds, the act 1 boss wall (which may come from deck quality rather than
+combat skill), and the open question of a unified network.
 
-A prior prototype of Choices Paradox (per-character XGBoost hurdle models over scraped run
-histories) lives in a separate `ChoicesParadox` repo. It is being redesigned, not carried over.
-
-Decompiled game source is used as reference during development but is never checked into this
-repository.
+Decompiled game source is used as reference during development but is never checked into this repository.

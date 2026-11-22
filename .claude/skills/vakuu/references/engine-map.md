@@ -1,10 +1,10 @@
 # STS2 decompiled source map
 
-Root: `/Users/kylelau519/Programming/sts2-decompiled` (read-only). Directories are namespace names,
+Root: `~/Programming/sts2-decompiled` (read-only). Directories are namespace names,
 so `MegaCrit.Sts2.Core.Combat/CombatState.cs` is the whole path. Verified against the build present
 as of 2026-08-12 — re-check after game updates.
 
-Always check `/Users/kylelau519/Programming/sts2-cli` before digging into the decompiled codes to save tokens.
+Check `~/Programming/spire-zero` (its `engine/DESIGN.md` and the Rust port in `engine/`, which is a translation of the game's own code) before digging into the decompiled code, to save tokens.
 
 ## Combat
 
@@ -69,21 +69,21 @@ actions.
   `Consume*` getters.
 - `MegaCrit.Sts2.Core.TestSupport/` also has `TestMode.cs`, `TestFlags.cs`, `ICardSelector.cs`,
   `TestCardSelector.cs`, `CardRewardSelection.cs` — a programmatic card-choice injection point,
-  directly relevant to Choices Paradox trials.
+  directly relevant to card-reward trials.
 - `MegaCrit.Sts2.Core.Multiplayer.Messages.Game/SyncRngMessage.cs` — how the game re-syncs RNG
   between peers; read it before designing branch points.
 
 ## Headless / AutoSlay
 
-**Superseded by `/Users/kylelau519/Programming/sts2-cli`** (outside this repo) for the headless-driver
-problem — it doesn't launch `NGame`/Godot at all, so none of this is on the path for that route. See
-`../SKILL.md`'s "Current phase" section. Kept here as a compressed pointer, not a live plan, in case a
-mod-based driver is ever revisited:
+**Superseded by `~/Programming/spire-zero`** (outside this repo): its `SimWorker` runs the real game headless
+with a deterministic single-threaded pump and doesn't launch `NGame`/Godot, so none of this is on the path for
+that route. Kept as a compressed pointer, not a live plan, in case a mod-based driver is ever revisited.
 
 ## Saves 
 
-- `sts2-cli` offers up to in-combat restore through recording actions driven by option index.
-It solved the in combat restore problem the native sts2 has. Running with same seed and same actions are checked to be faithful and identical to the in game.
+- spire-zero restores a run from an act-boundary save, and exports a live combat (the `export` of a combat decision) that its Rust
+engine imports, clones and plays out, which solves the in-combat restore problem the native game has. Same seed and same actions
+give the same run; forks of an exported combat are exact.
 
 
 ## Multiplayer 

@@ -1,0 +1,18 @@
+[project]
+name = "vakuu"
+version = "0.1.0"
+description = "An AI that plays Slay the Spire 2, trained by self-play on spire-zero"
+requires-python = ">=3.11"
+dependencies = ["torch", "numpy"]
+
+[tool.setuptools.packages.find]
+include = ["vakuu*"]
+
+[tool.setuptools.package-data]
+"vakuu.common" = ["vocab_ids.json"]
+"vakuu.engine" = ["data/*.json"]
+"vakuu.macro" = ["tier_data/*.json"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
