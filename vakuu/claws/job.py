@@ -28,9 +28,7 @@ from vakuu.macro.player import MacroPlayer
 
 MAX_COMBAT_TURNS = 20
 # A fork explores (sampled, noisy) only in the turn being compared; every later turn it plays greedily, as eval does. The cost to the
-# combat's end then carries less exploration noise, and the value head learns what a greedy continuation costs. CLAWS_FORK_LATER_GREEDY=0
-# restores sampling in every turn.
-FORK_LATER_GREEDY = os.environ.get("CLAWS_FORK_LATER_GREEDY", "1") != "0"
+# combat's end then carries less exploration noise, and the value head learns what a greedy continuation costs.
 MAX_RUN_DECISIONS = 4000
 
 _net = None
@@ -88,7 +86,7 @@ def _sample(options, logits, obs, legal, rng: ForkRng | None = None, greedy: boo
         lg = np.where(ok, lg, -np.inf)
     e = np.exp(lg - lg.max())
     probs = e / e.sum()
-    if greedy:  # the top option, no exploration (a fork's turns after the compared one: see FORK_LATER_GREEDY)
+    if greedy:  # the top option, no exploration (a fork's turns after the compared one)
         return int(np.argmax(probs)), probs
     if not P.GREEDY:
         n = len(options)
@@ -250,7 +248,7 @@ def play_engines(worlds: list[World], ctx: dict, first_turn_hp: float, uids: lis
             for k, f in enumerate(ready):
                 obs, legal, dec, hp, new_turn = f.pending
                 f.pending = None
-                idx, _probs = _sample(options[k], logits[k], obs, legal, f.rng, greedy=FORK_LATER_GREEDY and len(f.turns) > 1)
+                idx, _probs = _sample(options[k], logits[k], obs, legal, f.rng, greedy=len(f.turns) > 1)
                 if new_turn:
                     f.turns[-1]["v"] = float(values[k].item())
                 if len(f.turns) == 1:

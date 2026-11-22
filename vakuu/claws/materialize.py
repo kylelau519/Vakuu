@@ -1,7 +1,7 @@
 """Raw spire runs (claws_job.py's raw_dir/*.pkl) -> the dataset claws/model/train.py reads (example dicts). No simulator: the examples were tokenized when they were played, so this only groups
 (the mainline's turn t + every fork of turn t), computes advantages and writes the file.
 
-    python -m vakuu.claws.materialize RAW_DIR [more dirs] --out dataset.pt [--target return]
+    python -m vakuu.claws.materialize RAW_DIR [more dirs] --out dataset.pt
 """
 from __future__ import annotations
 
@@ -74,7 +74,6 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("dirs", nargs="+", help="raw dirs (their *.pkl), or .pkl files")
     ap.add_argument("--out", default="dataset.pt")
-    ap.add_argument("--target", choices=["return"], default="return", help="a member's cost is the HP it actually lost to the combat's end")
     ap.add_argument("--advantage", choices=["combat", "turn"], default="combat",
                     help="what a group member's cost is: the HP lost to the combat's end (default), or this turn's HP loss plus the value "
                          "net's estimate of the next turn's start (_cost)")

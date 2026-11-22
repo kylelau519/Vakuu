@@ -1,6 +1,6 @@
 """Claws data generation on spire-zero: a pool of worker processes, each playing a mainline from a random act-boundary save and
 forking every combat turn in the Rust engine (claws_job.ClawsRun). No job queue, no reload.
---branch-workers sets the number of processes (--main-workers is accepted and ignored).
+--branch-workers sets the number of processes.
 
     CLAWS_CHECKPOINT=... python -m vakuu.whispering_earring.facility_claws --trials 30 --branch-workers 17 --forks-per-turn 40 \
         --ascension 1 --raw-dir data/run2/raw --dedup-forks --ckpt-dir data/act_checkpoints --resume-act 2
@@ -33,14 +33,12 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--trials", type=int, default=10, help="mainline runs to play")
     ap.add_argument("--branch-workers", type=int, default=8, help="worker processes (each plays a run and its forks)")
-    ap.add_argument("--main-workers", type=int, default=None, help="ignored (kept so the old command lines work)")
     ap.add_argument("--forks-per-turn", type=int, default=40)
     ap.add_argument("--ascension", type=int, default=1)
     ap.add_argument("--raw-dir", default="data/run2/raw")
     ap.add_argument("--dedup-forks", action="store_true")
     ap.add_argument("--ckpt-dir", default="data/act_checkpoints")
     ap.add_argument("--resume-act", type=int, default=0, help="0: fresh runs from the start (default); N: start from a random act-N save in --ckpt-dir")
-    ap.add_argument("--seeds", default=None, help="ignored")
     ap.add_argument("--characters", nargs="*", default=["IRONCLAD"], help="fresh runs only: the characters, picked at random per run")
     args, _unknown = ap.parse_known_args()
 

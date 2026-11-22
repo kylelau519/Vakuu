@@ -53,9 +53,9 @@ kill_all() { [ -n "${CLAWS_TRAIN_PID:-}" ] && kill -9 "$CLAWS_TRAIN_PID" 2>/dev/
 trap 'echo; echo "Interrupted -- cleaning up leftover workers..."; kill_all; exit 130' INT TERM HUP
 trap kill_all EXIT
 
-# Claws training (GPU) overlaps the compass stage (CPU): CLAWS_TRAIN_ASYNC=1 (default) starts it in the background writing $CLAWS_PT.new, and
+# Claws training (GPU) overlaps the compass stage (CPU): starts it in the background writing $CLAWS_PT.new, and
 # finish_claws_train swaps it in before anything needs the new weights (the gate, the eval, the next round's Claws lines). The compass lines
-# of that round are played by the previous round's Claws weights. CLAWS_TRAIN_ASYNC=0: the old sequential order. Its log: data/spire/claws_train.log.
+# of that round are played by the previous round's Claws weights. Its log: data/spire/claws_train.log.
 CLAWS_TRAIN_PID=""
 finish_claws_train() {
     [ -n "$CLAWS_TRAIN_PID" ] || return 0
@@ -121,15 +121,9 @@ while true; do
     fi
     $PY -m vakuu.claws.materialize "$DATA/raw" "$DATA/history/claws"/*/ --out "$RUN/claws/dataset.pt" --advantage "${CLAWS_ADVANTAGE:-turn}"
     echo "--- claws training, round $ROUND ($(date +%H:%M:%S))" >> "$DATA/claws_train.log"
-    if [ "${CLAWS_TRAIN_ASYNC:-1}" = 1 ]; then
-        $PY -m vakuu.claws.train "$RUN/claws/dataset.pt" --epochs "${CLAWS_EPOCHS:-70}" "${HELD_ARGS[@]}" --device cuda --batch-size "${CLAWS_BATCH:-1024}" \
-            --lr "${CLAWS_LR:-1e-5}" --out "$CLAWS_PT.new" --init "$CLAWS_PT" >> "$DATA/claws_train.log" 2>&1 &
-        CLAWS_TRAIN_PID=$!
-    else
-        $PY -m vakuu.claws.train "$RUN/claws/dataset.pt" --epochs "${CLAWS_EPOCHS:-70}" "${HELD_ARGS[@]}" --device cuda --batch-size "${CLAWS_BATCH:-1024}" \
-            --lr "${CLAWS_LR:-1e-5}" --out "$CLAWS_PT" --init "$CLAWS_PT" 2>&1 | tee -a "$DATA/claws_train.log"
-        backup_checkpoint "$CLAWS_PT"
-    fi
+    $PY -m vakuu.claws.train "$RUN/claws/dataset.pt" --epochs "${CLAWS_EPOCHS:-70}" "${HELD_ARGS[@]}" --device cuda --batch-size "${CLAWS_BATCH:-1024}" \
+        --lr "${CLAWS_LR:-1e-5}" --out "$CLAWS_PT.new" --init "$CLAWS_PT" >> "$DATA/claws_train.log" 2>&1 &
+    CLAWS_TRAIN_PID=$!
     cleanup_procs
 
     echo "=========================================== Spire round $ROUND: golden compass"
