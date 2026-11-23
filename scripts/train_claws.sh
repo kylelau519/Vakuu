@@ -78,7 +78,8 @@ while true; do
     echo "=========================================== Spire Claws round $ROUND (act-2 saves, engine forks)"
     snapshot_compass
     archive_pkl "$DATA/raw" "$DATA/history" "$((CLAWS_WINDOW - 1))"
-    CLAWS_NOISE_EPS="${CLAWS_FORK_NOISE:-0.25}" \
+    # The compass that picks the decks is epsilon-greedy (tau 0, 10% uniform picks), not sampled: see train_alternating.sh. CLAWS_COMPASS_EPS / _TAU override.
+    CLAWS_NOISE_EPS="${CLAWS_FORK_NOISE:-0.25}" COMPASS_EPS="${CLAWS_COMPASS_EPS:-0.1}" COMPASS_TAU="${CLAWS_COMPASS_TAU:-0}" \
     $PY -m vakuu.whispering_earring.facility_claws \
         --trials "${CLAWS_TRIALS:-30}" --branch-workers "${WORKERS:-16}" --forks-per-turn "${CLAWS_FORKS:-40}" \
         --ascension "${ASCENSION:-1}" --raw-dir "$DATA/raw" --dedup-forks --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
@@ -89,7 +90,7 @@ while true; do
     HELDOUT_N="${HELDOUT_RUNS:-20}"
     if [ "$HELDOUT_N" -gt 0 ]; then
         rm -rf "$DATA/raw_greedy"
-        CLAWS_CHECKPOINT="$CLAWS_PT" CLAWS_GREEDY=1 \
+        CLAWS_CHECKPOINT="$CLAWS_PT" CLAWS_GREEDY=1 COMPASS_EPS="${CLAWS_COMPASS_EPS:-0.1}" COMPASS_TAU="${CLAWS_COMPASS_TAU:-0}" \
         $PY -m vakuu.whispering_earring.facility_claws --trials "$HELDOUT_N" --branch-workers "${WORKERS:-16}" --forks-per-turn 0 \
             --ascension "${ASCENSION:-1}" --raw-dir "$DATA/raw_greedy" --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
         if $PY -m vakuu.claws.materialize "$DATA/raw_greedy" --out "$RUN/claws/heldout.pt"; then
@@ -103,7 +104,7 @@ while true; do
     cleanup_procs
 
     if [ "${EVAL_RUNS:-60}" -gt 0 ] && { [ "$ROUND" = 1 ] || [ $((ROUND % ${EVAL_EVERY:-1})) = 0 ]; }; then
-        CLAWS_GREEDY=1 $PY -m vakuu.claws.evaluate --runs "${EVAL_RUNS:-60}" --workers "${WORKERS:-16}" --ascension "${ASCENSION:-1}" --resume-act "$RESUME_ACT" --characters $CHARACTERS \
+        CLAWS_GREEDY=1 COMPASS_EPS=0 COMPASS_TAU=0 $PY -m vakuu.claws.evaluate --runs "${EVAL_RUNS:-60}" --workers "${WORKERS:-16}" --ascension "${ASCENSION:-1}" --resume-act "$RESUME_ACT" --characters $CHARACTERS \
             --ckpt-dir "$CKPT_DIR" --log "$DATA/eval_claws.jsonl" --detail-log "$DATA/eval_combats.jsonl" --label "$(date +%d.%H%M)#$ROUND" | tail -2
         cleanup_procs
     fi

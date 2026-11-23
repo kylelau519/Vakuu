@@ -101,7 +101,11 @@ ROUND=1
 while true; do
     echo "=========================================== Spire round $ROUND: claws (engine forks)"
     archive_pkl "$DATA/raw" "$DATA/history/claws" "$((CLAWS_WINDOW - 1))"
+    # The compass that builds the decks Claws trains on is epsilon-greedy (tau 0, 10% uniform picks): its card scores are nearly flat, so sampling
+    # them (tau 0.35) is close to a random pick and weakens the decks (act 1: +2.5 HP per combat, half the boss clears), while eps 0.1 costs about
+    # +0.4 HP and keeps some card diversity. CLAWS_COMPASS_EPS / _TAU override. The evals below are fully greedy.
     CLAWS_CHECKPOINT="$CLAWS_PT" GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_NOISE_EPS="${CLAWS_FORK_NOISE:-0.25}" \
+    COMPASS_EPS="${CLAWS_COMPASS_EPS:-0.1}" COMPASS_TAU="${CLAWS_COMPASS_TAU:-0}" \
     $PY -m vakuu.whispering_earring.facility_claws \
         --trials "${CLAWS_TRIALS:-20}" --branch-workers "${WORKERS:-17}" --forks-per-turn "${CLAWS_FORKS:-20}" \
         --ascension "$ASCENSION" --raw-dir "$DATA/raw" --dedup-forks --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
@@ -112,7 +116,7 @@ while true; do
     HELDOUT_N="${HELDOUT_RUNS:-20}"
     if [ "$HELDOUT_N" -gt 0 ]; then
         rm -rf "$DATA/raw_greedy"
-        GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_CHECKPOINT="$CLAWS_PT" CLAWS_GREEDY=1 \
+        GOLDEN_COMPASS_CHECKPOINT="$ACC" CLAWS_CHECKPOINT="$CLAWS_PT" CLAWS_GREEDY=1 COMPASS_EPS="${CLAWS_COMPASS_EPS:-0.1}" COMPASS_TAU="${CLAWS_COMPASS_TAU:-0}" \
         $PY -m vakuu.whispering_earring.facility_claws --trials "$HELDOUT_N" --branch-workers "${WORKERS:-17}" --forks-per-turn 0 \
             --ascension "${ASCENSION:-1}" --raw-dir "$DATA/raw_greedy" --ckpt-dir "$CKPT_DIR" --resume-act "$RESUME_ACT" --characters $CHARACTERS
         if $PY -m vakuu.claws.materialize "$DATA/raw_greedy" --out "$RUN/claws/heldout.pt"; then

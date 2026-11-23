@@ -13,6 +13,7 @@ import os
 import random
 import time
 
+from vakuu.claws.replay import summarize_replay
 from vakuu.whispering_earring.workers import act_saves, end_pool, exit_now, make_pool
 
 
@@ -21,6 +22,63 @@ def _cid(c) -> str:
         return str(c)
     up = c.get("upgrade") or c.get("upgrades") or c.get("upgraded") or c.get("up")
     return f"{c.get('id')}{'+' if up else ''}"
+
+
+def _log_plays(combat: dict, obs: dict, chosen) -> None:
+    """Per-combat play statistics (key "pl"): at every turn start the block-capable cards in hand and the damage incoming; every card played by kind
+    with its energy; at end_turn the block held and the energy left. Block-capable = the card has a Block variable."""
+    from vakuu.claws.replay import _incoming, _kind
+    pl = combat.setdefault("pl", {"turns": 0, "bc_hand": 0, "bc_played": 0, "att_played": 0, "oth_played": 0, "e_att": 0, "e_blk": 0, "e_oth": 0,
+                                  "incoming": 0, "block_end": 0, "unblocked": 0, "e_left": 0, "e_left_playable": 0, "_r": None})
+    hand, rnd = obs["hand"], obs.get("round")
+    if pl["_r"] != (rnd, combat.get("floor")):
+        pl["_r"] = (rnd, combat.get("floor"))
+        pl["turns"] += 1
+        pl["bc_hand"] += sum(1 for c in hand if "Block" in (c.get("vars") or {}))
+        pl["incoming"] += _incoming(obs)
+    if chosen[0] == "play_card":
+        card = hand[chosen[1]["card_index"]]
+        cost = max(card.get("cost") or 0, 0)
+        k = _kind(card)
+        if "block" in k:
+            pl["bc_played"] += 1
+            pl["e_blk"] += cost
+        elif k == "attack":
+            pl["att_played"] += 1
+            pl["e_att"] += cost
+        else:
+            pl["oth_played"] += 1
+            pl["e_oth"] += cost
+    elif chosen[0] == "end_turn":
+        en = obs["player"].get("energy") or 0
+        pl["block_end"] += obs["player"].get("block", 0)
+        pl["unblocked"] += max(0, _incoming(obs) - obs["player"].get("block", 0))
+        pl["e_left"] += en
+        pl["e_left_playable"] += int(any(0 <= (c.get("cost") if c.get("cost") is not None else 99) <= en for c in hand) and en > 0)
+
+
+def _hidden_added() -> dict:
+    """EVAL_HIDE_ADDED='{"SHRUG_IT_OFF": 2}': cards a test put into the starting deck that the macro player must not see (it decides map, rewards and
+    shops from a deck without them; Claws, inside combat, plays with them)."""
+    raw = os.environ.get("EVAL_HIDE_ADDED")
+    return json.loads(raw) if raw else {}
+
+
+def _without_added(d, hide: dict):
+    """`d` with up to hide[id] copies of each hidden card removed from the deck its obs shows (a copy; the host's decision is untouched)."""
+    if not hide:
+        return d
+    import dataclasses
+    left, deck = dict(hide), []
+    for c in d.obs.get("run", {}).get("deck") or []:
+        cid = str(c.get("id") if isinstance(c, dict) else c).split(".")[-1]
+        if left.get(cid, 0) > 0:
+            left[cid] -= 1
+            continue
+        deck.append(c)
+    run = dict(d.obs["run"])
+    run["deck"] = deck
+    return dataclasses.replace(d, obs={**d.obs, "run": run})
 
 
 def _hazard_probe(d, asc: int):
@@ -47,13 +105,21 @@ def _hazard_probe(d, asc: int):
 
 
 def _play(task: tuple) -> dict:
-    save, main_id, asc, character, seed = task
+    save, main_id, asc, character, seed, *_rest = task
+    replay = _rest[0] if _rest else None  # {"hidden": M, "per_run": cap, "p": chance per turn}: the replay-in-eval check (replay.py)
     import torch
     torch.set_num_threads(1)
     from vakuu.claws import job as J
     from vakuu.engine.actions import random_pick, to_action
     from vakuu.engine.host import SpireHost
     J._load()
+    if replay:
+        from vakuu.claws import policy as _P
+        from vakuu.claws.replay import replay_decision
+        if not _P.GREEDY:
+            raise SystemExit("the replay compares plays under greedy continuation: run with CLAWS_GREEDY=1")
+        rr = random.Random(J.zlib_hash(main_id) + 7)
+        replayed_round = None
     from vakuu.macro.player import MacroPlayer
     player = MacroPlayer(random.Random(J.zlib_hash(main_id)), asc)
     J.seed_everything(J.zlib_hash(main_id))
@@ -61,14 +127,18 @@ def _play(task: tuple) -> dict:
     out = {"main_id": main_id, "floor": 0, "act": 0, "won": False, "combats": [], "error": None}
     host = None
     try:
-        host = SpireHost.start(save=save, character=character, seed=seed, asc=asc, env="NoSL")  # no exports: nothing forks here
+        host = SpireHost.start(save=save, character=character, seed=seed, asc=asc, env="SL" if replay else "NoSL")  # NoSL: no exports, nothing forks; the replay needs the combat exported
         d, n, same, last, probe = host.decision, 0, 0, None, None
+        hide = _hidden_added()
+        stop_act = os.environ.get("EVAL_STOP_ACT")  # e.g. 0: end the run when act 1 is over (act 1 only analyses)
         while d is not None and n < 4000:
             n += 1
             run = d.obs.get("run", {})
             out["floor"], out["act"] = run.get("floor", out["floor"]), run.get("act", out["act"])
+            if stop_act is not None and out["act"] > int(stop_act):
+                break
             if d.surface == "map":
-                probe = _hazard_probe(d, asc) or probe
+                probe = _hazard_probe(_without_added(d, hide), asc) or probe
             if d.surface == "combat":
                 obs = d.obs["screen"]["combat"]
                 if not out["combats"] or out["combats"][-1].get("_enc") != (obs["encounter"], run.get("floor")):
@@ -80,6 +150,17 @@ def _play(task: tuple) -> dict:
                 out["combats"][-1]["turns"] = max(out["combats"][-1]["turns"], int(obs.get("round") or 0))
                 dec, options, idx, _p, _v = J.decide(obs, d.legal, J.run_context(run))
                 out["combats"][-1].setdefault("v0", round(float(_v), 2))  # the value head's HP-loss forecast at the combat's first decision
+                _log_plays(out["combats"][-1], obs, options[idx])
+                if replay and d.export is not None and (out["combats"][-1].get("_enc"), obs.get("round")) != replayed_round:
+                    replayed_round = (out["combats"][-1].get("_enc"), obs.get("round"))  # a new turn's first decision
+                    if len(out.setdefault("replay", [])) < replay["per_run"] and rr.random() < (1.0 if str(obs.get("encounter")).endswith(tuple(replay.get("focus") or ("~",))) else replay["p"]):
+                        try:
+                            rec = replay_decision(J, d.export, obs, d.legal, J.run_context(run), options, idx, replay["hidden"], f"{main_id}_r{len(out['replay'])}")
+                        except Exception as e:  # noqa: BLE001  (a failed replay must not end the run)
+                            rec = None
+                            out.setdefault("replay_errors", []).append(f"{type(e).__name__}: {str(e)[:80]}")
+                        if rec is not None:
+                            out["replay"].append(rec)
                 d = host.act(to_action(*options[idx], obs, d.legal))
                 continue
             if d.surface == "card_choice" and "combat" in d.obs["screen"]:
@@ -95,7 +176,7 @@ def _play(task: tuple) -> dict:
             if same >= 25:
                 out["error"] = "stalled"
                 break
-            d = host.act(player.act(d, same))
+            d = host.act(player.act(_without_added(d, hide), same))
         if d is None:
             if out["combats"] and out["combats"][-1]["won"] is None:
                 out["combats"][-1]["won"] = False
@@ -111,6 +192,8 @@ def _play(task: tuple) -> dict:
             host.close()
     for c in out["combats"]:
         c.pop("_enc", None)
+        if "pl" in c:
+            c["pl"].pop("_r", None)
     return out
 
 
@@ -135,7 +218,9 @@ def summarize(rows: list[dict], label: str) -> dict:
     vstat = ({"v_bias": round(sum(v - l for v, l in vp) / len(vp), 2), "v_rmse": round(math.sqrt(sum((v - l) ** 2 for v, l in vp) / len(vp)), 2)}
              if vp else {})
     acts = [r["act"] + 1 for r in ok]
+    rp = [x for r in ok for x in r.get("replay", [])]
     return {
+        **({"replay": summarize_replay(rp)} if rp else {}),
         "label": label, "runs": len(ok), "errors": len(rows) - len(ok), "mean_end_floor": round(mean, 2), "floor_se": round(se, 2),
         "best_floor": max(floors, default=0), "wins": sum(r["won"] for r in ok),
         "combats": len(combats), "combat_win_rate": round(sum(c["won"] for c in combats) / max(1, len(combats)), 3),
@@ -156,17 +241,22 @@ def main() -> None:
     ap.add_argument("--characters", nargs="*", default=["IRONCLAD"])
     ap.add_argument("--log", default=None)
     ap.add_argument("--detail-log", default=None, help="one JSON line per run with every combat (encounter, hp in/out, turns, the compass's hazard), for the analysis panel")
+    ap.add_argument("--replay-per-run", type=int, default=0, help="replay-in-eval (replay.py): up to this many turn-start decisions per run are re-played from every first play under HIDDEN independent hidden-state samples; needs CLAWS_GREEDY=1")
+    ap.add_argument("--replay-hidden", type=int, default=8, help="hidden-state samples per replayed decision (even; half pick the best play, half measure it)")
+    ap.add_argument("--replay-focus", default="", help="comma-separated encounter-name suffixes (e.g. _ELITE,_BOSS) whose turn starts are always replayed (until the per-run cap)")
+    ap.add_argument("--replay-p", type=float, default=0.5, help="chance a turn start is replayed, until the per-run cap")
     ap.add_argument("--label", default=time.strftime("%d.%H%M"))
     ap.add_argument("--seed", type=int, default=None, help="fix the games (game seeds and run ids), so two checkpoints play the same ones")
     args = ap.parse_args()
     rng = random.Random(args.seed if args.seed is not None else os.urandom(4))
     run_id = (lambda: f"eval{rng.randrange(16**6):06x}") if args.seed is not None else (lambda: f"eval{os.urandom(3).hex()}")
     tasks = []
+    rcfg = {"hidden": args.replay_hidden, "per_run": args.replay_per_run, "p": args.replay_p, "focus": [x for x in args.replay_focus.split(",") if x]} if args.replay_per_run > 0 else None
     if args.resume_act > 0:
         saves = act_saves(args.ckpt_dir, args.resume_act)
-        tasks = [(rng.choice(saves), run_id(), args.ascension, None, 1) for _ in range(args.runs)]
+        tasks = [(rng.choice(saves), run_id(), args.ascension, None, 1, rcfg) for _ in range(args.runs)]
     else:
-        tasks = [(None, run_id(), args.ascension, rng.choice(args.characters).upper(), rng.randrange(1, 2**31 - 1))
+        tasks = [(None, run_id(), args.ascension, rng.choice(args.characters).upper(), rng.randrange(1, 2**31 - 1), rcfg)
                  for _ in range(args.runs)]
     from concurrent.futures import as_completed
     pool = make_pool(args.workers)
@@ -184,9 +274,15 @@ def main() -> None:
           f"combats {row['combats']} win {row['combat_win_rate']:.0%} | act-1 boss {row['act1_beat_boss']}/{row['act1_reached_boss']} | "
           f"reached act 2 {row['act2_reached']} (boss {row['act2_beat_boss']}/{row['act2_reached_boss']}) | wins {row['wins']}")
     print(f"HP lost per combat {row['hp_loss_per_combat']} {row['hp_loss_by_kind']} | V bias {row.get('v_bias')} rmse {row.get('v_rmse')}")
+    if row.get("replay"):
+        print("replay:", row["replay"])
     for r in rows:
         if r["error"]:
             print("  error:", r["error"][:150])
+            break
+    for r in rows:
+        if r.get("replay_errors"):
+            print("  replay error:", r["replay_errors"][0])
             break
     if args.log:
         os.makedirs(os.path.dirname(os.path.abspath(args.log)), exist_ok=True)
@@ -195,7 +291,7 @@ def main() -> None:
     if args.detail_log:
         with open(args.detail_log, "a") as fh:
             for r in rows:
-                fh.write(json.dumps({"label": args.label, **{k: r[k] for k in ("main_id", "floor", "act", "won", "error", "combats")}}) + "\n")
+                fh.write(json.dumps({"label": args.label, **{k: r[k] for k in ("main_id", "floor", "act", "won", "error", "combats")}, **({"replay": r["replay"]} if r.get("replay") else {})}) + "\n")
     exit_now()
 
 
